@@ -46,7 +46,7 @@
 
 use crate::error::{DataError, Result};
 use crate::storage::krx::KrxDataSource;
-use crate::storage::yahoo_cache::{timeframe_to_string, YahooCandleCache};
+use crate::storage::ohlcv::{timeframe_to_string, OhlcvCache};
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc, Weekday};
 use chrono_tz::Tz;
 use rust_decimal::prelude::FromPrimitive;
@@ -65,7 +65,7 @@ type FetchLockMap = Arc<RwLock<HashMap<String, Arc<RwLock<()>>>>>;
 ///
 /// 요청 기반 자동 캐싱과 증분 업데이트를 제공합니다.
 pub struct CachedHistoricalDataProvider {
-    cache: YahooCandleCache,
+    cache: OhlcvCache,
     pool: PgPool,
     /// 캐시 유효 기간 (이 시간 이내면 신선하다고 간주)
     cache_freshness: Duration,
@@ -77,7 +77,7 @@ impl CachedHistoricalDataProvider {
     /// 새로운 캐시 기반 제공자 생성.
     pub fn new(pool: PgPool) -> Self {
         Self {
-            cache: YahooCandleCache::new(pool.clone()),
+            cache: OhlcvCache::new(pool.clone()),
             pool,
             cache_freshness: Duration::minutes(5),
             fetch_locks: Arc::new(RwLock::new(HashMap::new())),
@@ -128,7 +128,8 @@ impl CachedHistoricalDataProvider {
                 "캐시 업데이트 시작"
             );
 
-            match self.fetch_and_cache(&yahoo_symbol, timeframe, limit, last_cached_time).await {
+            // 원본 심볼로 데이터 소스 선택, yahoo_symbol로 캐시 저장
+            match self.fetch_and_cache(symbol, &yahoo_symbol, timeframe, limit, last_cached_time).await {
                 Ok(fetched) => {
                     info!(
                         symbol = %yahoo_symbol,
@@ -150,7 +151,7 @@ impl CachedHistoricalDataProvider {
         self.detect_and_warn_gaps(&yahoo_symbol, timeframe, limit).await;
 
         // 6. 캐시에서 데이터 반환
-        let klines = self.cache.get_cached_klines(&yahoo_symbol, timeframe, limit).await?;
+        let klines: Vec<Kline> = self.cache.get_cached_klines(&yahoo_symbol, timeframe, limit).await?;
 
         debug!(
             symbol = %yahoo_symbol,
@@ -249,23 +250,41 @@ impl CachedHistoricalDataProvider {
     /// 외부 데이터 소스에서 데이터 가져와 캐시에 저장.
     ///
     /// 심볼에 따라 적절한 데이터 소스를 선택합니다:
-    /// - 6자리 숫자 (예: 005930) → KRX
+    /// - 6자리 숫자 (예: 005930) → KRX (한국 주식 우선)
     /// - 그 외 (예: AAPL, 005930.KS) → Yahoo Finance
+    ///
+    /// # 인자
+    /// - `original_symbol`: 원본 심볼 (데이터 소스 선택용)
+    /// - `cache_symbol`: 캐시 저장용 심볼 (Yahoo 형식)
     async fn fetch_and_cache(
         &self,
-        symbol: &str,
+        original_symbol: &str,
+        cache_symbol: &str,
         timeframe: Timeframe,
         limit: usize,
         last_cached_time: Option<DateTime<Utc>>,
     ) -> Result<usize> {
-        // 심볼에 따라 데이터 소스 선택
-        let klines = if is_pure_korean_stock_code(symbol) {
-            debug!(symbol = symbol, "KRX 데이터 소스 사용");
-            self.fetch_from_krx(symbol, timeframe, limit).await?
+        // 원본 심볼로 데이터 소스 선택
+        // 한국 주식: KRX → Yahoo Finance Fallback
+        // 해외 주식: Yahoo Finance
+        let klines = if is_pure_korean_stock_code(original_symbol) {
+            debug!(symbol = original_symbol, "KRX 데이터 소스 시도 (한국 주식)");
+            match self.fetch_from_krx(original_symbol, timeframe, limit).await {
+                Ok(data) if !data.is_empty() => {
+                    debug!(symbol = original_symbol, count = data.len(), "KRX 데이터 가져오기 성공");
+                    data
+                }
+                Ok(_) | Err(_) => {
+                    // KRX 실패 시 Yahoo Finance Fallback
+                    warn!(symbol = original_symbol, "KRX 데이터 없음/실패, Yahoo Finance로 Fallback");
+                    let provider = YahooProviderWrapper::new()?;
+                    provider.get_klines_internal(cache_symbol, timeframe, limit).await?
+                }
+            }
         } else {
-            debug!(symbol = symbol, "Yahoo Finance 데이터 소스 사용");
+            debug!(symbol = cache_symbol, "Yahoo Finance 데이터 소스 사용 (해외 주식)");
             let provider = YahooProviderWrapper::new()?;
-            provider.get_klines_internal(symbol, timeframe, limit).await?
+            provider.get_klines_internal(cache_symbol, timeframe, limit).await?
         };
 
         if klines.is_empty() {
@@ -282,12 +301,12 @@ impl CachedHistoricalDataProvider {
         };
 
         if new_klines.is_empty() {
-            debug!(symbol = symbol, "새 데이터 없음");
+            debug!(symbol = cache_symbol, "새 데이터 없음");
             return Ok(0);
         }
 
-        // 배치 INSERT로 캐시에 저장
-        let saved = self.batch_insert_klines(symbol, timeframe, &new_klines).await?;
+        // 배치 INSERT로 캐시에 저장 (Yahoo 형식 심볼 사용)
+        let saved = self.batch_insert_klines(cache_symbol, timeframe, &new_klines).await?;
         Ok(saved)
     }
 
@@ -347,7 +366,7 @@ impl CachedHistoricalDataProvider {
 
         for chunk in klines.chunks(500) {
             let mut query = String::from(
-                r#"INSERT INTO yahoo_candle_cache
+                r#"INSERT INTO ohlcv
                    (symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at)
                    VALUES "#
             );
@@ -369,8 +388,8 @@ impl CachedHistoricalDataProvider {
 
             query.push_str(
                 r#" ON CONFLICT (symbol, timeframe, open_time) DO UPDATE SET
-                    high = GREATEST(yahoo_candle_cache.high, EXCLUDED.high),
-                    low = LEAST(yahoo_candle_cache.low, EXCLUDED.low),
+                    high = GREATEST(ohlcv.high, EXCLUDED.high),
+                    low = LEAST(ohlcv.low, EXCLUDED.low),
                     close = EXCLUDED.close,
                     volume = EXCLUDED.volume,
                     close_time = EXCLUDED.close_time,
@@ -412,9 +431,9 @@ impl CachedHistoricalDataProvider {
 
         sqlx::query(
             r#"
-            INSERT INTO yahoo_cache_metadata (symbol, timeframe, first_cached_time, last_cached_time, total_candles, last_updated_at)
+            INSERT INTO ohlcv_metadata (symbol, timeframe, first_cached_time, last_cached_time, total_candles, last_updated_at)
             SELECT $1, $2, MIN(open_time), MAX(open_time), COUNT(*), NOW()
-            FROM yahoo_candle_cache
+            FROM ohlcv
             WHERE symbol = $1 AND timeframe = $2
             ON CONFLICT (symbol, timeframe) DO UPDATE SET
                 first_cached_time = EXCLUDED.first_cached_time,
@@ -437,7 +456,7 @@ impl CachedHistoricalDataProvider {
         let expected_duration = timeframe_to_duration(timeframe);
 
         // 캐시된 데이터 조회
-        let klines = match self.cache.get_cached_klines(symbol, timeframe, limit).await {
+        let klines: Vec<Kline> = match self.cache.get_cached_klines(symbol, timeframe, limit).await {
             Ok(k) => k,
             Err(_) => return,
         };
@@ -472,7 +491,8 @@ impl CachedHistoricalDataProvider {
 
     /// 캐시 통계 조회.
     pub async fn get_cache_stats(&self) -> Result<Vec<CacheStats>> {
-        let records = self.cache.get_all_cache_stats().await?;
+        use crate::storage::ohlcv::OhlcvMetadataRecord;
+        let records: Vec<OhlcvMetadataRecord> = self.cache.get_all_cache_stats().await?;
         Ok(records.into_iter().map(|r| CacheStats {
             symbol: r.symbol,
             timeframe: r.timeframe,

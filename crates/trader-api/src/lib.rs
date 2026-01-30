@@ -19,6 +19,7 @@
 pub mod auth;
 pub mod metrics;
 pub mod middleware;
+pub mod repository;
 pub mod routes;
 pub mod state;
 pub mod websocket;

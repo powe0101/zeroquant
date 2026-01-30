@@ -1,4 +1,4 @@
-//! Yahoo Finance 캔들 데이터 캐시.
+//! OHLCV 캔들 데이터 캐시.
 //!
 //! 전략, 백테스팅, 시뮬레이션, 트레이딩에서 공통으로 사용하는
 //! 캔들 데이터를 캐시하고 증분 업데이트합니다.
@@ -6,16 +6,16 @@
 //! # 동작 방식
 //!
 //! 1. 데이터 요청 시 캐시 확인
-//! 2. 캐시에 없거나 오래된 경우 Yahoo Finance에서 가져옴
+//! 2. 캐시에 없거나 오래된 경우 데이터 소스에서 가져옴
 //! 3. 새 데이터를 DB에 저장 (증분 업데이트)
 //! 4. 캐시된 데이터 반환
 //!
 //! # 사용 예제
 //!
 //! ```rust,ignore
-//! use trader_data::YahooCandleCache;
+//! use trader_data::OhlcvCache;
 //!
-//! let cache = YahooCandleCache::new(pool).await?;
+//! let cache = OhlcvCache::new(pool).await?;
 //! let klines = cache.get_klines("AAPL", Timeframe::D1, 100).await?;
 //! ```
 
@@ -27,9 +27,9 @@ use sqlx::FromRow;
 use trader_core::{Kline, Symbol, Timeframe};
 use tracing::{debug, info, instrument, warn};
 
-/// Yahoo Finance 캔들 데이터베이스 레코드.
+/// OHLCV 캔들 데이터베이스 레코드.
 #[derive(Debug, Clone, FromRow)]
-pub struct YahooCandleRecord {
+pub struct OhlcvRecord {
     pub symbol: String,
     pub timeframe: String,
     pub open_time: DateTime<Utc>,
@@ -42,7 +42,7 @@ pub struct YahooCandleRecord {
     pub fetched_at: Option<DateTime<Utc>>,
 }
 
-impl YahooCandleRecord {
+impl OhlcvRecord {
     /// Kline 도메인 객체로 변환.
     pub fn to_kline(&self) -> Kline {
         let timeframe = self.timeframe.parse().unwrap_or(Timeframe::D1);
@@ -72,7 +72,7 @@ impl YahooCandleRecord {
 
 /// 캐시 메타데이터 레코드.
 #[derive(Debug, Clone, FromRow)]
-pub struct YahooCacheMetadataRecord {
+pub struct OhlcvMetadataRecord {
     pub symbol: String,
     pub timeframe: String,
     pub first_cached_time: Option<DateTime<Utc>>,
@@ -81,15 +81,15 @@ pub struct YahooCacheMetadataRecord {
     pub total_candles: Option<i32>,
 }
 
-/// Yahoo Finance 캔들 캐시 서비스.
+/// OHLCV 캔들 캐시 서비스.
 ///
 /// 요청 기반 자동 캐싱과 증분 업데이트를 제공합니다.
 #[derive(Clone)]
-pub struct YahooCandleCache {
+pub struct OhlcvCache {
     pool: PgPool,
 }
 
-impl YahooCandleCache {
+impl OhlcvCache {
     /// 새로운 캐시 서비스 생성.
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -107,10 +107,10 @@ impl YahooCandleCache {
     ) -> Result<Vec<Kline>> {
         let tf_str = timeframe_to_string(timeframe);
 
-        let records: Vec<YahooCandleRecord> = sqlx::query_as(
+        let records: Vec<OhlcvRecord> = sqlx::query_as(
             r#"
             SELECT symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at
-            FROM yahoo_candle_cache
+            FROM ohlcv
             WHERE symbol = $1 AND timeframe = $2
             ORDER BY open_time DESC
             LIMIT $3
@@ -150,10 +150,10 @@ impl YahooCandleCache {
     ) -> Result<Vec<Kline>> {
         let tf_str = timeframe_to_string(timeframe);
 
-        let records: Vec<YahooCandleRecord> = sqlx::query_as(
+        let records: Vec<OhlcvRecord> = sqlx::query_as(
             r#"
             SELECT symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at
-            FROM yahoo_candle_cache
+            FROM ohlcv
             WHERE symbol = $1 AND timeframe = $2 AND open_time >= $3 AND open_time < $4
             ORDER BY open_time ASC
             "#,
@@ -195,12 +195,12 @@ impl YahooCandleCache {
             for kline in chunk {
                 let result = sqlx::query(
                     r#"
-                    INSERT INTO yahoo_candle_cache
+                    INSERT INTO ohlcv
                         (symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
                     ON CONFLICT (symbol, timeframe, open_time) DO UPDATE SET
-                        high = GREATEST(yahoo_candle_cache.high, EXCLUDED.high),
-                        low = LEAST(yahoo_candle_cache.low, EXCLUDED.low),
+                        high = GREATEST(ohlcv.high, EXCLUDED.high),
+                        low = LEAST(ohlcv.low, EXCLUDED.low),
                         close = EXCLUDED.close,
                         volume = EXCLUDED.volume,
                         close_time = EXCLUDED.close_time,
@@ -241,13 +241,13 @@ impl YahooCandleCache {
         &self,
         symbol: &str,
         timeframe: Timeframe,
-    ) -> Result<Option<YahooCacheMetadataRecord>> {
+    ) -> Result<Option<OhlcvMetadataRecord>> {
         let tf_str = timeframe_to_string(timeframe);
 
         sqlx::query_as(
             r#"
             SELECT symbol, timeframe, first_cached_time, last_cached_time, last_updated_at, total_candles
-            FROM yahoo_cache_metadata
+            FROM ohlcv_metadata
             WHERE symbol = $1 AND timeframe = $2
             "#,
         )
@@ -270,7 +270,7 @@ impl YahooCandleCache {
 
         let result: Option<(DateTime<Utc>,)> = sqlx::query_as(
             r#"
-            SELECT open_time FROM yahoo_candle_cache
+            SELECT open_time FROM ohlcv
             WHERE symbol = $1 AND timeframe = $2
             ORDER BY open_time DESC
             LIMIT 1
@@ -295,7 +295,7 @@ impl YahooCandleCache {
 
         let result: (i64,) = sqlx::query_as(
             r#"
-            SELECT COUNT(*) FROM yahoo_candle_cache
+            SELECT COUNT(*) FROM ohlcv
             WHERE symbol = $1 AND timeframe = $2
             "#,
         )
@@ -325,7 +325,7 @@ impl YahooCandleCache {
 
         let result = sqlx::query(
             r#"
-            DELETE FROM yahoo_candle_cache
+            DELETE FROM ohlcv
             WHERE symbol = $1 AND timeframe = $2 AND open_time < $3
             "#,
         )
@@ -350,11 +350,11 @@ impl YahooCandleCache {
     }
 
     /// 전체 캐시 통계 조회.
-    pub async fn get_all_cache_stats(&self) -> Result<Vec<YahooCacheMetadataRecord>> {
+    pub async fn get_all_cache_stats(&self) -> Result<Vec<OhlcvMetadataRecord>> {
         sqlx::query_as(
             r#"
             SELECT symbol, timeframe, first_cached_time, last_cached_time, last_updated_at, total_candles
-            FROM yahoo_cache_metadata
+            FROM ohlcv_metadata
             ORDER BY last_updated_at DESC
             "#,
         )
@@ -365,14 +365,14 @@ impl YahooCandleCache {
 
     /// 특정 심볼의 모든 타임프레임 캐시 삭제.
     pub async fn clear_symbol_cache(&self, symbol: &str) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM yahoo_candle_cache WHERE symbol = $1")
+        let result = sqlx::query("DELETE FROM ohlcv WHERE symbol = $1")
             .bind(symbol)
             .execute(&self.pool)
             .await
             .map_err(|e| DataError::DeleteError(e.to_string()))?;
 
         // 메타데이터도 삭제
-        sqlx::query("DELETE FROM yahoo_cache_metadata WHERE symbol = $1")
+        sqlx::query("DELETE FROM ohlcv_metadata WHERE symbol = $1")
             .bind(symbol)
             .execute(&self.pool)
             .await
@@ -387,11 +387,11 @@ impl YahooCandleCache {
 // 헬퍼 함수
 // =============================================================================
 
-/// Timeframe을 문자열로 변환 (Yahoo Finance 형식).
+/// Timeframe을 DB 저장용 문자열로 변환.
 pub fn timeframe_to_string(timeframe: Timeframe) -> String {
     match timeframe {
         Timeframe::M1 => "1m".to_string(),
-        Timeframe::M3 => "5m".to_string(),  // Yahoo는 3분봉 없음
+        Timeframe::M3 => "5m".to_string(),  // 3분봉은 5분봉으로 대체
         Timeframe::M5 => "5m".to_string(),
         Timeframe::M15 => "15m".to_string(),
         Timeframe::M30 => "30m".to_string(),

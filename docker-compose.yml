@@ -60,15 +60,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
       # Credential Encryption (Base64 encoded 32-byte key)
       - ENCRYPTION_MASTER_KEY=${ENCRYPTION_MASTER_KEY:-MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=}
-      # Telegram settings
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - TELEGRAM_ENABLED=${TELEGRAM_ENABLED:-false}
-      # KIS API settings (optional)
-      - KIS_PAPER_APP_KEY=${KIS_PAPER_APP_KEY:-}
-      - KIS_PAPER_APP_SECRET=${KIS_PAPER_APP_SECRET:-}
-      - KIS_PAPER_ACCOUNT_NUMBER=${KIS_PAPER_ACCOUNT_NUMBER:-}
-      - KIS_PAPER_ACCOUNT_CODE=${KIS_PAPER_ACCOUNT_CODE:-01}
       # Rate limit (개발/테스트 환경에서는 비활성화)
       - RATE_LIMIT_DISABLED=true
     depends_on:

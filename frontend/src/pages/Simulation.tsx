@@ -1,4 +1,5 @@
 import { createSignal, For, Show, createEffect, onCleanup, createResource } from 'solid-js'
+import { useSearchParams } from '@solidjs/router'
 import {
   Play,
   Pause,
@@ -22,11 +23,12 @@ import {
   getSimulationStatus,
   getSimulationPositions,
   getSimulationTrades,
-  getBacktestStrategies,
+  getStrategies,
   type SimulationStatusResponse,
   type SimulationPosition,
   type SimulationTrade,
 } from '../api/client'
+import type { Strategy } from '../types'
 
 function formatCurrency(value: number | string): string {
   const numValue = typeof value === 'string' ? parseFloat(value) : value
@@ -44,13 +46,15 @@ function formatDecimal(value: string | number, decimals: number = 2): string {
 }
 
 export function Simulation() {
-  // API 데이터 리소스
+  // URL 파라미터 읽기 (전략 페이지에서 바로 이동 시)
+  const [searchParams] = useSearchParams()
+
+  // 등록된 전략 목록 로드
   const [strategies] = createResource(async () => {
     try {
-      const response = await getBacktestStrategies()
-      return response.strategies
+      return await getStrategies()
     } catch {
-      return []
+      return [] as Strategy[]
     }
   })
 
@@ -63,6 +67,17 @@ export function Simulation() {
 
   // 폼 상태
   const [selectedStrategy, setSelectedStrategy] = createSignal('')
+
+  // URL에서 전략 ID가 있으면 자동 선택
+  createEffect(() => {
+    const strategyId = searchParams.strategy
+    if (strategyId && strategies() && strategies()!.length > 0) {
+      const found = strategies()!.find(s => s.id === strategyId)
+      if (found) {
+        setSelectedStrategy(found.strategyType)
+      }
+    }
+  })
   const [initialBalance, setInitialBalance] = createSignal('10000000')
   const [speed, setSpeed] = createSignal(1)
 
@@ -253,7 +268,9 @@ export function Simulation() {
                 <option value="">전략 선택...</option>
                 <For each={strategies()}>
                   {(strategy) => (
-                    <option value={strategy.id}>{strategy.name}</option>
+                    <option value={strategy.strategyType}>
+                      {strategy.name} ({strategy.strategyType})
+                    </option>
                   )}
                 </For>
               </select>
@@ -343,19 +360,22 @@ export function Simulation() {
               </button>
             </Show>
 
-            {/* Reset & Refresh */}
+            {/* Reset */}
             <button
               class="p-3 rounded-lg bg-[var(--color-surface-light)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
               onClick={handleReset}
               disabled={isLoading() || isRunning()}
+              title="초기화"
             >
               <RotateCcw class="w-5 h-5" />
             </button>
 
+            {/* Refresh */}
             <button
               class="p-3 rounded-lg bg-[var(--color-surface-light)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
               onClick={loadStatus}
               disabled={isLoading()}
+              title="새로고침"
             >
               <RefreshCw class={`w-5 h-5 ${isLoading() ? 'animate-spin' : ''}`} />
             </button>

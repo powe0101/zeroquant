@@ -1,6 +1,5 @@
 import { createSignal, For, Show, createResource, onCleanup } from 'solid-js'
 import {
-  Brain,
   Play,
   Square,
   Trash2,
@@ -201,23 +200,21 @@ export function MLTraining() {
 
   return (
     <div class="space-y-6">
-      {/* 헤더 */}
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <Brain class="w-8 h-8 text-purple-500" />
-          <div>
-            <h1 class="text-2xl font-bold text-[var(--color-text)]">ML 모델 훈련</h1>
-            <p class="text-sm text-[var(--color-text-muted)]">
-              Yahoo Finance 데이터로 ONNX 모델을 훈련합니다
-            </p>
-          </div>
-        </div>
+      {/* 액션 버튼 */}
+      <div class="flex items-center justify-end gap-2">
         <button
           onClick={() => setShowForm(!showForm())}
           class="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
         >
           <Plus class="w-4 h-4" />
           새 훈련
+        </button>
+        <button
+          onClick={() => { refetchJobs(); refetchModels(); }}
+          class="px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text-muted)] rounded-lg font-medium hover:text-[var(--color-text)] transition-colors flex items-center gap-2"
+        >
+          <RefreshCw class={`w-4 h-4 ${jobs.loading || models.loading ? 'animate-spin' : ''}`} />
+          새로고침
         </button>
       </div>
 

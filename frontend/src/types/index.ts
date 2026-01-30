@@ -36,6 +36,7 @@ export interface Order {
 
 export interface Strategy {
   id: string;
+  strategyType: string;  // 전략 타입 (예: "rsi", "grid_trading", "sma")
   name: string;
   status: 'Running' | 'Stopped' | 'Error';
   market: 'KR' | 'US' | 'CRYPTO';

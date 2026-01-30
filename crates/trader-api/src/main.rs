@@ -16,6 +16,7 @@ use tracing::{info, warn, error};
 
 use trader_api::metrics::setup_metrics_recorder;
 use trader_api::middleware::{rate_limit_middleware, metrics_layer, RateLimitConfig, RateLimitState};
+use trader_api::repository::StrategyRepository;
 use trader_api::routes::create_api_router;
 use trader_api::state::AppState;
 use trader_api::websocket::{create_subscription_manager, start_aggregator, start_simulator, standalone_websocket_router, WsState};
@@ -502,6 +503,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         has_websocket = state.has_subscriptions(),
         "Service connections status"
     );
+
+    // 데이터베이스에서 저장된 전략 로드
+    if let Some(ref pool) = state.db_pool {
+        let engine = state.strategy_engine.read().await;
+        match StrategyRepository::load_strategies_into_engine(pool, &engine).await {
+            Ok(count) => {
+                if count > 0 {
+                    info!(count, "Loaded strategies from database");
+                } else {
+                    info!("No strategies found in database to load");
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load strategies from database: {:?}", e);
+            }
+        }
+    }
 
     // 라우터 생성
     let app = create_router(state, metrics_handle, ws_state);

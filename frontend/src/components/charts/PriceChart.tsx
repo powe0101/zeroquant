@@ -1,6 +1,12 @@
 import { onMount, onCleanup, createEffect, on } from 'solid-js'
-import { createChart, ColorType, CandlestickSeries, LineSeries } from 'lightweight-charts'
-import type { IChartApi, ISeriesApi, CandlestickData, LineData } from 'lightweight-charts'
+import { createChart, ColorType, CandlestickSeries, LineSeries, createSeriesMarkers } from 'lightweight-charts'
+import type { IChartApi, ISeriesApi, CandlestickData, LineData, SeriesMarker, Time, ISeriesMarkersPluginApi, LogicalRange } from 'lightweight-charts'
+
+/** 시간 범위 타입 (차트 동기화용) */
+export interface TimeRange {
+  from: Time
+  to: Time
+}
 
 export interface CandlestickDataPoint {
   time: string | number
@@ -25,6 +31,40 @@ export interface IndicatorOverlay {
   priceScaleId?: 'left' | 'right'
 }
 
+/** 거래 마커 타입. */
+export type TradeMarkerType = 'entry' | 'exit' | 'buy' | 'sell' | 'stop' | 'target'
+
+/** 거래 마커 데이터. */
+export interface TradeMarker {
+  time: string | number
+  type: TradeMarkerType
+  price?: number
+  label?: string
+}
+
+/** 마커 타입별 설정 반환. */
+function getMarkerConfig(type: TradeMarkerType): {
+  position: 'aboveBar' | 'belowBar' | 'inBar'
+  color: string
+  shape: 'circle' | 'arrowUp' | 'arrowDown' | 'square'
+  defaultLabel: string
+} {
+  switch (type) {
+    case 'entry':
+    case 'buy':
+      return { position: 'belowBar', color: '#22c55e', shape: 'arrowUp', defaultLabel: 'BUY' }
+    case 'exit':
+    case 'sell':
+      return { position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', defaultLabel: 'SELL' }
+    case 'stop':
+      return { position: 'aboveBar', color: '#f97316', shape: 'circle', defaultLabel: 'STOP' }
+    case 'target':
+      return { position: 'aboveBar', color: '#3b82f6', shape: 'square', defaultLabel: 'TP' }
+    default:
+      return { position: 'inBar', color: '#6b7280', shape: 'circle', defaultLabel: '' }
+  }
+}
+
 interface PriceChartProps {
   data: CandlestickDataPoint[] | LineDataPoint[]
   type?: 'candlestick' | 'line'
@@ -32,6 +72,8 @@ interface PriceChartProps {
   showVolume?: boolean
   /** 지표 오버레이 목록. */
   indicators?: IndicatorOverlay[]
+  /** 거래 마커 목록 (진입/청산 표시). */
+  markers?: TradeMarker[]
   colors?: {
     background?: string
     text?: string
@@ -46,6 +88,7 @@ export function PriceChart(props: PriceChartProps) {
   let containerRef: HTMLDivElement | undefined
   let chart: IChartApi | undefined
   let mainSeries: ISeriesApi<'Candlestick'> | ISeriesApi<'Line'> | undefined
+  let markersPlugin: ISeriesMarkersPluginApi<Time> | undefined
   const indicatorSeries = new Map<string, ISeriesApi<'Line'>>()
 
   const defaultColors = {
@@ -200,6 +243,43 @@ export function PriceChart(props: PriceChartProps) {
               series.setData(sortedData as LineData[])
             }
           }
+        }
+      }
+    )
+  )
+
+  // Update trade markers when props.markers change (Lightweight Charts v5 API)
+  createEffect(
+    on(
+      () => props.markers,
+      (markers) => {
+        if (!mainSeries) return
+
+        // Convert TradeMarker to SeriesMarker format
+        const seriesMarkers: SeriesMarker<Time>[] = (markers || [])
+          .map((marker) => {
+            const config = getMarkerConfig(marker.type)
+            return {
+              time: marker.time as Time,
+              position: config.position,
+              color: config.color,
+              shape: config.shape,
+              text: marker.label || config.defaultLabel,
+            }
+          })
+          .sort((a, b) => {
+            const timeA = typeof a.time === 'string' ? a.time : String(a.time)
+            const timeB = typeof b.time === 'string' ? b.time : String(b.time)
+            return timeA.localeCompare(timeB)
+          })
+
+        // Remove existing markers plugin and create new one
+        if (markersPlugin) {
+          markersPlugin.setMarkers([])
+        }
+
+        if (seriesMarkers.length > 0) {
+          markersPlugin = createSeriesMarkers(mainSeries, seriesMarkers)
         }
       }
     )

@@ -1,18 +1,22 @@
-import { createSignal, createResource, For, Show } from 'solid-js'
-import { Play, Calendar, TrendingUp, TrendingDown, ChartBar, Settings2, RefreshCw, AlertCircle } from 'lucide-solid'
+import { createSignal, createResource, createEffect, For, Show } from 'solid-js'
+import { useSearchParams } from '@solidjs/router'
+import { Play, Calendar, TrendingUp, TrendingDown, ChartBar, Settings2, RefreshCw, AlertCircle, Info, X, ChevronDown, ChevronUp } from 'lucide-solid'
 import { EquityCurve, DrawdownChart } from '../components/charts'
 import type { EquityDataPoint, DrawdownDataPoint, ChartSyncState } from '../components/charts'
 import {
   runBacktest,
   runMultiBacktest,
-  getBacktestStrategies,
+  getStrategies,
+  listBacktestResults,
+  saveBacktestResult,
+  deleteBacktestResult,
   MULTI_ASSET_STRATEGIES,
   type BacktestRequest,
   type BacktestMultiRequest,
   type BacktestResult,
   type BacktestMultiResult,
-  type BacktestStrategy,
 } from '../api/client'
+import type { Strategy } from '../types'
 
 function formatCurrency(value: string | number): string {
   const num = typeof value === 'string' ? parseFloat(value) : value
@@ -97,10 +101,14 @@ function convertDrawdownCurve(result: BacktestResult): DrawdownDataPoint[] {
 // 백테스트 결과 카드 컴포넌트 (차트 동기화를 위해 분리)
 interface BacktestResultCardProps {
   result: BacktestResult
-  strategies: BacktestStrategy[] | undefined
+  strategies: Strategy[] | undefined
+  index: number
+  onDelete: (index: number) => void | Promise<void>
 }
 
 function BacktestResultCard(props: BacktestResultCardProps) {
+  // 카드 확장 상태
+  const [isExpanded, setIsExpanded] = createSignal(false)
   // 차트 동기화 state
   const [chartSyncState, setChartSyncState] = createSignal<ChartSyncState | null>(null)
 
@@ -131,246 +139,359 @@ function BacktestResultCard(props: BacktestResultCardProps) {
     setChartSyncState(state)
   }
 
+  const handleDelete = (e: MouseEvent) => {
+    e.stopPropagation()
+    props.onDelete(props.index)
+  }
+
+  const toggleExpand = () => {
+    setIsExpanded(!isExpanded())
+  }
+
   return (
-    <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-      {/* 헤더 */}
-      <div class="flex items-start justify-between mb-4">
-        <div>
-          <h4 class="text-lg font-semibold text-[var(--color-text)]">
-            {props.strategies?.find((s: BacktestStrategy) => s.id === props.result.strategy_id)?.name || props.result.strategy_id}
-          </h4>
-          <div class="flex items-center gap-3 mt-1 text-sm text-[var(--color-text-muted)]">
-            <span>{props.result.symbol}</span>
-            <span class="flex items-center gap-1">
-              <Calendar class="w-4 h-4" />
-              {props.result.start_date} ~ {props.result.end_date}
-            </span>
-          </div>
-        </div>
-        <span
-          class={`px-3 py-1 rounded-full text-sm font-medium ${
-            props.result.success
-              ? 'bg-green-500/20 text-green-400'
-              : 'bg-red-500/20 text-red-400'
-          }`}
-        >
-          {props.result.success ? '완료' : '실패'}
-        </span>
-      </div>
-
-      {/* 성과 지표 그리드 */}
-      <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">초기 자본</div>
-          <div class="font-semibold text-[var(--color-text)]">
-            {formatCurrency(props.result.config_summary.initial_capital)}
-          </div>
-        </div>
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">최종 자본</div>
-          <div class="font-semibold text-[var(--color-text)]">
-            {formatCurrency(finalCapital())}
-          </div>
-        </div>
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">총 수익률</div>
-          <div
-            class={`font-semibold flex items-center gap-1 ${
-              totalReturnPct() >= 0 ? 'text-green-500' : 'text-red-500'
-            }`}
-          >
-            <Show
-              when={totalReturnPct() >= 0}
-              fallback={<TrendingDown class="w-4 h-4" />}
-            >
-              <TrendingUp class="w-4 h-4" />
-            </Show>
-            {formatPercent(totalReturnPct())}
-          </div>
-        </div>
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">CAGR</div>
-          <div
-            class={`font-semibold ${
-              parseFloat(props.result.metrics.annualized_return_pct) >= 0 ? 'text-green-500' : 'text-red-500'
-            }`}
-          >
-            {formatPercent(props.result.metrics.annualized_return_pct)}
-          </div>
-        </div>
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">MDD</div>
-          <div class="font-semibold text-red-500">
-            {parseFloat(props.result.metrics.max_drawdown_pct).toFixed(2)}%
-          </div>
-        </div>
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">샤프 비율</div>
-          <div class="font-semibold text-[var(--color-text)]">
-            {parseFloat(props.result.metrics.sharpe_ratio).toFixed(2)}
-          </div>
-        </div>
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">승률</div>
-          <div class="font-semibold text-[var(--color-text)]">
-            {parseFloat(props.result.metrics.win_rate_pct).toFixed(1)}%
-          </div>
-        </div>
-        <div>
-          <div class="text-sm text-[var(--color-text-muted)] mb-1">총 거래</div>
-          <div class="font-semibold text-[var(--color-text)]">
-            {props.result.metrics.total_trades}회
-          </div>
-        </div>
-      </div>
-
-      {/* 추가 성과 지표 (접이식) */}
-      <details class="mt-4">
-        <summary class="cursor-pointer text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-          상세 지표 보기
-        </summary>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3 pt-3 border-t border-[var(--color-surface-light)]">
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">순수익</div>
-            <div class={`font-semibold ${parseFloat(props.result.metrics.net_profit) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-              {formatCurrency(props.result.metrics.net_profit)}
+    <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] overflow-hidden transition-all duration-200">
+      {/* 클릭 가능한 헤더 */}
+      <div
+        class="p-6 cursor-pointer hover:bg-[var(--color-surface-light)]/30 transition-colors"
+        onClick={toggleExpand}
+      >
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-3">
+            {/* 펼침 아이콘 */}
+            <div class="text-[var(--color-text-muted)]">
+              <Show when={isExpanded()} fallback={<ChevronDown class="w-5 h-5" />}>
+                <ChevronUp class="w-5 h-5" />
+              </Show>
             </div>
-          </div>
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">Profit Factor</div>
-            <div class="font-semibold text-[var(--color-text)]">
-              {parseFloat(props.result.metrics.profit_factor).toFixed(2)}
-            </div>
-          </div>
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">소르티노 비율</div>
-            <div class="font-semibold text-[var(--color-text)]">
-              {parseFloat(props.result.metrics.sortino_ratio).toFixed(2)}
-            </div>
-          </div>
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">칼마 비율</div>
-            <div class="font-semibold text-[var(--color-text)]">
-              {parseFloat(props.result.metrics.calmar_ratio).toFixed(2)}
-            </div>
-          </div>
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">평균 수익</div>
-            <div class="font-semibold text-green-500">
-              {formatCurrency(props.result.metrics.avg_win)}
-            </div>
-          </div>
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">평균 손실</div>
-            <div class="font-semibold text-red-500">
-              {formatCurrency(props.result.metrics.avg_loss)}
-            </div>
-          </div>
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">총 수수료</div>
-            <div class="font-semibold text-[var(--color-text)]">
-              {formatCurrency(props.result.config_summary.total_commission)}
-            </div>
-          </div>
-          <div>
-            <div class="text-sm text-[var(--color-text-muted)] mb-1">데이터 포인트</div>
-            <div class="font-semibold text-[var(--color-text)]">
-              {props.result.config_summary.data_points}개
-            </div>
-          </div>
-        </div>
-      </details>
-
-      {/* 자산 곡선 & 드로우다운 차트 (동기화됨) */}
-      <Show when={equityCurve().length > 0}>
-        <div class="mt-4 space-y-4">
-          <div>
-            <h5 class="text-sm font-medium text-[var(--color-text-muted)] mb-2">자산 곡선</h5>
-            <EquityCurve
-              data={equityCurve()}
-              height={200}
-              chartId="equity"
-              syncState={chartSyncState}
-              onVisibleRangeChange={handleVisibleRangeChange}
-            />
-          </div>
-          <Show when={drawdownCurve().length > 0}>
             <div>
-              <h5 class="text-sm font-medium text-[var(--color-text-muted)] mb-2">드로우다운</h5>
-              <DrawdownChart
-                data={drawdownCurve()}
-                height={150}
-                chartId="drawdown"
-                syncState={chartSyncState}
-                onVisibleRangeChange={handleVisibleRangeChange}
-              />
+              <h4 class="text-lg font-semibold text-[var(--color-text)]">
+                {props.strategies?.find((s: Strategy) => s.id === props.result.strategy_id)?.name || props.result.strategy_id}
+              </h4>
+              <div class="flex items-center gap-3 mt-1 text-sm text-[var(--color-text-muted)]">
+                <span>{props.result.symbol}</span>
+                <span class="flex items-center gap-1">
+                  <Calendar class="w-4 h-4" />
+                  {props.result.start_date} ~ {props.result.end_date}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            {/* 요약 수익률 (접혀있을 때도 보임) */}
+            <div
+              class={`px-3 py-1 rounded-lg text-sm font-semibold ${
+                totalReturnPct() >= 0 ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+              }`}
+            >
+              {formatPercent(totalReturnPct())}
+            </div>
+            <span
+              class={`px-3 py-1 rounded-full text-sm font-medium ${
+                props.result.success
+                  ? 'bg-green-500/20 text-green-400'
+                  : 'bg-red-500/20 text-red-400'
+              }`}
+            >
+              {props.result.success ? '완료' : '실패'}
+            </span>
+            {/* 삭제 버튼 */}
+            <button
+              onClick={handleDelete}
+              class="p-1.5 rounded-lg hover:bg-red-500/20 text-[var(--color-text-muted)] hover:text-red-400 transition-colors"
+              title="결과 삭제"
+            >
+              <X class="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* 접혀있을 때도 보이는 핵심 지표 요약 */}
+        <Show when={!isExpanded()}>
+          <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 mt-4 ml-8 text-sm">
+            <div>
+              <span class="text-[var(--color-text-muted)]">초기자본</span>
+              <div class="font-medium text-[var(--color-text)]">{formatCurrency(props.result.config_summary.initial_capital)}</div>
+            </div>
+            <div>
+              <span class="text-[var(--color-text-muted)]">최종자본</span>
+              <div class="font-medium text-[var(--color-text)]">{formatCurrency(finalCapital())}</div>
+            </div>
+            <div>
+              <span class="text-[var(--color-text-muted)]">수익률</span>
+              <div class={`font-medium ${totalReturnPct() >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatPercent(totalReturnPct())}</div>
+            </div>
+            <div>
+              <span class="text-[var(--color-text-muted)]">CAGR</span>
+              <div class={`font-medium ${parseFloat(props.result.metrics.annualized_return_pct) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatPercent(props.result.metrics.annualized_return_pct)}</div>
+            </div>
+            <div>
+              <span class="text-[var(--color-text-muted)]">MDD</span>
+              <div class="font-medium text-red-400">{parseFloat(props.result.metrics.max_drawdown_pct).toFixed(2)}%</div>
+            </div>
+            <div>
+              <span class="text-[var(--color-text-muted)]">샤프</span>
+              <div class="font-medium text-[var(--color-text)]">{parseFloat(props.result.metrics.sharpe_ratio).toFixed(2)}</div>
+            </div>
+            <div>
+              <span class="text-[var(--color-text-muted)]">승률</span>
+              <div class="font-medium text-[var(--color-text)]">{parseFloat(props.result.metrics.win_rate_pct).toFixed(1)}%</div>
+            </div>
+            <div>
+              <span class="text-[var(--color-text-muted)]">거래</span>
+              <div class="font-medium text-[var(--color-text)]">{props.result.metrics.total_trades}회</div>
+            </div>
+          </div>
+        </Show>
+      </div>
+
+      {/* 펼쳐진 상세 내용 */}
+      <Show when={isExpanded()}>
+        <div class="px-6 pb-6 border-t border-[var(--color-surface-light)]">
+          {/* 성과 지표 그리드 */}
+          <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 pt-4">
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">초기 자본</div>
+              <div class="font-semibold text-[var(--color-text)]">
+                {formatCurrency(props.result.config_summary.initial_capital)}
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">최종 자본</div>
+              <div class="font-semibold text-[var(--color-text)]">
+                {formatCurrency(finalCapital())}
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">총 수익률</div>
+              <div
+                class={`font-semibold flex items-center gap-1 ${
+                  totalReturnPct() >= 0 ? 'text-green-500' : 'text-red-500'
+                }`}
+              >
+                <Show
+                  when={totalReturnPct() >= 0}
+                  fallback={<TrendingDown class="w-4 h-4" />}
+                >
+                  <TrendingUp class="w-4 h-4" />
+                </Show>
+                {formatPercent(totalReturnPct())}
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">CAGR</div>
+              <div
+                class={`font-semibold ${
+                  parseFloat(props.result.metrics.annualized_return_pct) >= 0 ? 'text-green-500' : 'text-red-500'
+                }`}
+              >
+                {formatPercent(props.result.metrics.annualized_return_pct)}
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">MDD</div>
+              <div class="font-semibold text-red-500">
+                {parseFloat(props.result.metrics.max_drawdown_pct).toFixed(2)}%
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">샤프 비율</div>
+              <div class="font-semibold text-[var(--color-text)]">
+                {parseFloat(props.result.metrics.sharpe_ratio).toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">승률</div>
+              <div class="font-semibold text-[var(--color-text)]">
+                {parseFloat(props.result.metrics.win_rate_pct).toFixed(1)}%
+              </div>
+            </div>
+            <div>
+              <div class="text-sm text-[var(--color-text-muted)] mb-1">총 거래</div>
+              <div class="font-semibold text-[var(--color-text)]">
+                {props.result.metrics.total_trades}회
+              </div>
+            </div>
+          </div>
+
+          {/* 추가 성과 지표 (접이식) */}
+          <details class="mt-4">
+            <summary class="cursor-pointer text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+              상세 지표 보기
+            </summary>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3 pt-3 border-t border-[var(--color-surface-light)]">
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">순수익</div>
+                <div class={`font-semibold ${parseFloat(props.result.metrics.net_profit) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  {formatCurrency(props.result.metrics.net_profit)}
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">Profit Factor</div>
+                <div class="font-semibold text-[var(--color-text)]">
+                  {parseFloat(props.result.metrics.profit_factor).toFixed(2)}
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">소르티노 비율</div>
+                <div class="font-semibold text-[var(--color-text)]">
+                  {parseFloat(props.result.metrics.sortino_ratio).toFixed(2)}
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">칼마 비율</div>
+                <div class="font-semibold text-[var(--color-text)]">
+                  {parseFloat(props.result.metrics.calmar_ratio).toFixed(2)}
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">평균 수익</div>
+                <div class="font-semibold text-green-500">
+                  {formatCurrency(props.result.metrics.avg_win)}
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">평균 손실</div>
+                <div class="font-semibold text-red-500">
+                  {formatCurrency(props.result.metrics.avg_loss)}
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">총 수수료</div>
+                <div class="font-semibold text-[var(--color-text)]">
+                  {formatCurrency(props.result.config_summary.total_commission)}
+                </div>
+              </div>
+              <div>
+                <div class="text-sm text-[var(--color-text-muted)] mb-1">데이터 포인트</div>
+                <div class="font-semibold text-[var(--color-text)]">
+                  {props.result.config_summary.data_points}개
+                </div>
+              </div>
+            </div>
+          </details>
+
+          {/* 자산 곡선 & 드로우다운 차트 (동기화됨) */}
+          <Show when={equityCurve().length > 0}>
+            <div class="mt-4 space-y-4">
+              <div>
+                <h5 class="text-sm font-medium text-[var(--color-text-muted)] mb-2">자산 곡선</h5>
+                <EquityCurve
+                  data={equityCurve()}
+                  height={200}
+                  chartId="equity"
+                  syncState={chartSyncState}
+                  onVisibleRangeChange={handleVisibleRangeChange}
+                />
+              </div>
+              <Show when={drawdownCurve().length > 0}>
+                <div>
+                  <h5 class="text-sm font-medium text-[var(--color-text-muted)] mb-2">드로우다운</h5>
+                  <DrawdownChart
+                    data={drawdownCurve()}
+                    height={150}
+                    chartId="drawdown"
+                    syncState={chartSyncState}
+                    onVisibleRangeChange={handleVisibleRangeChange}
+                  />
+                </div>
+              </Show>
             </div>
           </Show>
-        </div>
-      </Show>
 
-      {/* 거래 내역 (접이식) */}
-      <Show when={props.result.trades.length > 0}>
-        <details class="mt-4">
-          <summary class="cursor-pointer text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            거래 내역 ({props.result.trades.length}건)
-          </summary>
-          <div class="mt-3 overflow-x-auto">
-            <table class="w-full text-sm">
-              <thead>
-                <tr class="text-left text-[var(--color-text-muted)] border-b border-[var(--color-surface-light)]">
-                  <th class="pb-2">심볼</th>
-                  <th class="pb-2">방향</th>
-                  <th class="pb-2">진입가</th>
-                  <th class="pb-2">청산가</th>
-                  <th class="pb-2">수량</th>
-                  <th class="pb-2">손익</th>
-                  <th class="pb-2">수익률</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={props.result.trades.slice(0, 20)}>
-                  {(trade) => (
-                    <tr class="border-b border-[var(--color-surface-light)]">
-                      <td class="py-2">{trade.symbol}</td>
-                      <td class={`py-2 ${trade.side === 'Buy' ? 'text-green-500' : 'text-red-500'}`}>
-                        {trade.side === 'Buy' ? '매수' : '매도'}
-                      </td>
-                      <td class="py-2">{formatCurrency(trade.entry_price)}</td>
-                      <td class="py-2">{formatCurrency(trade.exit_price)}</td>
-                      <td class="py-2">{parseFloat(trade.quantity).toFixed(4)}</td>
-                      <td class={`py-2 ${parseFloat(trade.pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                        {formatCurrency(trade.pnl)}
-                      </td>
-                      <td class={`py-2 ${parseFloat(trade.return_pct) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                        {formatPercent(trade.return_pct)}
-                      </td>
+          {/* 거래 내역 (접이식) */}
+          <Show when={props.result.trades.length > 0}>
+            <details class="mt-4">
+              <summary class="cursor-pointer text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                거래 내역 ({props.result.trades.length}건)
+              </summary>
+              <div class="mt-3 overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="text-left text-[var(--color-text-muted)] border-b border-[var(--color-surface-light)]">
+                      <th class="pb-2">심볼</th>
+                      <th class="pb-2">방향</th>
+                      <th class="pb-2">진입가</th>
+                      <th class="pb-2">청산가</th>
+                      <th class="pb-2">수량</th>
+                      <th class="pb-2">손익</th>
+                      <th class="pb-2">수익률</th>
                     </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-            <Show when={props.result.trades.length > 20}>
-              <p class="mt-2 text-xs text-[var(--color-text-muted)]">
-                {props.result.trades.length - 20}건 더 있음
-              </p>
-            </Show>
-          </div>
-        </details>
+                  </thead>
+                  <tbody>
+                    <For each={props.result.trades.slice(0, 20)}>
+                      {(trade) => (
+                        <tr class="border-b border-[var(--color-surface-light)]">
+                          <td class="py-2">{trade.symbol}</td>
+                          <td class={`py-2 ${trade.side === 'Buy' ? 'text-green-500' : 'text-red-500'}`}>
+                            {trade.side === 'Buy' ? '매수' : '매도'}
+                          </td>
+                          <td class="py-2">{formatCurrency(trade.entry_price)}</td>
+                          <td class="py-2">{formatCurrency(trade.exit_price)}</td>
+                          <td class="py-2">{parseFloat(trade.quantity).toFixed(4)}</td>
+                          <td class={`py-2 ${parseFloat(trade.pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {formatCurrency(trade.pnl)}
+                          </td>
+                          <td class={`py-2 ${parseFloat(trade.return_pct) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {formatPercent(trade.return_pct)}
+                          </td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+                <Show when={props.result.trades.length > 20}>
+                  <p class="mt-2 text-xs text-[var(--color-text-muted)]">
+                    {props.result.trades.length - 20}건 더 있음
+                  </p>
+                </Show>
+              </div>
+            </details>
+          </Show>
+        </div>
       </Show>
     </div>
   )
 }
 
+// 저장된 결과와 DB ID를 매핑하기 위한 인터페이스
+interface StoredBacktestResult extends BacktestResult {
+  dbId?: string  // DB에 저장된 ID
+}
+
 export function Backtest() {
-  // 전략 목록 가져오기
+  // 등록된 전략 목록 가져오기 (전략 페이지에서 등록된 전략만 표시)
   const [strategies] = createResource(async () => {
-    const response = await getBacktestStrategies()
-    return response.strategies
+    return await getStrategies()
   })
 
-  // 백테스트 결과 목록 (로컬 상태로 관리)
-  const [results, setResults] = createSignal<BacktestResult[]>([])
+  // 저장된 백테스트 결과 불러오기
+  const [savedResults, { refetch: refetchSavedResults }] = createResource(async () => {
+    try {
+      const response = await listBacktestResults({ limit: 100 })
+      // DB 결과를 StoredBacktestResult 형태로 변환
+      return response.results.map(r => ({
+        ...r,
+        dbId: r.id
+      })) as StoredBacktestResult[]
+    } catch (err) {
+      console.error('저장된 결과 불러오기 실패:', err)
+      return []
+    }
+  })
+
+  // 백테스트 결과 목록 (저장된 결과 + 새로 실행한 결과)
+  const [results, setResults] = createSignal<StoredBacktestResult[]>([])
+
+  // 저장된 결과가 로드되면 상태에 반영
+  createEffect(() => {
+    const saved = savedResults()
+    if (saved && saved.length > 0) {
+      setResults(saved)
+    }
+  })
+
+  // URL 파라미터 읽기 (전략 페이지에서 바로 이동 시)
+  const [searchParams] = useSearchParams()
 
   // 기본 날짜 설정 (1년 전 ~ 오늘)
   const today = new Date().toISOString().split('T')[0]
@@ -378,10 +499,22 @@ export function Backtest() {
 
   // 폼 상태 (날짜는 기본값 설정)
   const [selectedStrategy, setSelectedStrategy] = createSignal('')
-  const [symbol, setSymbol] = createSignal('')
+
+  // URL에서 전략 ID가 있으면 자동 선택
+  createEffect(() => {
+    const strategyId = searchParams.strategy
+    if (strategyId && strategies() && strategies()!.length > 0) {
+      const found = strategies()!.find(s => s.id === strategyId)
+      if (found) {
+        setSelectedStrategy(strategyId)
+      }
+    }
+  })
+  // 심볼은 전략에서 가져옴 (signal 제거됨)
   const [startDate, setStartDate] = createSignal(oneYearAgo)
   const [endDate, setEndDate] = createSignal(today)
   const [initialCapital, setInitialCapital] = createSignal('10000000')
+  const [slippageRate, setSlippageRate] = createSignal('0.05') // 기본 0.05%
   const [isRunning, setIsRunning] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -389,12 +522,15 @@ export function Backtest() {
     e.preventDefault()
     setError(null)
 
-    if (!selectedStrategy()) {
+    const strategyType = getSelectedStrategyType()
+
+    const strategyInfo = getSelectedStrategyInfo()
+    if (!selectedStrategy() || !strategyType || !strategyInfo) {
       setError('전략을 선택해주세요')
       return
     }
-    if (!symbol()) {
-      setError('심볼을 입력해주세요')
+    if (!strategyInfo.symbols || strategyInfo.symbols.length === 0) {
+      setError('전략에 심볼이 등록되어 있지 않습니다')
       return
     }
     if (!startDate()) {
@@ -409,51 +545,79 @@ export function Backtest() {
     setIsRunning(true)
 
     try {
-      // 다중 자산 전략인지 확인
-      const isMultiAssetStrategy = MULTI_ASSET_STRATEGIES.includes(selectedStrategy())
+      // 다중 자산 전략인지 확인 (strategyType 기준)
+      const isMultiAssetStrategy = MULTI_ASSET_STRATEGIES.includes(strategyType)
+
+      // 전략에 등록된 심볼 사용
+      const symbols = strategyInfo.symbols
+
+      // 슬리피지를 소수점으로 변환 (0.05% → 0.0005)
+      const slippage = parseFloat(slippageRate()) / 100
+
+      let resultToSave: BacktestResult
+      let symbolStr: string
 
       if (isMultiAssetStrategy) {
-        // 심볼을 콤마로 분리하여 배열로 변환
-        const symbols = symbol()
-          .split(',')
-          .map(s => s.trim())
-          .filter(s => s.length > 0)
-
-        if (symbols.length === 0) {
-          setError('최소 하나의 심볼을 입력해주세요')
-          setIsRunning(false)
-          return
-        }
-
         const request: BacktestMultiRequest = {
-          strategy_id: selectedStrategy(),
+          strategy_id: strategyType,
           symbols,
           start_date: startDate(),
           end_date: endDate(),
           initial_capital: parseInt(initialCapital(), 10),
+          slippage_rate: slippage,
         }
 
         const result = await runMultiBacktest(request)
 
         // 다중 자산 결과를 단일 자산 형식으로 변환하여 표시
-        const convertedResult: BacktestResult = {
+        symbolStr = result.symbols.join(', ')
+        resultToSave = {
           ...result,
-          symbol: result.symbols.join(', '),
+          symbol: symbolStr,
         }
-
-        setResults(prev => [convertedResult, ...prev])
       } else {
-        // 단일 자산 전략
+        // 단일 자산 전략 (첫 번째 심볼 사용)
         const request: BacktestRequest = {
-          strategy_id: selectedStrategy(),
-          symbol: symbol(),
+          strategy_id: strategyType,
+          symbol: symbols[0],
           start_date: startDate(),
           end_date: endDate(),
           initial_capital: parseInt(initialCapital(), 10),
+          slippage_rate: slippage,
         }
 
-        const result = await runBacktest(request)
-        setResults(prev => [result, ...prev])
+        resultToSave = await runBacktest(request)
+        symbolStr = symbols[0]
+      }
+
+      // DB에 결과 저장
+      try {
+        const saveResponse = await saveBacktestResult({
+          strategy_id: selectedStrategy(),  // 등록된 전략 ID
+          strategy_type: strategyType,      // 전략 타입 (sma_crossover, bollinger 등)
+          symbol: symbolStr,
+          start_date: startDate(),
+          end_date: endDate(),
+          initial_capital: parseInt(initialCapital(), 10),
+          slippage_rate: slippage,
+          metrics: resultToSave.metrics,
+          config_summary: resultToSave.config_summary,
+          equity_curve: resultToSave.equity_curve,
+          trades: resultToSave.trades,
+          success: resultToSave.success,
+        })
+
+        // DB ID를 결과에 추가하여 저장
+        const storedResult: StoredBacktestResult = {
+          ...resultToSave,
+          dbId: saveResponse.id,
+        }
+        setResults(prev => [storedResult, ...prev])
+        console.log('백테스트 결과 저장됨:', saveResponse.id)
+      } catch (saveErr) {
+        console.error('백테스트 결과 저장 실패:', saveErr)
+        // 저장 실패해도 결과는 표시 (dbId 없이)
+        setResults(prev => [resultToSave, ...prev])
       }
     } catch (err) {
       console.error('백테스트 실행 실패:', err)
@@ -463,18 +627,19 @@ export function Backtest() {
     }
   }
 
-  // 전략 선택 시 기본 심볼 설정
+  // 전략 선택
   const handleStrategyChange = (strategyId: string) => {
     setSelectedStrategy(strategyId)
-    const strategy = strategies()?.find((s: BacktestStrategy) => s.id === strategyId)
-    if (strategy && strategy.supported_symbols.length > 0) {
-      setSymbol(strategy.supported_symbols[0])
-    }
   }
 
   // 선택된 전략 정보 가져오기
-  const getSelectedStrategyInfo = (): BacktestStrategy | undefined => {
-    return strategies()?.find((s: BacktestStrategy) => s.id === selectedStrategy())
+  const getSelectedStrategyInfo = (): Strategy | undefined => {
+    return strategies()?.find((s: Strategy) => s.id === selectedStrategy())
+  }
+
+  // 선택된 전략의 strategyType 가져오기 (백테스트 API에서 사용)
+  const getSelectedStrategyType = (): string | undefined => {
+    return getSelectedStrategyInfo()?.strategyType
   }
 
   return (
@@ -491,6 +656,20 @@ export function Backtest() {
           <div class="mb-4 p-3 rounded-lg bg-red-500/20 border border-red-500/30 text-red-400 flex items-center gap-2">
             <AlertCircle class="w-5 h-5 flex-shrink-0" />
             <span>{error()}</span>
+          </div>
+        </Show>
+
+        {/* 등록된 전략 없음 안내 */}
+        <Show when={!strategies.loading && (!strategies() || strategies()!.length === 0)}>
+          <div class="mb-4 p-4 rounded-lg bg-blue-500/20 border border-blue-500/30 text-blue-300 flex items-start gap-3">
+            <Info class="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <div>
+              <p class="font-medium">등록된 전략이 없습니다</p>
+              <p class="text-sm mt-1 text-blue-300/80">
+                백테스트를 실행하려면 먼저 전략 페이지에서 전략을 등록하세요.
+                등록된 전략의 파라미터로 백테스트가 실행됩니다.
+              </p>
+            </div>
           </div>
         </Show>
 
@@ -513,34 +692,32 @@ export function Backtest() {
               >
                 <option value="">전략 선택</option>
                 <For each={strategies()}>
-                  {(strategy: BacktestStrategy) => (
-                    <option value={strategy.id}>{strategy.name}</option>
+                  {(strategy: Strategy) => (
+                    <option value={strategy.id}>
+                      {strategy.name} ({strategy.strategyType})
+                    </option>
                   )}
                 </For>
               </select>
             </Show>
             <Show when={getSelectedStrategyInfo()}>
               <p class="mt-1 text-xs text-[var(--color-text-muted)]">
-                {getSelectedStrategyInfo()?.description}
+                전략 타입: {getSelectedStrategyInfo()?.strategyType}
               </p>
             </Show>
           </div>
 
-          {/* 심볼 */}
+          {/* 심볼 (읽기 전용 - 전략에서 가져옴) */}
           <div>
             <label class="block text-sm text-[var(--color-text-muted)] mb-1">심볼</label>
-            <input
-              type="text"
-              value={symbol()}
-              onInput={(e) => setSymbol(e.currentTarget.value)}
-              class="w-full px-4 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-              placeholder="BTC/USDT, 005930, SPY 등"
-            />
-            <Show when={getSelectedStrategyInfo()}>
-              <p class="mt-1 text-xs text-[var(--color-text-muted)]">
-                지원: {getSelectedStrategyInfo()?.supported_symbols.join(', ')}
-              </p>
-            </Show>
+            <div class="w-full px-4 py-2 rounded-lg bg-[var(--color-surface-light)]/50 border border-[var(--color-surface-light)] text-[var(--color-text-muted)]">
+              <Show
+                when={getSelectedStrategyInfo()?.symbols && getSelectedStrategyInfo()!.symbols.length > 0}
+                fallback={<span class="text-[var(--color-text-muted)]/50">전략을 선택하세요</span>}
+              >
+                {getSelectedStrategyInfo()?.symbols.join(', ')}
+              </Show>
+            </div>
           </div>
 
           {/* 초기 자본 */}
@@ -554,6 +731,24 @@ export function Backtest() {
               placeholder="10000000"
               min="100000"
             />
+          </div>
+
+          {/* 슬리피지 */}
+          <div>
+            <label class="block text-sm text-[var(--color-text-muted)] mb-1">슬리피지 (%)</label>
+            <input
+              type="number"
+              value={slippageRate()}
+              onInput={(e) => setSlippageRate(e.currentTarget.value)}
+              class="w-full px-4 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+              placeholder="0.05"
+              min="0"
+              max="5"
+              step="0.01"
+            />
+            <p class="mt-1 text-xs text-[var(--color-text-muted)]">
+              거래 시 예상 체결가와의 차이
+            </p>
           </div>
 
           {/* 시작일 */}
@@ -624,8 +819,26 @@ export function Backtest() {
         >
           <div class="grid grid-cols-1 gap-4">
             <For each={results()}>
-              {(result) => (
-                <BacktestResultCard result={result} strategies={strategies()} />
+              {(result, index) => (
+                <BacktestResultCard
+                  result={result}
+                  strategies={strategies()}
+                  index={index()}
+                  onDelete={async (idx) => {
+                    const target = results()[idx] as StoredBacktestResult
+                    // DB에 저장된 결과라면 API 호출하여 삭제
+                    if (target.dbId) {
+                      try {
+                        await deleteBacktestResult(target.dbId)
+                        console.log('백테스트 결과 삭제됨:', target.dbId)
+                      } catch (err) {
+                        console.error('백테스트 결과 삭제 실패:', err)
+                        // 삭제 실패해도 UI에서는 제거
+                      }
+                    }
+                    setResults(prev => prev.filter((_, i) => i !== idx))
+                  }}
+                />
               )}
             </For>
           </div>

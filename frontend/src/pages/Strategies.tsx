@@ -1,5 +1,6 @@
 import { createSignal, createResource, For, Show, createEffect } from 'solid-js'
-import { Play, Pause, Settings, TrendingUp, TrendingDown, AlertCircle, RefreshCw, X, ChevronRight, Search } from 'lucide-solid'
+import { useNavigate } from '@solidjs/router'
+import { Play, Pause, Settings, TrendingUp, TrendingDown, AlertCircle, RefreshCw, X, ChevronRight, Search, BarChart3, Activity } from 'lucide-solid'
 import { getStrategies, startStrategy, stopStrategy, getBacktestStrategies, createStrategy, getStrategy, updateStrategyConfig } from '../api/client'
 import type { Strategy } from '../types'
 import type { BacktestStrategy, UiSchema } from '../api/client'
@@ -16,6 +17,7 @@ function formatCurrency(value: number): string {
 
 export function Strategies() {
   const toast = useToast()
+  const navigate = useNavigate()
   const [filter, setFilter] = createSignal<'all' | 'running' | 'stopped'>('all')
   const [togglingId, setTogglingId] = createSignal<string | null>(null)
 
@@ -432,17 +434,17 @@ export function Strategies() {
 
         <div class="flex gap-2">
           <button
+            class="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg font-medium hover:bg-[var(--color-primary)]/90 transition-colors"
+            onClick={() => setShowAddModal(true)}
+          >
+            + 전략 추가
+          </button>
+          <button
             class="px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text-muted)] rounded-lg font-medium hover:text-[var(--color-text)] transition-colors flex items-center gap-2"
             onClick={() => refetch()}
           >
             <RefreshCw class={`w-4 h-4 ${strategies.loading ? 'animate-spin' : ''}`} />
             새로고침
-          </button>
-          <button
-            class="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg font-medium hover:bg-[var(--color-primary)]/90 transition-colors"
-            onClick={() => setShowAddModal(true)}
-          >
-            + 전략 추가
           </button>
         </div>
       </div>
@@ -597,6 +599,26 @@ export function Strategies() {
                     </div>
                   </div>
                 </Show>
+
+                {/* 빠른 액션 버튼 */}
+                <div class="flex gap-2 mt-4 pt-4 border-t border-[var(--color-surface-light)]">
+                  <button
+                    class="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-[var(--color-surface-light)] hover:bg-[var(--color-primary)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-primary)] rounded-lg transition-colors"
+                    onClick={() => navigate(`/backtest?strategy=${strategy.id}`)}
+                    title="이 전략으로 백테스트"
+                  >
+                    <BarChart3 class="w-4 h-4" />
+                    백테스트
+                  </button>
+                  <button
+                    class="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-[var(--color-surface-light)] hover:bg-purple-500/20 text-[var(--color-text-muted)] hover:text-purple-400 rounded-lg transition-colors"
+                    onClick={() => navigate(`/simulation?strategy=${strategy.id}`)}
+                    title="이 전략으로 시뮬레이션"
+                  >
+                    <Activity class="w-4 h-4" />
+                    시뮬레이션
+                  </button>
+                </div>
               </div>
             )}
           </For>

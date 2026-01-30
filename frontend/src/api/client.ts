@@ -532,6 +532,53 @@ export const getBacktestResult = async (id: string): Promise<BacktestResult> => 
   return response.data;
 };
 
+/** 백테스트 결과 저장 요청 */
+export interface SaveBacktestResultRequest {
+  strategy_id: string;
+  strategy_type: string;
+  symbol: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  slippage_rate?: number;
+  metrics: BacktestMetrics;
+  config_summary: BacktestConfigSummary;
+  equity_curve: EquityCurvePoint[];
+  trades: TradeHistoryItem[];
+  success: boolean;
+}
+
+/** 백테스트 결과 저장 응답 */
+export interface SaveBacktestResultResponse {
+  id: string;
+  message: string;
+}
+
+/** 백테스트 결과 목록 쿼리 파라미터 */
+export interface ListBacktestResultsQuery {
+  strategy_id?: string;
+  strategy_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** 백테스트 결과 저장 */
+export const saveBacktestResult = async (request: SaveBacktestResultRequest): Promise<SaveBacktestResultResponse> => {
+  const response = await api.post('/backtest/results', request);
+  return response.data;
+};
+
+/** 백테스트 결과 삭제 */
+export const deleteBacktestResult = async (id: string): Promise<void> => {
+  await api.delete(`/backtest/results/${id}`);
+};
+
+/** 저장된 백테스트 결과 목록 조회 (쿼리 파라미터 지원) */
+export const listBacktestResults = async (query?: ListBacktestResultsQuery): Promise<{ results: BacktestResult[]; total: number }> => {
+  const response = await api.get('/backtest/results', { params: query });
+  return response.data;
+};
+
 // ==================== 시뮬레이션 ====================
 
 /** 시뮬레이션 상태 enum */

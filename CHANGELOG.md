@@ -5,6 +5,61 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.2.0] - 2026-01-30
+
+### Added
+
+#### 데이터셋 관리 시스템
+- **데이터셋 페이지** (`Dataset.tsx`): OHLCV 데이터 조회/다운로드/관리 UI
+  - Yahoo Finance에서 심볼 데이터 다운로드
+  - 캔들 수 또는 날짜 범위 지정 다운로드
+  - 무한 스크롤링 테이블 (Intersection Observer API)
+  - 실시간 차트 시각화 (멀티 타임프레임 지원)
+- **데이터셋 API** (`dataset.rs`): OHLCV 데이터 CRUD 엔드포인트
+- **OHLCV 저장소 리팩토링**: `yahoo_cache.rs` → `ohlcv.rs`로 이름 변경
+
+#### 백테스트 결과 저장
+- **백테스트 결과 API** (`backtest_results.rs`): 백테스트 결과 저장/조회
+- **DB 마이그레이션**: `010_backtest_results.sql` - 결과 테이블 추가
+- 과거 백테스트 결과 조회 및 비교 기능
+
+#### 전략 워크플로우 개선
+- **등록된 전략 기반 백테스트**: 전략 페이지에서 먼저 등록 → 백테스트/시뮬레이션에서 선택
+- **전략 Repository 패턴** (`repository/strategies.rs`): 데이터 접근 계층 분리
+- **전략 자동 로드**: 서버 시작 시 DB에서 저장된 전략 자동 로드
+- **strategy_type 필드 추가**: 전략 타입 구분 (`volatility_breakout`, `grid` 등)
+- **symbols 필드 추가**: 전략별 대상 심볼 목록 저장
+
+#### 차트 시스템 개선
+- **동기화된 차트 패널** (`SyncedChartPanel.tsx`): 다중 차트 동기화 지원
+- **멀티 패널 그리드** (`MultiPanelGrid.tsx`): 차트 패널 레이아웃 관리
+- **PriceChart 개선**: 1시간 타임프레임 Unix timestamp 변환 수정
+
+### Changed
+
+#### 프론트엔드
+- `Backtest.tsx`: 등록된 전략 선택 방식으로 전환, 파라미터 입력 폼 제거
+- `Simulation.tsx`: 동일한 전략 선택 방식 적용
+- `Strategies.tsx`: strategy_type, symbols 필드 지원
+- `App.tsx`: Dataset 페이지 라우트 추가
+- `Layout.tsx`: 데이터셋 메뉴 추가
+
+#### 백엔드
+- `backtest.rs`: 등록된 전략 ID 기반 실행 지원
+- `historical.rs`: 지표 계산에 isDailyOrHigher 파라미터 추가
+- `volatility_breakout.rs`: is_new_period 날짜 비교 로직 개선
+
+### Removed
+- `docs/prd.md`: 불필요한 대용량 PRD 문서 제거 (38,000+ 토큰)
+- docker-compose.yml에서 불필요한 설정 제거
+
+### Database Migrations
+- `008_strategies_type_and_symbols.sql`: 전략 타입/심볼 컬럼 추가
+- `009_rename_candle_cache.sql`: 테이블명 리네이밍
+- `010_backtest_results.sql`: 백테스트 결과 테이블
+
+---
+
 ## [0.1.0] - 2026-01-30
 
 ### Added
@@ -77,11 +132,12 @@
 
 ## 로드맵
 
-### [0.2.0] - 예정
+### [0.3.0] - 예정
 - 매매일지 (Trading Journal) 기능
-- 다중 자산 백테스트 지원
+- 다중 자산 백테스트 지원 (다중 심볼 전략)
 - WebSocket 이벤트 브로드캐스트 완성
 
-### [0.3.0] - 예정
+### [0.4.0] - 예정
 - 추가 거래소 통합 (Coinbase, 키움증권)
 - 성능 최적화 및 부하 테스트
+- Grafana 대시보드 사전 설정

@@ -25,12 +25,15 @@ use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::repository::{StrategyRepository, strategies::CreateStrategyInput};
 use crate::state::AppState;
 use crate::websocket::{ServerMessage, StrategyUpdateData};
 use trader_strategy::{
     strategies::{
-        BollingerStrategy, GridStrategy, HaaStrategy, MagicSplitStrategy,
-        RsiStrategy, SimplePowerStrategy, SmaStrategy, StockRotationStrategy,
+        AllWeatherStrategy, BollingerStrategy, CandlePatternStrategy, GridStrategy,
+        HaaStrategy, InfinityBotStrategy, MagicSplitStrategy, MarketCapTopStrategy,
+        MarketInterestDayStrategy, RsiStrategy, SimplePowerStrategy, SmaStrategy,
+        SnowStrategy, StockRotationStrategy, TrailingStopStrategy,
         VolatilityBreakoutStrategy, XaaStrategy,
     },
     EngineError, EngineStats, Strategy, StrategyStatus,
@@ -54,6 +57,9 @@ pub struct StrategiesListResponse {
 pub struct StrategyListItem {
     /// 전략 ID
     pub id: String,
+    /// 전략 타입 (예: "rsi", "grid_trading", "sma" 등)
+    #[serde(rename = "strategyType")]
+    pub strategy_type: String,
     /// 전략 이름
     pub name: String,
     /// 전략 상태 ("Running", "Stopped", "Error")
@@ -180,16 +186,25 @@ impl ApiError {
 /// 전략 타입에 따라 전략 인스턴스를 생성.
 fn create_strategy_instance(strategy_type: &str) -> Result<Box<dyn Strategy>, String> {
     match strategy_type {
+        // 단일 종목 전략
         "rsi" | "rsi_mean_reversion" => Ok(Box::new(RsiStrategy::new())),
         "grid" | "grid_trading" => Ok(Box::new(GridStrategy::new())),
         "bollinger" | "bollinger_bands" => Ok(Box::new(BollingerStrategy::new())),
         "volatility_breakout" | "volatility" => Ok(Box::new(VolatilityBreakoutStrategy::new())),
         "magic_split" | "split" => Ok(Box::new(MagicSplitStrategy::new())),
+        "sma" | "sma_crossover" | "ma_crossover" => Ok(Box::new(SmaStrategy::new())),
+        "candle_pattern" => Ok(Box::new(CandlePatternStrategy::new())),
+        "infinity_bot" => Ok(Box::new(InfinityBotStrategy::new())),
+        "trailing_stop" => Ok(Box::new(TrailingStopStrategy::new())),
+        "market_interest_day" => Ok(Box::new(MarketInterestDayStrategy::new())),
+        // 자산배분 전략
         "simple_power" => Ok(Box::new(SimplePowerStrategy::new())),
         "haa" => Ok(Box::new(HaaStrategy::new())),
         "xaa" => Ok(Box::new(XaaStrategy::new())),
-        "sma" | "sma_crossover" | "ma_crossover" => Ok(Box::new(SmaStrategy::new())),
         "stock_rotation" | "rotation" => Ok(Box::new(StockRotationStrategy::new())),
+        "all_weather" | "all_weather_us" | "all_weather_kr" => Ok(Box::new(AllWeatherStrategy::new())),
+        "snow" | "snow_us" | "snow_kr" => Ok(Box::new(SnowStrategy::new())),
+        "market_cap_top" => Ok(Box::new(MarketCapTopStrategy::new())),
         _ => Err(format!("Unknown strategy type: {}", strategy_type)),
     }
 }
@@ -197,16 +212,27 @@ fn create_strategy_instance(strategy_type: &str) -> Result<Box<dyn Strategy>, St
 /// 전략 타입에서 기본 이름 가져오기.
 fn get_strategy_default_name(strategy_type: &str) -> &'static str {
     match strategy_type {
+        // 단일 종목 전략
         "rsi" | "rsi_mean_reversion" => "RSI 평균회귀",
         "grid" | "grid_trading" => "그리드 트레이딩",
         "bollinger" | "bollinger_bands" => "볼린저 밴드",
         "volatility_breakout" | "volatility" => "변동성 돌파",
         "magic_split" | "split" => "Magic Split",
+        "sma" | "sma_crossover" | "ma_crossover" => "이동평균 크로스오버",
+        "candle_pattern" => "캔들 패턴",
+        "infinity_bot" => "무한매수",
+        "trailing_stop" => "트레일링 스톱",
+        "market_interest_day" => "단타 시장관심",
+        // 자산배분 전략
         "simple_power" => "Simple Power",
         "haa" => "HAA",
         "xaa" => "XAA",
-        "sma" | "sma_crossover" | "ma_crossover" => "이동평균 크로스오버",
         "stock_rotation" | "rotation" => "종목 갈아타기",
+        "all_weather" | "all_weather_us" => "올웨더 US",
+        "all_weather_kr" => "올웨더 KR",
+        "snow" | "snow_us" => "스노우 US",
+        "snow_kr" => "스노우 KR",
+        "market_cap_top" => "시총 TOP",
         _ => "Unknown Strategy",
     }
 }
@@ -253,6 +279,48 @@ pub async fn create_strategy(
     let display_name = custom_name
         .clone()
         .unwrap_or_else(|| get_strategy_default_name(&request.strategy_type).to_string());
+
+    // 파라미터에서 symbols 추출
+    let symbols: Vec<String> = request
+        .parameters
+        .get("symbols")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 마켓 타입 추론 (심볼 기반)
+    let market = if symbols.first().map(|s| s.chars().all(|c| c.is_numeric())).unwrap_or(false) {
+        "KR".to_string()
+    } else if symbols.first().map(|s| s.contains('/')).unwrap_or(false) {
+        "CRYPTO".to_string()
+    } else {
+        "US".to_string()
+    };
+
+    // 데이터베이스에 저장 (DB가 연결된 경우)
+    if let Some(ref pool) = state.db_pool {
+        let input = CreateStrategyInput {
+            id: strategy_id.clone(),
+            name: display_name.clone(),
+            description: None,
+            strategy_type: request.strategy_type.clone(),
+            symbols: symbols.clone(),
+            market: market.clone(),
+            config: request.parameters.clone(),
+        };
+
+        StrategyRepository::create(pool, input).await.map_err(|e| {
+            tracing::error!("Failed to save strategy to database: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", format!("Failed to save strategy: {}", e))),
+            )
+        })?;
+    }
 
     // 엔진에 전략 등록 (커스텀 이름 전달)
     let engine = state.strategy_engine.read().await;
@@ -302,6 +370,14 @@ pub async fn delete_strategy(
         .await
         .map_err(engine_error_to_response)?;
 
+    // 데이터베이스에서 삭제 (DB가 연결된 경우)
+    if let Some(ref pool) = state.db_pool {
+        if let Err(e) = StrategyRepository::delete(pool, &id).await {
+            tracing::warn!("Failed to delete strategy from database: {:?}", e);
+            // DB 삭제 실패는 경고만 남기고 계속 진행 (엔진에서는 이미 삭제됨)
+        }
+    }
+
     // WebSocket 브로드캐스트: 전략 삭제 알림
     state.broadcast(ServerMessage::StrategyUpdate(StrategyUpdateData {
         strategy_id: id.clone(),
@@ -329,40 +405,46 @@ pub async fn list_strategies(
     let engine = state.strategy_engine.read().await;
     let all_statuses = engine.get_all_statuses().await;
 
-    let mut strategies: Vec<StrategyListItem> = all_statuses
-        .into_iter()
-        .map(|(id, status)| {
-            // 전략 상태 문자열 변환
-            let status_str = if status.running {
-                "Running".to_string()
-            } else {
-                "Stopped".to_string()
-            };
+    let mut strategies: Vec<StrategyListItem> = Vec::new();
 
-            // 전략 ID에서 시장 추론 (향후 설정에서 가져오도록 개선 필요)
-            let market = if id.contains("kis") || id.contains("kr") {
-                "KR".to_string()
-            } else if id.contains("binance") || id.contains("crypto") {
-                "CRYPTO".to_string()
-            } else {
-                "KR".to_string() // 기본값
-            };
+    for (id, status) in all_statuses {
+        // 전략 타입 조회
+        let strategy_type = engine
+            .get_strategy_type(&id)
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
 
-            // 심볼 목록 (향후 설정에서 가져오도록 개선 필요)
-            let symbols = vec!["005930".to_string()]; // 기본값
+        // 전략 상태 문자열 변환
+        let status_str = if status.running {
+            "Running".to_string()
+        } else {
+            "Stopped".to_string()
+        };
 
-            StrategyListItem {
-                id,
-                name: status.name,
-                status: status_str,
-                market,
-                symbols,
-                pnl: 0.0, // 향후 실제 PnL 계산 연동
-                win_rate: 0.0,
-                trades_count: status.stats.signals_generated, // 신호 수를 거래 수로 사용
-            }
-        })
-        .collect();
+        // 전략 ID에서 시장 추론 (향후 설정에서 가져오도록 개선 필요)
+        let market = if id.contains("kis") || id.contains("kr") {
+            "KR".to_string()
+        } else if id.contains("binance") || id.contains("crypto") {
+            "CRYPTO".to_string()
+        } else {
+            "KR".to_string() // 기본값
+        };
+
+        // 심볼 목록 (향후 설정에서 가져오도록 개선 필요)
+        let symbols = vec!["005930".to_string()]; // 기본값
+
+        strategies.push(StrategyListItem {
+            id,
+            strategy_type,
+            name: status.name,
+            status: status_str,
+            market,
+            symbols,
+            pnl: 0.0, // 향후 실제 PnL 계산 연동
+            win_rate: 0.0,
+            trades_count: status.stats.signals_generated, // 신호 수를 거래 수로 사용
+        });
+    }
 
     // ID로 정렬
     strategies.sort_by(|a, b| a.id.cmp(&b.id));

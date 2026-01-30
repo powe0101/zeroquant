@@ -6,6 +6,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Strategies } from './pages/Strategies'
 import { Backtest } from './pages/Backtest'
 import { Simulation } from './pages/Simulation'
+import { Dataset } from './pages/Dataset'
 import { MLTraining } from './pages/MLTraining'
 import { Settings } from './pages/Settings'
 
@@ -27,6 +28,7 @@ function App() {
           <Route path="/strategies" component={Strategies} />
           <Route path="/backtest" component={Backtest} />
           <Route path="/simulation" component={Simulation} />
+          <Route path="/dataset" component={Dataset} />
           <Route path="/ml-training" component={MLTraining} />
           <Route path="/settings" component={Settings} />
         </Router>

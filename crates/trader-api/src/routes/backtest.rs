@@ -24,52 +24,21 @@ use tracing::{debug, info, warn};
 use crate::state::AppState;
 use trader_analytics::backtest::{BacktestConfig, BacktestEngine, BacktestReport};
 use trader_core::{Kline, MarketType, Symbol, Timeframe};
-use trader_data::{Database, KlineRepository, SymbolRepository};
+use trader_data::cache::CachedHistoricalDataProvider;
 use trader_strategy::Strategy;
 use trader_strategy::strategies::{
     BollingerStrategy, GridStrategy, HaaStrategy, HaaConfig, MagicSplitStrategy, RsiStrategy,
     SimplePowerStrategy, SimplePowerConfig, SmaStrategy, StockRotationStrategy, StockRotationConfig,
     VolatilityBreakoutStrategy, XaaStrategy, XaaConfig,
+    // 추가된 전략들
+    TrailingStopStrategy, TrailingStopConfig,
+    AllWeatherStrategy, AllWeatherConfig, AllWeatherMarket,
+    SnowStrategy, SnowConfig, SnowMarket,
+    MarketCapTopStrategy, MarketCapTopConfig,
+    CandlePatternStrategy, CandlePatternConfig,
+    InfinityBotStrategy, InfinityBotConfig,
+    MarketInterestDayStrategy, MarketInterestDayConfig,
 };
-
-// ==================== Yahoo Finance 응답 타입 ====================
-
-#[derive(Debug, Deserialize)]
-struct YahooResponse {
-    chart: YahooChart,
-}
-
-#[derive(Debug, Deserialize)]
-struct YahooChart {
-    result: Option<Vec<YahooResult>>,
-    error: Option<YahooError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct YahooError {
-    code: String,
-    description: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct YahooResult {
-    timestamp: Option<Vec<i64>>,
-    indicators: YahooIndicators,
-}
-
-#[derive(Debug, Deserialize)]
-struct YahooIndicators {
-    quote: Vec<YahooQuote>,
-}
-
-#[derive(Debug, Deserialize)]
-struct YahooQuote {
-    open: Vec<Option<f64>>,
-    high: Vec<Option<f64>>,
-    low: Vec<Option<f64>>,
-    close: Vec<Option<f64>>,
-    volume: Vec<Option<u64>>,
-}
 
 // ==================== 요청/응답 타입 ====================
 
@@ -1443,6 +1412,115 @@ fn build_sma_crossover_ui_schema() -> UiSchema {
     }
 }
 
+/// 단일 종목 전략을 위한 기본 UI 스키마 빌더
+fn build_single_symbol_ui_schema(help_text: &str) -> UiSchema {
+    UiSchema {
+        fields: vec![
+            UiField {
+                key: "symbol".to_string(),
+                label: "종목".to_string(),
+                field_type: UiFieldType::SymbolPicker,
+                default_value: Some(serde_json::json!(["005930"])),
+                placeholder: None,
+                help_text: Some(help_text.to_string()),
+                validation: UiValidation { required: true, min_items: Some(1), max_items: Some(1), ..Default::default() },
+                options: None,
+                group: Some("basic".to_string()),
+                order: 1,
+                show_when: None,
+                unit: None,
+                symbol_categories: None,
+            },
+        ],
+        groups: vec![
+            UiFieldGroup { id: "basic".to_string(), label: "기본 설정".to_string(), description: None, order: 1, collapsed: false },
+        ],
+        layout: Some(UiLayout { columns: 1 }),
+    }
+}
+
+/// 캔들 패턴 전략 UI 스키마
+fn build_candle_pattern_ui_schema() -> UiSchema {
+    build_single_symbol_ui_schema("캔들 패턴을 분석할 종목")
+}
+
+/// 무한매수봇 전략 UI 스키마
+fn build_infinity_bot_ui_schema() -> UiSchema {
+    build_single_symbol_ui_schema("무한매수를 적용할 종목")
+}
+
+/// 트레일링 스톱 전략 UI 스키마
+fn build_trailing_stop_ui_schema() -> UiSchema {
+    build_single_symbol_ui_schema("트레일링 스톱을 적용할 종목")
+}
+
+/// 시장관심 단타 전략 UI 스키마
+fn build_market_interest_day_ui_schema() -> UiSchema {
+    build_single_symbol_ui_schema("단타 대상 종목")
+}
+
+/// 올웨더 전략 UI 스키마 (US/KR 지원)
+fn build_all_weather_ui_schema() -> UiSchema {
+    UiSchema {
+        fields: vec![
+            UiField {
+                key: "market".to_string(),
+                label: "시장".to_string(),
+                field_type: UiFieldType::Select,
+                default_value: Some(serde_json::json!("US")),
+                placeholder: None,
+                help_text: Some("US(미국 ETF) 또는 KR(국내 ETF) 선택".to_string()),
+                validation: UiValidation { required: true, ..Default::default() },
+                options: Some(vec![
+                    UiSelectOption { label: "미국 ETF".to_string(), value: serde_json::json!("US"), description: None },
+                    UiSelectOption { label: "국내 ETF".to_string(), value: serde_json::json!("KR"), description: None },
+                ]),
+                group: Some("basic".to_string()),
+                order: 1,
+                show_when: None,
+                unit: None,
+                symbol_categories: None,
+            },
+        ],
+        groups: vec![
+            UiFieldGroup { id: "basic".to_string(), label: "기본 설정".to_string(), description: None, order: 1, collapsed: false },
+        ],
+        layout: Some(UiLayout { columns: 1 }),
+    }
+}
+
+/// 스노우 전략 UI 스키마 (US/KR 지원)
+fn build_snow_ui_schema() -> UiSchema {
+    build_all_weather_ui_schema() // 올웨더와 동일한 구조
+}
+
+/// 시총 TOP 전략 UI 스키마
+fn build_market_cap_top_ui_schema() -> UiSchema {
+    UiSchema {
+        fields: vec![
+            UiField {
+                key: "top_n".to_string(),
+                label: "상위 종목 수".to_string(),
+                field_type: UiFieldType::Number,
+                default_value: Some(serde_json::json!(10)),
+                placeholder: None,
+                help_text: Some("투자할 시총 상위 종목 수".to_string()),
+                validation: UiValidation { required: true, min: Some(5.0), max: Some(30.0), step: Some(1.0), ..Default::default() },
+                options: None,
+                group: Some("basic".to_string()),
+                order: 1,
+                show_when: None,
+                unit: Some("개".to_string()),
+                symbol_categories: None,
+            },
+        ],
+        groups: vec![
+            UiFieldGroup { id: "basic".to_string(), label: "기본 설정".to_string(), description: None, order: 1, collapsed: false },
+        ],
+        layout: Some(UiLayout { columns: 1 }),
+    }
+}
+
 /// 전략 ID로 UI 스키마 조회
 fn get_ui_schema_for_strategy(strategy_id: &str) -> Option<UiSchema> {
     match strategy_id {
@@ -1456,6 +1534,13 @@ fn get_ui_schema_for_strategy(strategy_id: &str) -> Option<UiSchema> {
         "sma_crossover" => Some(build_sma_crossover_ui_schema()),
         "xaa" => Some(build_haa_ui_schema()), // XAA는 HAA와 유사
         "stock_rotation" => Some(build_simple_power_ui_schema()), // Stock Rotation은 Simple Power와 유사
+        "candle_pattern" => Some(build_candle_pattern_ui_schema()),
+        "infinity_bot" => Some(build_infinity_bot_ui_schema()),
+        "trailing_stop" => Some(build_trailing_stop_ui_schema()),
+        "all_weather" => Some(build_all_weather_ui_schema()),
+        "snow" => Some(build_snow_ui_schema()),
+        "market_cap_top" => Some(build_market_cap_top_ui_schema()),
+        "market_interest_day" => Some(build_market_interest_day_ui_schema()),
         _ => None,
     }
 }
@@ -2142,255 +2227,135 @@ async fn run_strategy_backtest(
             strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
             engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
         }
+        "trailing_stop" => {
+            let mut strategy = TrailingStopStrategy::new();
+            let default_cfg = serde_json::to_value(TrailingStopConfig::default())
+                .map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "all_weather_us" => {
+            let mut strategy = AllWeatherStrategy::new();
+            let mut config = AllWeatherConfig::default();
+            config.market = AllWeatherMarket::US;
+            let default_cfg = serde_json::to_value(config).map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "all_weather_kr" => {
+            let mut strategy = AllWeatherStrategy::new();
+            let mut config = AllWeatherConfig::default();
+            config.market = AllWeatherMarket::KR;
+            let default_cfg = serde_json::to_value(config).map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "snow_us" => {
+            let mut strategy = SnowStrategy::new();
+            let mut config = SnowConfig::default();
+            config.market = SnowMarket::US;
+            let default_cfg = serde_json::to_value(config).map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "snow_kr" => {
+            let mut strategy = SnowStrategy::new();
+            let mut config = SnowConfig::default();
+            config.market = SnowMarket::KR;
+            let default_cfg = serde_json::to_value(config).map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "market_cap_top" => {
+            let mut strategy = MarketCapTopStrategy::new();
+            let default_cfg = serde_json::to_value(MarketCapTopConfig::default())
+                .map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "candle_pattern" => {
+            let mut strategy = CandlePatternStrategy::new();
+            let default_cfg = serde_json::to_value(CandlePatternConfig::default())
+                .map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "infinity_bot" => {
+            let mut strategy = InfinityBotStrategy::new();
+            let default_cfg = serde_json::to_value(InfinityBotConfig::default())
+                .map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
+        "market_interest_day" => {
+            let mut strategy = MarketInterestDayStrategy::new();
+            let default_cfg = serde_json::to_value(MarketInterestDayConfig::default())
+                .map_err(|e| e.to_string())?;
+            let strategy_config = merge_params(default_cfg, params);
+            strategy.initialize(strategy_config).await.map_err(|e| e.to_string())?;
+            engine.run(&mut strategy, klines).await.map_err(|e| e.to_string())
+        }
         _ => {
             return Err(format!("지원하지 않는 전략입니다: {}", strategy_id));
         }
     }
 }
 
-/// DB에서 Kline 데이터 로드
+/// CachedHistoricalDataProvider를 통해 Kline 데이터 로드
+///
+/// ohlcv 테이블에서 통합 관리되는 데이터를 조회합니다.
+/// 캐시에 데이터가 없으면 자동으로 Yahoo Finance에서 다운로드하여 캐싱합니다.
 async fn load_klines_from_db(
     pool: &sqlx::PgPool,
     symbol_str: &str,
     start_date: NaiveDate,
     end_date: NaiveDate,
 ) -> Result<Vec<Kline>, String> {
-    // 심볼 파싱 (예: "005930" -> base="005930", quote="KRW")
-    let (base, quote) = if symbol_str.contains('/') {
-        let parts: Vec<&str> = symbol_str.split('/').collect();
-        (parts[0].to_string(), parts.get(1).map(|s| s.to_string()).unwrap_or("KRW".to_string()))
-    } else if symbol_str.chars().all(|c| c.is_ascii_digit()) {
-        // 한국 종목코드
-        (symbol_str.to_string(), "KRW".to_string())
-    } else {
-        // 미국 심볼
-        (symbol_str.to_string(), "USD".to_string())
-    };
+    let provider = CachedHistoricalDataProvider::new(pool.clone());
 
-    let symbol = Symbol {
-        base: base.clone(),
-        quote: quote.clone(),
-        market_type: MarketType::Stock,
-        exchange_symbol: None,
-    };
+    // 날짜 범위를 거래일 기준 limit으로 변환 (주말 제외 대략 계산)
+    let total_days = (end_date - start_date).num_days() as usize;
+    let trading_days = (total_days as f64 * 5.0 / 7.0).ceil() as usize;
+    let limit = trading_days.max(100); // 최소 100개
 
-    let db = Database::from_pool(pool.clone());
-    let symbol_repo = SymbolRepository::new(db.clone());
-    let kline_repo = KlineRepository::new(db);
-
-    // 심볼 조회 또는 생성
-    let exchange = if quote == "KRW" { "KIS_KR" } else { "KIS_US" };
-    let symbol_id = symbol_repo
-        .get_or_create(&symbol, exchange)
-        .await
-        .map_err(|e| format!("심볼 조회 실패: {}", e))?;
-
-    // 날짜를 DateTime으로 변환
-    let start = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).unwrap());
-    let end = Utc.from_utc_datetime(&end_date.and_hms_opt(23, 59, 59).unwrap());
-
-    // Kline 조회
-    let rows = kline_repo
-        .get_range(symbol_id, Timeframe::D1, start, end, Some(10000))
-        .await
-        .map_err(|e| format!("Kline 조회 실패: {}", e))?;
-
-    // DB 레코드를 Kline으로 변환
-    let klines: Vec<Kline> = rows.into_iter().map(|r| r.to_kline(symbol.clone())).collect();
-
-    // 데이터가 충분하지 않으면 Yahoo Finance에서 다운로드
-    let expected_days = (end_date - start_date).num_days() as usize;
-    let min_required = expected_days / 2; // 최소 절반의 데이터 필요
-
-    if klines.len() < min_required {
-        info!(
-            "DB에 데이터가 부족합니다 ({} < {}). Yahoo Finance에서 다운로드합니다...",
-            klines.len(),
-            min_required
-        );
-
-        // Yahoo Finance에서 다운로드
-        match download_from_yahoo(&base, &quote, start_date, end_date).await {
-            Ok(downloaded) => {
-                if !downloaded.is_empty() {
-                    info!("Yahoo Finance에서 {} 캔들을 다운로드했습니다", downloaded.len());
-
-                    // DB에 저장
-                    if let Err(e) = kline_repo.insert_batch(symbol_id, &downloaded).await {
-                        warn!("다운로드한 데이터 DB 저장 실패: {}", e);
-                    } else {
-                        info!("다운로드한 데이터를 DB에 저장했습니다");
-                    }
-
-                    return Ok(downloaded);
-                }
-            }
-            Err(e) => {
-                warn!("Yahoo Finance 다운로드 실패: {}", e);
-            }
-        }
-    }
-
-    Ok(klines)
-}
-
-/// Yahoo Finance에서 OHLCV 데이터 다운로드
-async fn download_from_yahoo(
-    base: &str,
-    quote: &str,
-    start_date: NaiveDate,
-    end_date: NaiveDate,
-) -> Result<Vec<Kline>, String> {
-    // Yahoo Finance 심볼 변환
-    let yahoo_symbol = if quote == "KRW" {
-        // 한국 주식: 6자리 숫자 + .KS (코스피) 또는 .KQ (코스닥)
-        // 기본적으로 .KS (코스피) 사용, 실패하면 .KQ 시도
-        format!("{}.KS", base)
-    } else {
-        // 미국/암호화폐
-        if quote == "USDT" {
-            format!("{}-USD", base) // 암호화폐
-        } else {
-            base.to_uppercase() // 미국 주식
-        }
-    };
-
-    // 타임스탬프 계산
-    let start_ts = start_date
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_utc()
-        .timestamp();
-    let end_ts = end_date
-        .and_hms_opt(23, 59, 59)
-        .unwrap()
-        .and_utc()
-        .timestamp();
-
-    let url = format!(
-        "https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval=1d",
-        yahoo_symbol, start_ts, end_ts
+    info!(
+        symbol = symbol_str,
+        start = %start_date,
+        end = %end_date,
+        limit = limit,
+        "CachedHistoricalDataProvider로 캔들 데이터 로드"
     );
 
-    debug!("Yahoo Finance에서 데이터 가져오기: {}", url);
-
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .build()
-        .map_err(|e| format!("HTTP 클라이언트 생성 실패: {}", e))?;
-
-    let response = client
-        .get(&url)
-        .send()
+    // CachedHistoricalDataProvider가 캐시 조회 + 자동 다운로드 + 캐싱 처리
+    let klines = provider
+        .get_klines(symbol_str, Timeframe::D1, limit)
         .await
-        .map_err(|e| format!("Yahoo Finance 요청 실패: {}", e))?;
+        .map_err(|e| format!("캔들 데이터 조회 실패: {}", e))?;
 
-    if !response.status().is_success() {
-        // 코스피에서 실패하면 코스닥으로 재시도
-        if quote == "KRW" {
-            let kosdaq_symbol = format!("{}.KQ", base);
-            let kosdaq_url = format!(
-                "https://query1.finance.yahoo.com/v8/finance/chart/{}?period1={}&period2={}&interval=1d",
-                kosdaq_symbol, start_ts, end_ts
-            );
+    // 날짜 범위 필터링
+    let start_dt = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).unwrap());
+    let end_dt = Utc.from_utc_datetime(&end_date.and_hms_opt(23, 59, 59).unwrap());
 
-            debug!("코스닥으로 재시도: {}", kosdaq_url);
+    let filtered: Vec<Kline> = klines
+        .into_iter()
+        .filter(|k| k.open_time >= start_dt && k.open_time <= end_dt)
+        .collect();
 
-            let response = client
-                .get(&kosdaq_url)
-                .send()
-                .await
-                .map_err(|e| format!("Yahoo Finance 요청 실패: {}", e))?;
+    info!(
+        symbol = symbol_str,
+        count = filtered.len(),
+        "캔들 데이터 로드 완료"
+    );
 
-            if !response.status().is_success() {
-                return Err(format!("Yahoo Finance API 오류: {}", response.status()));
-            }
-
-            return parse_yahoo_response(response, base, quote).await;
-        }
-
-        return Err(format!("Yahoo Finance API 오류: {}", response.status()));
-    }
-
-    parse_yahoo_response(response, base, quote).await
-}
-
-/// Yahoo Finance 응답 파싱
-async fn parse_yahoo_response(
-    response: reqwest::Response,
-    base: &str,
-    quote: &str,
-) -> Result<Vec<Kline>, String> {
-    use rust_decimal::prelude::FromPrimitive;
-
-    let data: YahooResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Yahoo 응답 파싱 실패: {}", e))?;
-
-    // 에러 체크
-    if let Some(error) = data.chart.error {
-        return Err(format!("Yahoo Finance 에러: {} - {}", error.code, error.description));
-    }
-
-    let results = data.chart.result.ok_or("결과 데이터 없음")?;
-    let chart = results.first().ok_or("차트 데이터 없음")?;
-    let timestamps = chart.timestamp.as_ref().ok_or("타임스탬프 없음")?;
-    let quotes = chart.indicators.quote.first().ok_or("가격 데이터 없음")?;
-
-    let symbol = Symbol {
-        base: base.to_uppercase(),
-        quote: quote.to_string(),
-        market_type: MarketType::Stock,
-        exchange_symbol: None,
-    };
-
-    let mut klines = Vec::with_capacity(timestamps.len());
-
-    for i in 0..timestamps.len() {
-        // null 값 스킵
-        let open = match quotes.open.get(i).and_then(|v| *v) {
-            Some(v) => Decimal::from_f64(v).unwrap_or(Decimal::ZERO),
-            None => continue,
-        };
-        let high = match quotes.high.get(i).and_then(|v| *v) {
-            Some(v) => Decimal::from_f64(v).unwrap_or(Decimal::ZERO),
-            None => continue,
-        };
-        let low = match quotes.low.get(i).and_then(|v| *v) {
-            Some(v) => Decimal::from_f64(v).unwrap_or(Decimal::ZERO),
-            None => continue,
-        };
-        let close = match quotes.close.get(i).and_then(|v| *v) {
-            Some(v) => Decimal::from_f64(v).unwrap_or(Decimal::ZERO),
-            None => continue,
-        };
-        let volume = quotes
-            .volume
-            .get(i)
-            .and_then(|v| *v)
-            .map(|v| Decimal::from(v as i64))
-            .unwrap_or(Decimal::ZERO);
-
-        let open_time = Utc.timestamp_opt(timestamps[i], 0).unwrap();
-        let close_time = open_time + chrono::Duration::days(1) - chrono::Duration::seconds(1);
-
-        klines.push(Kline {
-            symbol: symbol.clone(),
-            timeframe: Timeframe::D1,
-            open_time,
-            close_time,
-            open,
-            high,
-            low,
-            close,
-            volume,
-            quote_volume: None,
-            num_trades: None,
-        });
-    }
-
-    Ok(klines)
+    Ok(filtered)
 }
 
 /// 샘플 Kline 데이터 생성 (DB 데이터가 없을 경우 사용)
@@ -2723,7 +2688,9 @@ pub async fn run_multi_backtest(
     Ok(Json(response))
 }
 
-/// 다중 심볼의 Kline 데이터를 DB에서 로드 (Yahoo Finance fallback 포함)
+/// 다중 심볼의 Kline 데이터를 CachedHistoricalDataProvider로 로드
+///
+/// 각 심볼에 대해 캐시 조회 + 자동 다운로드 + 캐싱이 처리됩니다.
 async fn load_multi_klines_from_db(
     pool: &sqlx::PgPool,
     symbols: &[String],
@@ -2733,135 +2700,21 @@ async fn load_multi_klines_from_db(
     let mut result = std::collections::HashMap::new();
 
     for symbol_str in symbols {
-        // 1. DB에서 로드 시도
         match load_klines_from_db(pool, symbol_str, start_date, end_date).await {
             Ok(klines) if !klines.is_empty() => {
-                info!("심볼 {} DB에서 {} 개 캔들 로드", symbol_str, klines.len());
+                info!("심볼 {} 캔들 {} 개 로드 완료", symbol_str, klines.len());
                 result.insert(symbol_str.clone(), klines);
             }
             Ok(_) => {
-                // 2. DB에 없으면 Yahoo Finance에서 다운로드
-                info!("심볼 {} DB에 데이터 없음, Yahoo Finance에서 다운로드 시도", symbol_str);
-                let (base, quote) = parse_symbol(symbol_str);
-
-                match download_from_yahoo(&base, &quote, start_date, end_date).await {
-                    Ok(downloaded) if !downloaded.is_empty() => {
-                        info!(
-                            "심볼 {} Yahoo Finance에서 {} 개 캔들 다운로드 완료",
-                            symbol_str,
-                            downloaded.len()
-                        );
-
-                        // 3. 다운로드한 데이터를 DB에 캐싱
-                        if let Err(e) = save_klines_to_db(pool, &downloaded).await {
-                            warn!("심볼 {} 캐싱 실패 (무시됨): {}", symbol_str, e);
-                        } else {
-                            debug!("심볼 {} DB에 캐싱 완료", symbol_str);
-                        }
-
-                        result.insert(symbol_str.clone(), downloaded);
-                    }
-                    Ok(_) => {
-                        warn!("심볼 {} Yahoo Finance에서 데이터 없음", symbol_str);
-                    }
-                    Err(e) => {
-                        warn!("심볼 {} Yahoo Finance 다운로드 실패: {}", symbol_str, e);
-                    }
-                }
+                warn!("심볼 {} 데이터 없음", symbol_str);
             }
             Err(e) => {
-                warn!("심볼 {} DB 로드 실패: {}", symbol_str, e);
+                warn!("심볼 {} 로드 실패: {}", symbol_str, e);
             }
         }
     }
 
     Ok(result)
-}
-
-/// 다운로드한 Kline 데이터를 DB에 저장 (캐싱)
-async fn save_klines_to_db(pool: &sqlx::PgPool, klines: &[Kline]) -> Result<(), String> {
-    if klines.is_empty() {
-        return Ok(());
-    }
-
-    // 첫 번째 캔들에서 심볼 정보 가져오기
-    let first_kline = &klines[0];
-    let base = &first_kline.symbol.base;
-    let quote = &first_kline.symbol.quote;
-
-    // 심볼 ID 조회 또는 생성
-    let symbol_id: uuid::Uuid = match sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT id FROM symbols WHERE base = $1 AND quote = $2 LIMIT 1",
-    )
-    .bind(base)
-    .bind(quote)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("심볼 조회 실패: {}", e))?
-    {
-        Some(id) => id,
-        None => {
-            // 심볼이 없으면 생성
-            let market_type_str = match first_kline.symbol.market_type {
-                MarketType::Crypto => "crypto",
-                MarketType::Stock => "stock",
-                MarketType::UsStock => "us_stock",
-                MarketType::KrStock => "kr_stock",
-                MarketType::Forex => "forex",
-                MarketType::Futures => "futures",
-            };
-
-            sqlx::query_scalar::<_, uuid::Uuid>(
-                r#"
-                INSERT INTO symbols (base, quote, market_type, exchange, is_active)
-                VALUES ($1, $2, $3::market_type, 'yahoo', true)
-                ON CONFLICT (base, quote, market_type, exchange) DO UPDATE SET updated_at = NOW()
-                RETURNING id
-                "#,
-            )
-            .bind(base)
-            .bind(quote)
-            .bind(market_type_str)
-            .fetch_one(pool)
-            .await
-            .map_err(|e| format!("심볼 생성 실패: {}", e))?
-        }
-    };
-
-    // klines 일괄 저장
-    for kline in klines {
-        sqlx::query(
-            r#"
-            INSERT INTO klines (time, symbol_id, timeframe, open, high, low, close, volume)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (symbol_id, timeframe, time) DO UPDATE
-            SET open = EXCLUDED.open,
-                high = EXCLUDED.high,
-                low = EXCLUDED.low,
-                close = EXCLUDED.close,
-                volume = EXCLUDED.volume
-            "#,
-        )
-        .bind(kline.open_time)
-        .bind(symbol_id)
-        .bind("D1")
-        .bind(kline.open)
-        .bind(kline.high)
-        .bind(kline.low)
-        .bind(kline.close)
-        .bind(kline.volume)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("캔들 저장 실패: {}", e))?;
-    }
-
-    info!(
-        "심볼 {}/{} 캔들 {} 개 DB에 저장 완료",
-        base,
-        quote,
-        klines.len()
-    );
-    Ok(())
 }
 
 /// 전략별로 필요한 모든 심볼을 확장
@@ -3147,15 +3000,19 @@ fn convert_multi_report_to_response(
 ) -> BacktestMultiRunResponse {
     let result_id = uuid::Uuid::new_v4().to_string();
 
-    let equity_curve: Vec<EquityCurvePoint> = report
-        .equity_curve
-        .iter()
-        .map(|ep| EquityCurvePoint {
-            timestamp: ep.timestamp.timestamp(),
+    // 다중 자산 전략에서 같은 timestamp에 여러 equity 값이 기록될 수 있음
+    // 같은 timestamp의 마지막 값만 유지하여 데이터 왜곡 방지
+    let mut equity_map: std::collections::BTreeMap<i64, EquityCurvePoint> = std::collections::BTreeMap::new();
+    for ep in &report.equity_curve {
+        let ts = ep.timestamp.timestamp();
+        // 같은 timestamp면 마지막 값(전체 포트폴리오 equity)으로 덮어씀
+        equity_map.insert(ts, EquityCurvePoint {
+            timestamp: ts,
             equity: ep.equity,
             drawdown_pct: ep.drawdown_pct,
-        })
-        .collect();
+        });
+    }
+    let equity_curve: Vec<EquityCurvePoint> = equity_map.into_values().collect();
 
     let trades: Vec<TradeHistoryItem> = report
         .trades

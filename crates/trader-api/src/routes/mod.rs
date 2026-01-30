@@ -20,7 +20,9 @@
 
 pub mod analytics;
 pub mod backtest;
+pub mod backtest_results;
 pub mod credentials;
+pub mod dataset;
 pub mod equity_history;
 pub mod health;
 pub mod market;
@@ -35,7 +37,9 @@ pub mod strategies;
 
 pub use analytics::{analytics_router, PerformanceResponse, EquityCurveResponse, ChartResponse, MonthlyReturnsResponse};
 pub use backtest::{backtest_router, BacktestRunRequest, BacktestRunResponse, BacktestStrategiesResponse, BacktestMultiRunRequest, BacktestMultiRunResponse};
+pub use backtest_results::{backtest_results_router, BacktestResultResponse, ListResultsResponse, SaveBacktestResultRequest};
 pub use credentials::{credentials_router, ExchangeCredentialResponse, TelegramSettingsResponse, SupportedExchangesResponse, EncryptedCredentials};
+pub use dataset::{dataset_router, DatasetListResponse, DatasetSummary, FetchDatasetRequest};
 pub use health::{health_router, HealthResponse, ComponentHealth, ComponentStatus};
 pub use market::{market_router, MarketStatusResponse};
 pub use ml::{ml_router, TrainingJob, TrainedModel, ModelType, TrainingStatus};
@@ -65,6 +69,7 @@ pub fn create_api_router() -> Router<Arc<AppState>> {
         .nest("/api/v1/positions", positions_router())
         .nest("/api/v1/notifications", notifications_router())
         .nest("/api/v1/backtest", backtest_router())
+        .nest("/api/v1/backtest/results", backtest_results_router())
         .nest("/api/v1/simulation", simulation_router())
         .nest("/api/v1/analytics", analytics_router())
         .nest("/api/v1/patterns", patterns_router())
@@ -72,4 +77,5 @@ pub fn create_api_router() -> Router<Arc<AppState>> {
         .nest("/api/v1/market", market_router())
         .nest("/api/v1/credentials", credentials_router())
         .nest("/api/v1/ml", ml_router())
+        .nest("/api/v1/dataset", dataset_router())
 }

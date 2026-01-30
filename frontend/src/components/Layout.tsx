@@ -10,6 +10,7 @@ import {
   FlaskConical,
   Play,
   Brain,
+  Database,
 } from 'lucide-solid'
 
 interface LayoutProps {
@@ -21,6 +22,7 @@ const navItems = [
   { path: '/strategies', icon: Bot, label: '전략' },
   { path: '/backtest', icon: FlaskConical, label: '백테스트' },
   { path: '/simulation', icon: Play, label: '시뮬레이션' },
+  { path: '/dataset', icon: Database, label: '데이터셋' },
   { path: '/ml-training', icon: Brain, label: 'ML 훈련' },
   { path: '/settings', icon: Settings, label: '설정' },
 ]

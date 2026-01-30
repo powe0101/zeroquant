@@ -3,4 +3,4 @@
 pub mod krx;
 pub mod redis;
 pub mod timescale;
-pub mod yahoo_cache;
+pub mod ohlcv;

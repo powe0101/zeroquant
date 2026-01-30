@@ -239,7 +239,10 @@ impl VolatilityBreakoutStrategy {
 
     /// ATR 계산.
     fn calculate_atr(&mut self) {
-        let config = self.config.as_ref().unwrap();
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return, // 초기화되지 않은 경우
+        };
 
         if self.tr_history.len() >= config.atr_period {
             let sum: Decimal = self.tr_history.iter().take(config.atr_period).sum();
@@ -257,7 +260,10 @@ impl VolatilityBreakoutStrategy {
 
     /// 사용할 레인지 반환 (단순 레인지 또는 ATR).
     fn get_range(&self) -> Option<Decimal> {
-        let config = self.config.as_ref().unwrap();
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return None, // 초기화되지 않은 경우
+        };
 
         if config.use_atr {
             self.current_atr
@@ -268,7 +274,10 @@ impl VolatilityBreakoutStrategy {
 
     /// 레인지가 허용 범위 내인지 확인.
     fn is_range_valid(&self, range: Decimal, current_price: Decimal) -> bool {
-        let config = self.config.as_ref().unwrap();
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return false, // 초기화되지 않은 경우
+        };
 
         if current_price == Decimal::ZERO {
             return false;
@@ -281,7 +290,10 @@ impl VolatilityBreakoutStrategy {
 
     /// 거래량 필터 통과 여부 확인.
     fn passes_volume_filter(&self, current_volume: Decimal) -> bool {
-        let config = self.config.as_ref().unwrap();
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return true, // 초기화되지 않은 경우 필터 통과
+        };
 
         if !config.use_volume_filter {
             return true;
@@ -301,7 +313,10 @@ impl VolatilityBreakoutStrategy {
         if let Some(period) = self.current_period.take() {
             // borrow 충돌 방지를 위해 설정값 미리 가져오기
             let (atr_period, lookback_period) = {
-                let config = self.config.as_ref().unwrap();
+                let config = match self.config.as_ref() {
+                    Some(c) => c,
+                    None => return, // 초기화되지 않은 경우
+                };
                 (config.atr_period, config.lookback_period)
             };
 
@@ -341,8 +356,14 @@ impl VolatilityBreakoutStrategy {
 
     /// 현재 가격 기반으로 신호 생성.
     fn generate_signals(&mut self, current_price: Decimal, current_volume: Decimal, current_time: DateTime<Utc>) -> Vec<Signal> {
-        let config = self.config.as_ref().unwrap();
-        let symbol = self.symbol.as_ref().unwrap().clone();
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return Vec::new(), // 초기화되지 않은 경우
+        };
+        let symbol = match self.symbol.as_ref() {
+            Some(s) => s.clone(),
+            None => return Vec::new(), // 초기화되지 않은 경우
+        };
         let mut signals = Vec::new();
 
         // 기존 포지션 처리
@@ -559,7 +580,10 @@ impl Strategy for VolatilityBreakoutStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = self.config.as_ref().unwrap().symbol.clone();
+        let symbol_str = match self.config.as_ref() {
+            Some(c) => c.symbol.clone(),
+            None => return Ok(vec![]), // 초기화되지 않은 경우
+        };
 
         if data.symbol.to_string() != symbol_str {
             return Ok(vec![]);
