@@ -295,6 +295,19 @@ docker-compose --profile ml run --rm trader-ml \
   python scripts/train_ml_model.py --list-symbols
 ```
 
+### E2E 테스트
+
+```bash
+# Playwright 설치
+cd frontend && npx playwright install
+
+# E2E 테스트 실행
+npm run test:e2e
+
+# 특정 테스트 실행
+npx playwright test risk-management-ui.spec.ts
+```
+
 ## 설정
 
 ### 환경 변수

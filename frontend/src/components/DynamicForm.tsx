@@ -7,6 +7,7 @@
 import { createSignal, For, Show, createMemo } from 'solid-js'
 import { ChevronDown, ChevronRight, HelpCircle, Plus, X } from 'lucide-solid'
 import type { UiSchema, UiField, UiFieldGroup, UiValidation, UiSelectOption, SymbolCategory } from '../api/client'
+import { SymbolSearch } from './SymbolSearch'
 
 interface DynamicFormProps {
   schema: UiSchema
@@ -451,89 +452,23 @@ interface SymbolPickerFieldProps {
   disabled?: boolean
 }
 
+/**
+ * 심볼 선택 필드 (복수 선택, API 검색 지원)
+ *
+ * Dataset.tsx와 동일한 심볼 검색 API를 사용하여
+ * 티커 및 회사명 검색을 지원합니다.
+ */
 function SymbolPickerField(props: SymbolPickerFieldProps) {
-  const [inputValue, setInputValue] = createSignal('')
-  const values = () => props.value || []
-
-  // 심볼 추가
-  const addSymbol = () => {
-    const symbol = inputValue().trim().toUpperCase()
-    if (symbol && !values().includes(symbol)) {
-      const maxItems = props.validation.max_items
-      if (!maxItems || values().length < maxItems) {
-        props.onChange([...values(), symbol])
-        setInputValue('')
-      }
-    }
-  }
-
-  // 심볼 제거
-  const removeSymbol = (symbol: string) => {
-    props.onChange(values().filter(s => s !== symbol))
-  }
-
-  // 엔터 키 처리
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      addSymbol()
-    }
-  }
-
   return (
-    <div class="space-y-2">
-      {/* 선택된 심볼 목록 */}
-      <Show when={values().length > 0}>
-        <div class="flex flex-wrap gap-2">
-          <For each={values()}>
-            {(symbol) => (
-              <span class="inline-flex items-center gap-1 px-2 py-1 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded-lg text-sm">
-                {symbol}
-                <button
-                  type="button"
-                  onClick={() => removeSymbol(symbol)}
-                  disabled={props.disabled}
-                  class="p-0.5 hover:bg-[var(--color-primary)]/20 rounded"
-                >
-                  <X class="w-3 h-3" />
-                </button>
-              </span>
-            )}
-          </For>
-        </div>
-      </Show>
-
-      {/* 입력 필드 */}
-      <div class="flex gap-2">
-        <input
-          type="text"
-          value={inputValue()}
-          onInput={(e) => setInputValue(e.currentTarget.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="심볼 입력 (예: SPY, 005930)"
-          disabled={props.disabled}
-          class="flex-1 px-3 py-2 bg-[var(--color-surface)] border border-[var(--color-surface-light)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] disabled:opacity-50"
-        />
-        <button
-          type="button"
-          onClick={addSymbol}
-          disabled={props.disabled || !inputValue().trim()}
-          class="px-3 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Plus class="w-5 h-5" />
-        </button>
-      </div>
-
-      {/* 제한 표시 */}
-      <Show when={props.validation.min_items || props.validation.max_items}>
-        <p class="text-xs text-[var(--color-text-muted)]">
-          {props.validation.min_items && `최소 ${props.validation.min_items}개`}
-          {props.validation.min_items && props.validation.max_items && ' ~ '}
-          {props.validation.max_items && `최대 ${props.validation.max_items}개`}
-          {' '}(현재 {values().length}개)
-        </p>
-      </Show>
-    </div>
+    <SymbolSearch
+      value={props.value || []}
+      onChange={props.onChange}
+      multiple={true}
+      disabled={props.disabled}
+      minItems={props.validation.min_items}
+      maxItems={props.validation.max_items}
+      placeholder="심볼/회사명 검색 (예: SPY, 삼성전자)"
+    />
   )
 }
 
@@ -595,34 +530,22 @@ interface SymbolCategoryItemProps {
 
 /**
  * 단일 카테고리 심볼 선택기
+ *
+ * HAA, XAA 등 자산배분 전략에서 사용되며,
+ * 추천 심볼 목록과 API 검색을 모두 지원합니다.
  */
 function SymbolCategoryItem(props: SymbolCategoryItemProps) {
-  const [inputValue, setInputValue] = createSignal('')
   const [showSuggestions, setShowSuggestions] = createSignal(false)
   const values = () => props.value || []
 
   // 심볼 추가
-  const addSymbol = (symbol?: string) => {
-    const sym = (symbol || inputValue()).trim().toUpperCase()
+  const addSymbol = (symbol: string) => {
+    const sym = symbol.trim().toUpperCase()
     if (sym && !values().includes(sym)) {
       const maxItems = props.category.max_items
       if (!maxItems || values().length < maxItems) {
         props.onChange([...values(), sym])
-        setInputValue('')
       }
-    }
-  }
-
-  // 심볼 제거
-  const removeSymbol = (symbol: string) => {
-    props.onChange(values().filter(s => s !== symbol))
-  }
-
-  // 엔터 키 처리
-  const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      addSymbol()
     }
   }
 
@@ -651,51 +574,22 @@ function SymbolCategoryItem(props: SymbolCategoryItemProps) {
         </Show>
       </div>
 
-      {/* 선택된 심볼 및 입력 */}
-      <div class="p-3 space-y-2">
-        {/* 선택된 심볼 목록 */}
-        <Show when={values().length > 0}>
-          <div class="flex flex-wrap gap-2">
-            <For each={values()}>
-              {(symbol) => (
-                <span class="inline-flex items-center gap-1 px-2 py-1 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded-lg text-sm">
-                  {symbol}
-                  <button
-                    type="button"
-                    onClick={() => removeSymbol(symbol)}
-                    disabled={props.disabled}
-                    class="p-0.5 hover:bg-[var(--color-primary)]/20 rounded"
-                  >
-                    <X class="w-3 h-3" />
-                  </button>
-                </span>
-              )}
-            </For>
-          </div>
-        </Show>
-
-        {/* 입력 필드 */}
-        <div class="flex gap-2">
-          <input
-            type="text"
-            value={inputValue()}
-            onInput={(e) => setInputValue(e.currentTarget.value)}
-            onKeyDown={handleKeyDown}
-            onFocus={() => setShowSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-            placeholder="심볼 입력"
-            disabled={props.disabled}
-            class="flex-1 px-3 py-1.5 text-sm bg-[var(--color-bg)] border border-[var(--color-surface-light)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] disabled:opacity-50"
-          />
-          <button
-            type="button"
-            onClick={() => addSymbol()}
-            disabled={props.disabled || !inputValue().trim()}
-            class="px-2 py-1.5 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Plus class="w-4 h-4" />
-          </button>
-        </div>
+      {/* 심볼 검색 및 선택 */}
+      <div
+        class="p-3 space-y-2"
+        onFocusIn={() => setShowSuggestions(true)}
+        onFocusOut={() => setTimeout(() => setShowSuggestions(false), 200)}
+      >
+        <SymbolSearch
+          value={values()}
+          onChange={props.onChange}
+          multiple={true}
+          disabled={props.disabled}
+          minItems={props.category.min_items}
+          maxItems={props.category.max_items}
+          placeholder="심볼/회사명 검색"
+          size="sm"
+        />
 
         {/* 추천 심볼 */}
         <Show when={availableSuggestions().length > 0 && showSuggestions()}>

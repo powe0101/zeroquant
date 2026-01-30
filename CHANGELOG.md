@@ -5,6 +5,60 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.4.1] - 2026-01-31
+
+### Added
+
+#### SDUI (Server-Driven UI) 전략 스키마
+- **전략 UI 스키마** (`config/sdui/strategy_schemas.json`)
+  - 27개 전략별 동적 폼 스키마 정의
+  - 필드 타입, 검증 규칙, 기본값 포함
+  - 프론트엔드에서 서버 스키마 기반 동적 폼 렌더링
+
+#### 유틸리티 모듈 (`utils/`)
+- `format.rs`: 숫자, 날짜, 통화 포맷팅 함수
+- `response.rs`: API 응답 헬퍼 (성공/에러 응답 표준화)
+- `serde_helpers.rs`: Serde 직렬화 헬퍼 함수
+
+#### 전략 기본값
+- **defaults.rs**: 전략별 기본 파라미터 정의
+- 신규 전략 생성 시 합리적인 기본값 제공
+
+#### 심볼 검색 컴포넌트
+- **SymbolSearch.tsx**: 실시간 심볼 검색 UI
+- 자동완성, 최근 검색 기록, 시장 필터
+
+#### E2E 테스트
+- **risk-management-ui.spec.ts**: 리스크 관리 UI Playwright 테스트
+- **playwright.config.ts**: E2E 테스트 설정
+- **regression_baseline.json**: 회귀 테스트 베이스라인
+
+#### DB 마이그레이션
+- `014_strategy_risk_capital.sql`: 전략 리스크/자본 설정 컬럼 추가
+
+### Changed
+
+#### 백테스트 모듈 리팩토링
+- **모듈 분리**: `backtest.rs` (3,854줄) → 5개 모듈로 분리
+  - `backtest/mod.rs`: 라우터 및 핸들러
+  - `backtest/engine.rs`: 백테스트 실행 엔진
+  - `backtest/loader.rs`: 데이터 로더
+  - `backtest/types.rs`: 타입 정의
+  - `backtest/ui_schema.rs`: UI 스키마 생성
+- 코드 가독성 및 유지보수성 향상
+
+#### 프론트엔드 개선
+- `Backtest.tsx`: SDUI 스키마 기반 동적 폼 통합
+- `Simulation.tsx`: 심볼 검색 컴포넌트 통합
+- `Strategies.tsx`: 전략 생성/편집 UI 개선
+- `DynamicForm.tsx`: 스키마 기반 폼 렌더링 개선
+
+#### API 개선
+- `strategies.rs`: 전략 CRUD API 확장 (리스크/자본 설정)
+- `equity_history.rs`: N+1 쿼리 최적화 (배치 쿼리)
+
+---
+
 ## [0.4.0] - 2026-01-31
 
 ### Added

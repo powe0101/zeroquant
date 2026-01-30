@@ -92,6 +92,73 @@ pub async fn save_portfolio_snapshot(
     Ok(row.get("id"))
 }
 
+/// 여러 포트폴리오 스냅샷 일괄 저장 (N+1 쿼리 문제 해결).
+///
+/// UNNEST 패턴을 사용하여 한 번의 쿼리로 모든 스냅샷을 저장합니다.
+pub async fn save_portfolio_snapshots_batch(
+    pool: &PgPool,
+    snapshots: &[PortfolioSnapshot],
+) -> Result<usize, sqlx::Error> {
+    if snapshots.is_empty() {
+        return Ok(0);
+    }
+
+    // 각 컬럼에 대한 배열 생성
+    let credential_ids: Vec<Uuid> = snapshots.iter().map(|s| s.credential_id).collect();
+    let snapshot_times: Vec<DateTime<Utc>> = snapshots
+        .iter()
+        .map(|s| {
+            s.snapshot_time
+                .with_nanosecond(0)
+                .unwrap()
+                .with_second(0)
+                .unwrap()
+        })
+        .collect();
+    let total_equities: Vec<Decimal> = snapshots.iter().map(|s| s.total_equity).collect();
+    let cash_balances: Vec<Decimal> = snapshots.iter().map(|s| s.cash_balance).collect();
+    let securities_values: Vec<Decimal> = snapshots.iter().map(|s| s.securities_value).collect();
+    let total_pnls: Vec<Decimal> = snapshots.iter().map(|s| s.total_pnl).collect();
+    let daily_pnls: Vec<Decimal> = snapshots.iter().map(|s| s.daily_pnl).collect();
+    let currencies: Vec<String> = snapshots.iter().map(|s| s.currency.clone()).collect();
+    let markets: Vec<String> = snapshots.iter().map(|s| s.market.clone()).collect();
+    let account_types: Vec<Option<String>> = snapshots.iter().map(|s| s.account_type.clone()).collect();
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO portfolio_equity_history (
+            credential_id, snapshot_time, total_equity, cash_balance,
+            securities_value, total_pnl, daily_pnl, currency, market, account_type
+        )
+        SELECT * FROM UNNEST(
+            $1::uuid[], $2::timestamptz[], $3::numeric[], $4::numeric[],
+            $5::numeric[], $6::numeric[], $7::numeric[], $8::text[], $9::text[], $10::text[]
+        )
+        ON CONFLICT (credential_id, snapshot_time)
+        DO UPDATE SET
+            total_equity = EXCLUDED.total_equity,
+            cash_balance = EXCLUDED.cash_balance,
+            securities_value = EXCLUDED.securities_value,
+            total_pnl = EXCLUDED.total_pnl,
+            daily_pnl = EXCLUDED.daily_pnl
+        "#,
+    )
+    .bind(&credential_ids)
+    .bind(&snapshot_times)
+    .bind(&total_equities)
+    .bind(&cash_balances)
+    .bind(&securities_values)
+    .bind(&total_pnls)
+    .bind(&daily_pnls)
+    .bind(&currencies)
+    .bind(&markets)
+    .bind(&account_types)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() as usize)
+}
+
 /// 특정 기간의 자산 곡선 데이터 조회 (특정 credential).
 pub async fn get_equity_curve(
     pool: &PgPool,
@@ -513,35 +580,37 @@ pub async fn sync_equity_from_executions(
     // 시간순으로 정렬
     daily_equity.sort_by_key(|(d, _)| *d);
 
-    // 3. DB에 저장
-    let mut saved_count = 0;
-    for (date, eq) in daily_equity {
-        // 해당 날짜의 UTC 정오로 변환 (일별 스냅샷)
-        let snapshot_time = Utc.from_utc_datetime(
-            &date.and_hms_opt(12, 0, 0).unwrap()
-        );
+    // 3. 스냅샷 배열 생성 및 일괄 저장 (N+1 쿼리 문제 해결)
+    let snapshots: Vec<PortfolioSnapshot> = daily_equity
+        .iter()
+        .map(|(date, eq)| {
+            // 해당 날짜의 UTC 정오로 변환 (일별 스냅샷)
+            let snapshot_time = Utc.from_utc_datetime(
+                &date.and_hms_opt(12, 0, 0).unwrap()
+            );
 
-        let snapshot = PortfolioSnapshot {
-            credential_id,
-            snapshot_time,
-            total_equity: eq,
-            cash_balance: eq,  // 단순화: 전체를 현금으로 가정
-            securities_value: Decimal::ZERO,
-            total_pnl: eq - current_equity,
-            daily_pnl: daily_pnl.get(&date).cloned().unwrap_or(Decimal::ZERO),
-            currency: currency.to_string(),
-            market: market.to_string(),
-            account_type: account_type.map(|s| s.to_string()),
-        };
-
-        // 중복 방지: ON CONFLICT로 업데이트
-        match save_portfolio_snapshot(pool, &snapshot).await {
-            Ok(_) => saved_count += 1,
-            Err(e) => {
-                tracing::warn!("Failed to save snapshot for {}: {}", date, e);
+            PortfolioSnapshot {
+                credential_id,
+                snapshot_time,
+                total_equity: *eq,
+                cash_balance: *eq,  // 단순화: 전체를 현금으로 가정
+                securities_value: Decimal::ZERO,
+                total_pnl: *eq - current_equity,
+                daily_pnl: daily_pnl.get(date).cloned().unwrap_or(Decimal::ZERO),
+                currency: currency.to_string(),
+                market: market.to_string(),
+                account_type: account_type.map(|s| s.to_string()),
             }
+        })
+        .collect();
+
+    let saved_count = match save_portfolio_snapshots_batch(pool, &snapshots).await {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::warn!("Failed to save snapshots batch: {}", e);
+            0
         }
-    }
+    };
 
     tracing::info!(
         "Synced {} daily equity points from {} executions for credential {}",
@@ -696,41 +765,58 @@ pub async fn sync_equity_with_market_prices(
         start_date, end_date
     );
 
-    // 5. 현재 보유 심볼의 일별 종가 조회
+    // 5. 현재 보유 심볼의 일별 종가 조회 (배치 쿼리로 N+1 문제 해결)
     let mut price_cache: HashMap<(String, NaiveDate), Decimal> = HashMap::new();
 
-    for symbol in &active_symbols {
-        // Yahoo Finance 형식으로 심볼 변환 (KR 종목: 6자리 코드 -> XXXXXX.KS)
-        let yahoo_symbol = if symbol.len() == 6 && symbol.chars().all(|c| c.is_ascii_digit()) {
-            format!("{}.KS", symbol)
-        } else {
-            symbol.clone()
-        };
+    // Yahoo Finance 형식으로 심볼 변환 맵 생성 (KR 종목: 6자리 코드 -> XXXXXX.KS)
+    let symbol_to_yahoo: HashMap<String, String> = active_symbols
+        .iter()
+        .map(|s| {
+            let yahoo = if s.len() == 6 && s.chars().all(|c| c.is_ascii_digit()) {
+                format!("{}.KS", s)
+            } else {
+                s.clone()
+            };
+            (s.clone(), yahoo)
+        })
+        .collect();
 
-        let prices = sqlx::query(
-            r#"
-            SELECT DATE(open_time) as date, close
-            FROM ohlcv
-            WHERE symbol = $1 AND timeframe = '1d'
-            ORDER BY open_time
-            "#
-        )
-        .bind(&yahoo_symbol)
-        .fetch_all(pool)
-        .await?;
+    let yahoo_to_symbol: HashMap<String, String> = symbol_to_yahoo
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
 
-        for row in prices {
-            let date: NaiveDate = row.get("date");
-            let close: Decimal = row.get("close");
-            price_cache.insert((symbol.clone(), date), close);
+    let yahoo_symbols: Vec<String> = symbol_to_yahoo.values().cloned().collect();
+
+    // 모든 심볼을 한 번의 쿼리로 조회 (ANY 패턴 사용)
+    let prices = sqlx::query(
+        r#"
+        SELECT symbol, DATE(open_time) as date, close
+        FROM ohlcv
+        WHERE symbol = ANY($1::text[]) AND timeframe = '1d'
+        ORDER BY symbol, open_time
+        "#
+    )
+    .bind(&yahoo_symbols)
+    .fetch_all(pool)
+    .await?;
+
+    for row in prices {
+        let yahoo_symbol: String = row.get("symbol");
+        let date: NaiveDate = row.get("date");
+        let close: Decimal = row.get("close");
+
+        // Yahoo 심볼을 원래 심볼로 역변환
+        if let Some(original_symbol) = yahoo_to_symbol.get(&yahoo_symbol) {
+            price_cache.insert((original_symbol.clone(), date), close);
         }
-
-        tracing::debug!(
-            "Loaded {} price points for {}",
-            price_cache.iter().filter(|((s, _), _)| s == symbol).count(),
-            symbol
-        );
     }
+
+    tracing::info!(
+        "Loaded {} price points for {} symbols in single batch query",
+        price_cache.len(),
+        active_symbols.len()
+    );
 
     // 6. 일별 자산 계산 및 저장 (주식 가치만, 현금 제외)
     let mut active_holdings: HashMap<String, Decimal> = HashMap::new();

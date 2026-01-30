@@ -88,9 +88,35 @@ cd frontend && npm run dev
 - [x] MultiPanelGrid.tsx (357줄) - 멀티 패널 레이아웃
 - [x] 차트 컴포넌트 8개 (3,771줄) - 캔들, 자산곡선, 드로다운 등
 
+## [완료] 코드 품질 최적화 ✅ (2026-01-31)
+
+### N+1 쿼리 해결 (3곳) ✅
+- [x] equity_history.rs:702-733 - symbol별 루프 쿼리 → `WHERE symbol = ANY($1::text[])` 배치 쿼리
+- [x] ohlcv.rs:242-273 - kline별 개별 INSERT → UNNEST 패턴 배치 INSERT
+- [x] equity_history.rs:585-611 - snapshot 루프 저장 → `save_portfolio_snapshots_batch()` 배치 함수
+
+### clone() 최적화 분석 ✅
+- [x] 분석 완료: 752회 clone() 호출 중 주요 최적화 대상 식별
+- [x] 결론: Symbol, Kline 등 핵심 타입은 소유권 필요하여 Copy trait 구현 어려움
+- [ ] 향후 과제: String → `&'static str` 또는 enum으로 아키텍처 변경 시 최적화 가능
+
+### 대형 파일 분리 (improve_suggestion.md 기준) ✅
+- [x] backtest.rs (3,854줄) → backtest/ 모듈 디렉토리로 분리
+  - mod.rs (1,236줄) - 라우터, 핸들러
+  - types.rs (516줄) - 요청/응답 타입
+  - ui_schema.rs (1,504줄) - SDUI 스키마 빌더
+  - loader.rs (199줄) - 데이터 로딩
+  - engine.rs (907줄) - 백테스트 실행
+
+### 유틸리티 모듈 추가 (code_optimize_suggestion_improved.md 기준) ✅
+- [x] `trader-api/src/utils/response.rs` - 제네릭 API 응답 래퍼 (ListResponse, EntityResponse, SuccessResponse)
+- [x] `trader-api/src/utils/format.rs` - 타임스탬프/Decimal 포맷팅 유틸리티
+- [x] `trader-api/src/utils/serde_helpers.rs` - Serde 역직렬화 헬퍼 (deserialize_symbol, deserialize_decimal 등)
+- [x] `trader-strategy/src/strategies/common/defaults.rs` - 전략 기본값 상수 (IndicatorDefaults, RiskDefaults 등)
+
 ## [완료] Backend API Routes ✅ (17개 파일, 15,243줄)
 - [x] health.rs (237줄) - liveness/readiness probe
-- [x] backtest.rs (3,323줄) - 백테스트 실행
+- [x] backtest/ (4,362줄) - 백테스트 실행 (모듈로 분리됨)
 - [x] backtest_results.rs (514줄) - 결과 저장/조회
 - [x] strategies.rs (788줄) - 전략 CRUD
 - [x] orders.rs (531줄) - 주문 관리
@@ -568,14 +594,90 @@ Docker (인프라):
 
 | 작업 | 상태 |
 |------|------|
-| 백엔드: `StrategyListItem`에 `strategy_type` 필드 추가 | ⏳ |
-| 백엔드: `list_strategies` API에서 `strategy_type` 반환 | ⏳ |
+| 백엔드: `StrategyListItem`에 `strategy_type` 필드 추가 | ✅ (이미 있음) |
+| 백엔드: `list_strategies` API에서 `strategy_type` 반환 | ✅ (이미 있음) |
 | 백엔드: 백테스트 API에서 등록된 전략 ID로 실행 지원 | ⏳ |
 | 프론트: Backtest.tsx에서 등록된 전략만 표시 | ⏳ |
 | 프론트: 파라미터 입력 SDUI 폼 제거 (등록된 설정 사용) | ⏳ |
 | 프론트: Simulation.tsx 동일 변경 | ⏳ |
 | 전략 페이지에서 모든 전략 등록 테스트 | ⏳ |
 | 백테스트 페이지에서 등록된 전략 테스트 | ⏳ |
+
+## 🔨 진행 중인 작업 (2026-01-31)
+
+### 전략별 리스크 설정 및 자본 할당 기능
+| 작업 | 상태 | 파일 |
+|------|------|------|
+| DB 스키마: `allocated_capital`, `risk_profile` 컬럼 추가 | ✅ | `migrations/014_strategy_risk_capital.sql` |
+| Repository: 새 필드 지원 및 업데이트 함수 추가 | ✅ | `repository/strategies.rs` |
+| API: CreateStrategyRequest에 리스크/자본 필드 추가 | ✅ | `routes/strategies.rs` |
+| API: UpdateRiskSettingsRequest 타입 추가 | ✅ | `routes/strategies.rs` |
+| API: update_risk_settings 핸들러 추가 | 🔨 | `routes/strategies.rs` |
+
+### 전략 복사 및 파생 전략 생성 기능
+| 작업 | 상태 | 파일 |
+|------|------|------|
+| API: CloneStrategyRequest/Response 타입 추가 | ✅ | `routes/strategies.rs` |
+| API: clone_strategy 핸들러 추가 | 🔨 | `routes/strategies.rs` |
+| 라우터: 새 엔드포인트 등록 | ⏳ | `routes/strategies.rs` |
+
+### 프론트엔드 확인
+| 작업 | 상태 | 파일 |
+|------|------|------|
+| 심볼 검색 컴포넌트 추출 | ✅ | `frontend/src/components/SymbolSearch.tsx` |
+| api/client.ts에 searchSymbols 추가 | ✅ | `frontend/src/api/client.ts` |
+| DynamicForm.tsx에 SymbolSearch 통합 | ✅ | `frontend/src/components/DynamicForm.tsx` |
+| 리스크 설정 UI 추가 | ⏳ | `frontend/src/pages/Strategies.tsx` |
+| 전략 복사 버튼 및 모달 추가 | ⏳ | `frontend/src/pages/Strategies.tsx` |
+
+### 회귀 테스트 ✅ 완료 (2026-01-31)
+| 작업 | 상태 |
+|------|------|
+| cargo test 실행 및 검증 | ✅ 28개 통합 테스트 통과 |
+| API 엔드포인트 테스트 | ⏳ |
+
+### ✅ 전략 통합 테스트 완료 (2026-01-31)
+> **목표**: 모든 26개 전략에 대해 CachedHistoricalDataProvider 기반 백테스트 검증
+> **결과**: 28개 테스트 모두 통과 (test result: ok. 28 passed; 0 failed)
+
+| 전략 | 백테스트 테스트 | 신호 발생 검증 | 거래 실행 검증 | 상태 |
+|------|---------------|--------------|--------------|------|
+| RSI | ✅ | ✅ | ✅ | ✅ 완료 |
+| Grid | ✅ | ✅ | ✅ | ✅ 완료 |
+| SMA | ✅ | ✅ | ✅ | ✅ 완료 |
+| Bollinger | ✅ | ✅ | ✅ | ✅ 완료 |
+| Volatility | ✅ | ✅ | ✅ | ✅ 완료 |
+| Magic Split | ✅ | ✅ | ✅ | ✅ 완료 |
+| Trailing Stop | ✅ | ✅ | ✅ | ✅ 완료 |
+| Candle Pattern | ✅ | ✅ | ✅ | ✅ 완료 |
+| Infinity Bot | ✅ | ✅ | ✅ | ✅ 완료 |
+| Simple Power | ✅ | ✅ | ✅ | ✅ 완료 |
+| HAA | ✅ | ✅ | ✅ | ✅ 완료 |
+| XAA | ✅ | ✅ | ✅ | ✅ 완료 |
+| All Weather | ✅ | ✅ | ✅ | ✅ 완료 |
+| Snow | ✅ | ✅ | ✅ | ✅ 완료 |
+| Stock Rotation | ✅ | ✅ | ✅ | ✅ 완료 |
+| Market Cap TOP | ✅ | ✅ | ✅ | ✅ 완료 |
+| Market Interest Day | ✅ | ✅ | ✅ | ✅ 완료 |
+| Dual Momentum | ✅ | ✅ | ✅ | ✅ 완료 |
+| BAA | ✅ | ✅ | ✅ | ✅ 완료 |
+| US 3X Leverage | ✅ | ✅ | ✅ | ✅ 완료 |
+| Stock Gugan | ✅ | ✅ | ✅ | ✅ 완료 |
+| KOSDAQ Fire Rain | ✅ | ✅ | ✅ | ✅ 완료 |
+| Sector VB | ✅ | ✅ | ✅ | ✅ 완료 |
+| KOSPI BothSide | ✅ | ✅ | ✅ | ✅ 완료 |
+| Small Cap Quant | ✅ | ✅ | ✅ | ✅ 완료 |
+| Sector Momentum | ✅ | ✅ | ✅ | ✅ 완료 |
+
+**테스트 매크로**: `verify_backtest_result!` - 신호 발생, 거래 실행, 수익률 자동 검증
+**데이터 공급자**: `CachedHistoricalDataProvider` - DB 캐시 기반 실제 데이터 테스트
+
+### 데이터베이스 인덱스 ✅ 이미 존재
+| 작업 | 상태 | 위치 |
+|------|------|------|
+| orders 테이블 인덱스 | ✅ | `001_initial_schema.sql` (4개 인덱스) |
+| backtest_results 테이블 인덱스 | ✅ | `010_backtest_results.sql` (4개 인덱스) |
+| positions 테이블 인덱스 | ✅ | `001_initial_schema.sql` (2개 인덱스) |
 
 ## ✅ [해결됨] KIS API ISA 체결 내역 조회 (2026-01-31)
 

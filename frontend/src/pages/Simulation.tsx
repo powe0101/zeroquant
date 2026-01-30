@@ -1,4 +1,4 @@
-import { createSignal, For, Show, createEffect, onCleanup, createResource } from 'solid-js'
+import { createSignal, For, Show, createEffect, onCleanup, createResource, createMemo } from 'solid-js'
 import { useSearchParams } from '@solidjs/router'
 import {
   Play,
@@ -12,9 +12,10 @@ import {
   DollarSign,
   Square,
   RefreshCw,
+  LineChart,
 } from 'lucide-solid'
-import { EquityCurve } from '../components/charts'
-import type { EquityDataPoint } from '../components/charts'
+import { EquityCurve, SyncedChartPanel } from '../components/charts'
+import type { EquityDataPoint, CandlestickDataPoint, TradeMarker } from '../components/charts'
 import {
   startSimulation,
   stopSimulation,
@@ -45,6 +46,78 @@ function formatDecimal(value: string | number, decimals: number = 2): string {
   return numValue.toFixed(decimals)
 }
 
+// API 기본 URL
+const API_BASE = '/api/v1'
+
+// 캔들 데이터 타입
+interface CandleItem {
+  time: string
+  open: string
+  high: string
+  low: string
+  close: string
+  volume: string
+}
+
+interface CandleDataResponse {
+  symbol: string
+  timeframe: string
+  candles: CandleItem[]
+  totalCount: number
+}
+
+// 캔들 데이터 조회 (최근 N일)
+async function fetchCandlesForSimulation(
+  symbol: string,
+  days: number = 200
+): Promise<CandleDataResponse | null> {
+  try {
+    const params = new URLSearchParams({
+      timeframe: '1d',
+      limit: days.toString(),
+      sortBy: 'time',
+      sortOrder: 'asc',
+    })
+    const res = await fetch(`${API_BASE}/dataset/${encodeURIComponent(symbol)}?${params}`)
+    if (!res.ok) return null
+    return res.json()
+  } catch {
+    return null
+  }
+}
+
+// 캔들 데이터를 차트용 형식으로 변환
+function convertCandlesToChartData(candles: CandleItem[]): CandlestickDataPoint[] {
+  const uniqueMap = new Map<string, CandlestickDataPoint>()
+
+  candles.forEach(c => {
+    const timeKey = c.time.split(' ')[0] // 일봉 기준 "YYYY-MM-DD"
+    uniqueMap.set(timeKey, {
+      time: timeKey,
+      open: parseFloat(c.open),
+      high: parseFloat(c.high),
+      low: parseFloat(c.low),
+      close: parseFloat(c.close),
+    })
+  })
+
+  return Array.from(uniqueMap.values()).sort((a, b) =>
+    (a.time as string).localeCompare(b.time as string)
+  )
+}
+
+// 시뮬레이션 거래 내역을 차트 마커로 변환
+function convertSimTradesToMarkers(trades: SimulationTrade[]): TradeMarker[] {
+  return trades.map(trade => ({
+    time: trade.timestamp.split('T')[0].split(' ')[0], // "YYYY-MM-DD" 형식
+    type: trade.side === 'Buy' ? 'buy' : 'sell',
+    price: parseFloat(trade.price),
+    label: trade.side === 'Buy' ? '매수' : '매도',
+  })).sort((a, b) =>
+    (a.time as string).localeCompare(b.time as string)
+  )
+}
+
 export function Simulation() {
   // URL 파라미터 읽기 (전략 페이지에서 바로 이동 시)
   const [searchParams] = useSearchParams()
@@ -65,6 +138,9 @@ export function Simulation() {
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
+  // 폴링 최적화: 이전 거래 수 추적 (변경 시에만 positions/trades 갱신)
+  const [prevTradeCount, setPrevTradeCount] = createSignal(-1)
+
   // 폼 상태
   const [selectedStrategy, setSelectedStrategy] = createSignal('')
 
@@ -81,14 +157,50 @@ export function Simulation() {
   const [initialBalance, setInitialBalance] = createSignal('10000000')
   const [speed, setSpeed] = createSignal(1)
 
+  // 가격 차트 데이터
+  const [candleData, setCandleData] = createSignal<CandlestickDataPoint[]>([])
+  const [isLoadingCandles, setIsLoadingCandles] = createSignal(false)
+  const [showPriceChart, setShowPriceChart] = createSignal(false)
+
+  // 매매 마커 (trades 변경 시 자동 갱신)
+  const tradeMarkers = createMemo(() => convertSimTradesToMarkers(trades()))
+
+  // 현재 시뮬레이션 시간까지의 캔들만 필터링 (스트리밍 효과)
+  const filteredCandleData = createMemo(() => {
+    const currentSimTime = status()?.current_simulation_time
+    const candles = candleData()
+
+    // 시뮬레이션이 실행 중이 아니거나 시간 정보가 없으면 전체 데이터 반환
+    if (!currentSimTime || !candles.length) {
+      return candles
+    }
+
+    // current_simulation_time까지의 캔들만 필터링
+    const simTimeStr = currentSimTime.split('T')[0] // "YYYY-MM-DD" 형식
+    return candles.filter(c => (c.time as string) <= simTimeStr)
+  })
+
+  // 현재 시뮬레이션 시간까지의 마커만 필터링
+  const filteredTradeMarkers = createMemo(() => {
+    const currentSimTime = status()?.current_simulation_time
+    const markers = tradeMarkers()
+
+    if (!currentSimTime || !markers.length) {
+      return markers
+    }
+
+    const simTimeStr = currentSimTime.split('T')[0]
+    return markers.filter(m => (m.time as string) <= simTimeStr)
+  })
+
   // 자산 곡선 데이터
   const [equityCurve, setEquityCurve] = createSignal<EquityDataPoint[]>([])
 
   // 폴링 인터벌
   let pollInterval: ReturnType<typeof setInterval> | undefined
 
-  // 초기 상태 로드
-  const loadStatus = async () => {
+  // 초기 상태 로드 (최적화: trade_count 변경 시에만 positions/trades 갱신)
+  const loadStatus = async (forceRefresh = false) => {
     try {
       const statusData = await getSimulationStatus()
       setStatus(statusData)
@@ -98,12 +210,17 @@ export function Simulation() {
         setSelectedStrategy(statusData.strategy_id)
       }
 
-      // 포지션/거래 로드
-      const positionsData = await getSimulationPositions()
-      setPositions(positionsData.positions)
+      // 거래 수가 변경되었거나 강제 새로고침 시에만 포지션/거래 로드
+      const currentTradeCount = statusData.trade_count
+      if (forceRefresh || prevTradeCount() !== currentTradeCount) {
+        setPrevTradeCount(currentTradeCount)
 
-      const tradesData = await getSimulationTrades()
-      setTrades(tradesData.trades)
+        const positionsData = await getSimulationPositions()
+        setPositions(positionsData.positions)
+
+        const tradesData = await getSimulationTrades()
+        setTrades(tradesData.trades)
+      }
 
       // 자산 곡선에 데이터 추가 (실행 중일 때)
       if (statusData.state === 'running') {
@@ -125,21 +242,30 @@ export function Simulation() {
     }
   }
 
-  // 컴포넌트 마운트 시 상태 로드
+  // 컴포넌트 마운트 시 상태 로드 (한 번만, 강제 새로고침)
+  let initialLoadDone = false
   createEffect(() => {
-    loadStatus()
+    if (!initialLoadDone) {
+      initialLoadDone = true
+      loadStatus(true)
+    }
   })
 
-  // 실행 중일 때 폴링
+  // 실행 중일 때 폴링 (별도 상태로 관리)
+  const [isPolling, setIsPolling] = createSignal(false)
+
   createEffect(() => {
     const currentStatus = status()
+    const shouldPoll = currentStatus?.state === 'running'
 
-    if (currentStatus?.state === 'running') {
-      // 1초마다 상태 업데이트
+    if (shouldPoll && !isPolling()) {
+      setIsPolling(true)
+      // 2초마다 상태 업데이트 (API 호출 최적화)
       pollInterval = setInterval(() => {
         loadStatus()
-      }, 1000)
-    } else {
+      }, 2000)
+    } else if (!shouldPoll && isPolling()) {
+      setIsPolling(false)
       if (pollInterval) {
         clearInterval(pollInterval)
         pollInterval = undefined
@@ -174,7 +300,7 @@ export function Simulation() {
       // 자산 곡선 초기화
       setEquityCurve([])
 
-      await loadStatus()
+      await loadStatus(true)
     } catch (err) {
       console.error('Failed to start simulation:', err)
       setError('시뮬레이션 시작에 실패했습니다')
@@ -188,7 +314,7 @@ export function Simulation() {
     setIsLoading(true)
     try {
       await stopSimulation()
-      await loadStatus()
+      await loadStatus(true)
     } catch (err) {
       console.error('Failed to stop simulation:', err)
       setError('시뮬레이션 중지에 실패했습니다')
@@ -202,7 +328,7 @@ export function Simulation() {
     setIsLoading(true)
     try {
       await pauseSimulation()
-      await loadStatus()
+      await loadStatus(true)
     } catch (err) {
       console.error('Failed to pause simulation:', err)
       setError('시뮬레이션 일시정지에 실패했습니다')
@@ -217,12 +343,35 @@ export function Simulation() {
     try {
       await resetSimulation()
       setEquityCurve([])
-      await loadStatus()
+      setPrevTradeCount(-1)
+      await loadStatus(true)
     } catch (err) {
       console.error('Failed to reset simulation:', err)
       setError('시뮬레이션 리셋에 실패했습니다')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // 가격 차트 데이터 로드
+  const loadCandleData = async () => {
+    if (candleData().length > 0 || isLoadingCandles()) return
+
+    // 선택된 전략의 심볼 가져오기
+    const strategy = strategies()?.find(s => s.strategyType === selectedStrategy())
+    if (!strategy?.symbols || strategy.symbols.length === 0) return
+
+    setIsLoadingCandles(true)
+    try {
+      const symbol = strategy.symbols[0] // 첫 번째 심볼 사용
+      const data = await fetchCandlesForSimulation(symbol, 200)
+      if (data) {
+        setCandleData(convertCandlesToChartData(data.candles))
+      }
+    } catch (err) {
+      console.error('캔들 데이터 로드 실패:', err)
+    } finally {
+      setIsLoadingCandles(false)
     }
   }
 
@@ -293,6 +442,19 @@ export function Simulation() {
                 <span class="text-[var(--color-text)] font-mono text-sm">
                   {new Date(status()!.started_at!).toLocaleString('ko-KR')}
                 </span>
+              </div>
+            </Show>
+
+            {/* 현재 시뮬레이션 시간 (배속 적용) */}
+            <Show when={status()?.current_simulation_time}>
+              <div class="flex items-center gap-2 px-4 py-2 bg-blue-500/20 rounded-lg border border-blue-500/30">
+                <FastForward class="w-5 h-5 text-blue-400" />
+                <div class="flex flex-col">
+                  <span class="text-xs text-blue-300">시뮬레이션 시간</span>
+                  <span class="text-blue-400 font-mono text-sm">
+                    {new Date(status()!.current_simulation_time!).toLocaleDateString('ko-KR')}
+                  </span>
+                </div>
               </div>
             </Show>
 
@@ -373,7 +535,7 @@ export function Simulation() {
             {/* Refresh */}
             <button
               class="p-3 rounded-lg bg-[var(--color-surface-light)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
-              onClick={loadStatus}
+              onClick={() => loadStatus(true)}
               disabled={isLoading()}
               title="새로고침"
             >
@@ -593,6 +755,49 @@ export function Simulation() {
           </Show>
         </div>
       </div>
+
+      {/* Price Chart + Trade Markers */}
+      <Show when={trades().length > 0}>
+        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
+          <details
+            onToggle={(e) => {
+              if ((e.target as HTMLDetailsElement).open) {
+                setShowPriceChart(true)
+                loadCandleData()
+              }
+            }}
+          >
+            <summary class="cursor-pointer text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
+              <LineChart class="w-5 h-5" />
+              가격 차트 + 매매 태그
+            </summary>
+            <div class="mt-4">
+              <Show
+                when={!isLoadingCandles() && candleData().length > 0}
+                fallback={
+                  <div class="h-[280px] flex items-center justify-center text-[var(--color-text-muted)]">
+                    {isLoadingCandles() ? (
+                      <div class="flex items-center gap-2">
+                        <RefreshCw class="w-5 h-5 animate-spin" />
+                        <span>차트 데이터 로딩 중...</span>
+                      </div>
+                    ) : (
+                      <span>차트 데이터가 없습니다 (데이터셋을 먼저 다운로드하세요)</span>
+                    )}
+                  </div>
+                }
+              >
+                <SyncedChartPanel
+                  data={filteredCandleData()}
+                  type="candlestick"
+                  mainHeight={280}
+                  markers={filteredTradeMarkers()}
+                />
+              </Show>
+            </div>
+          </details>
+        </div>
+      </Show>
 
       {/* Equity Curve Chart */}
       <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">

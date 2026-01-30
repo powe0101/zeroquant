@@ -22,6 +22,7 @@ pub mod middleware;
 pub mod repository;
 pub mod routes;
 pub mod state;
+pub mod utils;
 pub mod websocket;
 
 pub use auth::{Claims, Role, Permission, JwtAuth, JwtAuthError, hash_password, verify_password};

@@ -55,6 +55,7 @@ ml = ["ort"]  # ML 추론 기능 (ONNX Runtime 필요)
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 trader-exchange = { path = "../trader-exchange" }
+sqlx = { workspace = true }
 
 # Benchmark will be added in Phase 7
 # criterion = { workspace = true }

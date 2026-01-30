@@ -232,6 +232,25 @@ export const deleteStrategy = async (strategyId: string) => {
   return response.data;
 };
 
+/** 전략 복제 요청 타입 */
+export interface CloneStrategyRequest {
+  new_name: string;
+}
+
+/** 전략 복제 응답 타입 */
+export interface CloneStrategyResponse {
+  success: boolean;
+  message: string;
+  strategy_id: string;
+  name: string;
+}
+
+/** 전략 복제 */
+export const cloneStrategy = async (strategyId: string, newName: string): Promise<CloneStrategyResponse> => {
+  const response = await api.post(`/strategies/${strategyId}/clone`, { new_name: newName });
+  return response.data;
+};
+
 // 전략 상세 응답 타입
 export interface StrategyDetailResponse {
   id: string;
@@ -622,6 +641,8 @@ export interface SimulationStatusResponse {
   trade_count: number;
   started_at: string | null;
   speed: number;
+  /** 현재 시뮬레이션 시간 (배속 적용된 가상 시간) */
+  current_simulation_time: string | null;
 }
 
 /** 시뮬레이션 포지션 */
@@ -1040,6 +1061,35 @@ export const saveTelegramSettings = async (request: TelegramSettingsRequest): Pr
 export const deleteTelegramSettings = async (): Promise<{ success: boolean; message: string }> => {
   const response = await api.delete('/credentials/telegram');
   return response.data;
+};
+
+// ==================== 심볼 검색 ====================
+
+/** 심볼 검색 결과 */
+export interface SymbolSearchResult {
+  ticker: string;
+  name: string;
+  market: string;
+  yahooSymbol: string | null;
+}
+
+/** 심볼 검색 응답 */
+export interface SymbolSearchResponse {
+  results: SymbolSearchResult[];
+  total: number;
+}
+
+/**
+ * 심볼/회사명 검색
+ * @param query 검색어 (티커 또는 회사명)
+ * @param limit 최대 결과 수 (기본값: 10)
+ */
+export const searchSymbols = async (query: string, limit: number = 10): Promise<SymbolSearchResult[]> => {
+  if (!query.trim()) return [];
+
+  const params = new URLSearchParams({ q: query, limit: limit.toString() });
+  const response = await api.get(`/dataset/search?${params}`);
+  return response.data?.results || [];
 };
 
 // ==================== 인증 ====================

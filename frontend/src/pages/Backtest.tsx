@@ -1,8 +1,8 @@
-import { createSignal, createResource, createEffect, For, Show } from 'solid-js'
+import { createSignal, createResource, createEffect, For, Show, createMemo } from 'solid-js'
 import { useSearchParams } from '@solidjs/router'
-import { Play, Calendar, TrendingUp, TrendingDown, ChartBar, Settings2, RefreshCw, AlertCircle, Info, X, ChevronDown, ChevronUp } from 'lucide-solid'
-import { EquityCurve, DrawdownChart } from '../components/charts'
-import type { EquityDataPoint, DrawdownDataPoint, ChartSyncState } from '../components/charts'
+import { Play, Calendar, TrendingUp, TrendingDown, ChartBar, Settings2, RefreshCw, AlertCircle, Info, X, ChevronDown, ChevronUp, LineChart } from 'lucide-solid'
+import { EquityCurve, DrawdownChart, SyncedChartPanel } from '../components/charts'
+import type { EquityDataPoint, DrawdownDataPoint, ChartSyncState, CandlestickDataPoint, TradeMarker } from '../components/charts'
 import {
   runBacktest,
   runMultiBacktest,
@@ -31,6 +31,120 @@ function formatPercent(value: string | number): string {
   const num = typeof value === 'string' ? parseFloat(value) : value
   const sign = num >= 0 ? '+' : ''
   return `${sign}${num.toFixed(2)}%`
+}
+
+// API 기본 URL
+const API_BASE = '/api/v1'
+
+// 캔들 데이터 타입
+interface CandleItem {
+  time: string
+  open: string
+  high: string
+  low: string
+  close: string
+  volume: string
+}
+
+interface CandleDataResponse {
+  symbol: string
+  timeframe: string
+  candles: CandleItem[]
+  totalCount: number
+}
+
+// 날짜 간 일수 계산
+function daysBetween(startDate: string, endDate: string): number {
+  const start = new Date(startDate)
+  const end = new Date(endDate)
+  const diffTime = Math.abs(end.getTime() - start.getTime())
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1 // +1 for inclusive
+}
+
+// 캔들 데이터 조회 (백테스트 기간에 해당하는 데이터)
+async function fetchCandlesForBacktest(
+  symbol: string,
+  startDate: string,
+  endDate: string
+): Promise<CandleDataResponse | null> {
+  try {
+    // 실제 기간만큼 요청 (여유 있게 20% 추가)
+    const days = daysBetween(startDate, endDate)
+    const limit = Math.ceil(days * 1.2)
+
+    const params = new URLSearchParams({
+      timeframe: '1d',
+      limit: limit.toString(),
+      sortBy: 'time',
+      sortOrder: 'asc',
+    })
+    const res = await fetch(`${API_BASE}/dataset/${encodeURIComponent(symbol)}?${params}`)
+    if (!res.ok) return null
+    const data: CandleDataResponse = await res.json()
+
+    // 백테스트 기간에 해당하는 캔들만 필터링
+    const filtered = data.candles.filter(c => {
+      const date = c.time.split(' ')[0]
+      return date >= startDate && date <= endDate
+    })
+
+    return { ...data, candles: filtered, totalCount: filtered.length }
+  } catch {
+    return null
+  }
+}
+
+// 캔들 데이터를 차트용 형식으로 변환
+function convertCandlesToChartData(candles: CandleItem[]): CandlestickDataPoint[] {
+  const uniqueMap = new Map<string, CandlestickDataPoint>()
+
+  candles.forEach(c => {
+    const timeKey = c.time.split(' ')[0] // 일봉 기준 "YYYY-MM-DD"
+    uniqueMap.set(timeKey, {
+      time: timeKey,
+      open: parseFloat(c.open),
+      high: parseFloat(c.high),
+      low: parseFloat(c.low),
+      close: parseFloat(c.close),
+    })
+  })
+
+  return Array.from(uniqueMap.values()).sort((a, b) =>
+    (a.time as string).localeCompare(b.time as string)
+  )
+}
+
+// 백테스트 거래 내역을 차트 마커로 변환
+function convertTradesToMarkers(trades: BacktestResult['trades']): TradeMarker[] {
+  const markers: TradeMarker[] = []
+
+  for (const trade of trades) {
+    // entry_date가 없으면 건너뛰기
+    if (!trade.entry_date) continue
+
+    // 진입 마커
+    markers.push({
+      time: trade.entry_date.split(' ')[0],
+      type: trade.side === 'Buy' ? 'buy' : 'sell',
+      price: parseFloat(trade.entry_price),
+      label: trade.side === 'Buy' ? '매수' : '매도',
+    })
+
+    // 청산 마커
+    if (trade.exit_date) {
+      markers.push({
+        time: trade.exit_date.split(' ')[0],
+        type: trade.side === 'Buy' ? 'sell' : 'buy', // 청산은 반대 방향
+        price: parseFloat(trade.exit_price),
+        label: '청산',
+      })
+    }
+  }
+
+  // 시간순 정렬
+  return markers.sort((a, b) =>
+    (a.time as string).localeCompare(b.time as string)
+  )
 }
 
 // 자산 곡선 데이터를 차트 컴포넌트 형식으로 변환 (시간순 정렬 + 중복 제거 필수)
@@ -111,6 +225,37 @@ function BacktestResultCard(props: BacktestResultCardProps) {
   const [isExpanded, setIsExpanded] = createSignal(false)
   // 차트 동기화 state
   const [chartSyncState, setChartSyncState] = createSignal<ChartSyncState | null>(null)
+
+  // 가격 차트 데이터
+  const [candleData, setCandleData] = createSignal<CandlestickDataPoint[]>([])
+  const [isLoadingCandles, setIsLoadingCandles] = createSignal(false)
+  const [showPriceChart, setShowPriceChart] = createSignal(false)
+
+  // 매매 마커
+  const tradeMarkers = createMemo(() => convertTradesToMarkers(props.result.trades))
+
+  // 가격 차트 데이터 로드
+  const loadCandleData = async () => {
+    if (candleData().length > 0 || isLoadingCandles()) return
+
+    setIsLoadingCandles(true)
+    try {
+      // 첫 번째 심볼만 사용 (다중 심볼인 경우)
+      const symbol = props.result.symbol.split(',')[0].trim()
+      const data = await fetchCandlesForBacktest(
+        symbol,
+        props.result.start_date,
+        props.result.end_date
+      )
+      if (data) {
+        setCandleData(convertCandlesToChartData(data.candles))
+      }
+    } catch (err) {
+      console.error('캔들 데이터 로드 실패:', err)
+    } finally {
+      setIsLoadingCandles(false)
+    }
+  }
 
   const equityCurve = () => convertEquityCurve(props.result)
   const drawdownCurve = () => convertDrawdownCurve(props.result)
@@ -369,6 +514,48 @@ function BacktestResultCard(props: BacktestResultCardProps) {
               </div>
             </div>
           </details>
+
+          {/* 가격 차트 + 매매 태그 (접이식) */}
+          <Show when={props.result.trades.length > 0}>
+            <details
+              class="mt-4"
+              onToggle={(e) => {
+                if ((e.target as HTMLDetailsElement).open) {
+                  setShowPriceChart(true)
+                  loadCandleData()
+                }
+              }}
+            >
+              <summary class="cursor-pointer text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex items-center gap-2">
+                <LineChart class="w-4 h-4" />
+                가격 차트 + 매매 태그
+              </summary>
+              <div class="mt-3">
+                <Show
+                  when={!isLoadingCandles() && candleData().length > 0}
+                  fallback={
+                    <div class="h-[280px] flex items-center justify-center text-[var(--color-text-muted)]">
+                      {isLoadingCandles() ? (
+                        <div class="flex items-center gap-2">
+                          <RefreshCw class="w-5 h-5 animate-spin" />
+                          <span>차트 데이터 로딩 중...</span>
+                        </div>
+                      ) : (
+                        <span>차트 데이터가 없습니다 (데이터셋을 먼저 다운로드하세요)</span>
+                      )}
+                    </div>
+                  }
+                >
+                  <SyncedChartPanel
+                    data={candleData()}
+                    type="candlestick"
+                    mainHeight={240}
+                    markers={tradeMarkers()}
+                  />
+                </Show>
+              </div>
+            </details>
+          </Show>
 
           {/* 자산 곡선 & 드로우다운 차트 (동기화됨) */}
           <Show when={equityCurve().length > 0}>

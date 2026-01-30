@@ -405,6 +405,8 @@ pub struct SimulationStatusResponse {
     pub started_at: Option<DateTime<Utc>>,
     /// 시뮬레이션 속도
     pub speed: f64,
+    /// 현재 시뮬레이션 시간 (배속 적용된 가상 시간)
+    pub current_simulation_time: Option<DateTime<Utc>>,
 }
 
 /// 가상 주문 요청
@@ -609,6 +611,19 @@ pub async fn get_simulation_status(
         Decimal::ZERO
     };
 
+    // 현재 시뮬레이션 시간 계산 (배속 적용)
+    // current_simulation_time = started_at + (now - started_at) * speed
+    let current_simulation_time = if engine.state == SimulationState::Running {
+        engine.started_at.map(|start| {
+            let now = Utc::now();
+            let elapsed_real_ms = (now - start).num_milliseconds();
+            let elapsed_sim_ms = (elapsed_real_ms as f64 * engine.speed) as i64;
+            start + chrono::Duration::milliseconds(elapsed_sim_ms)
+        })
+    } else {
+        None
+    };
+
     Json(SimulationStatusResponse {
         state: engine.state,
         strategy_id: engine.strategy_id.clone(),
@@ -622,6 +637,7 @@ pub async fn get_simulation_status(
         trade_count: engine.trades.len(),
         started_at: engine.started_at,
         speed: engine.speed,
+        current_simulation_time,
     })
 }
 

@@ -1,5 +1,5 @@
 export { PriceChart } from './PriceChart'
-export type { CandlestickDataPoint, LineDataPoint, IndicatorOverlay } from './PriceChart'
+export type { CandlestickDataPoint, LineDataPoint, IndicatorOverlay, TradeMarker, TradeMarkerType } from './PriceChart'
 
 export { SubPriceChart } from './SubPriceChart'
 export type { SeparateIndicatorData, IndicatorSeriesData } from './SubPriceChart'
@@ -15,3 +15,4 @@ export type { MetricDataPoint, MetricSeries } from './MetricsChart'
 
 export { PortfolioEquityChart } from './PortfolioEquityChart'
 export { AnalyticsDashboard } from './AnalyticsDashboard'
+export { SyncedChartPanel } from './SyncedChartPanel'

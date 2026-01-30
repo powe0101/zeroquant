@@ -238,38 +238,51 @@ impl OhlcvCache {
         let tf_str = timeframe_to_string(timeframe);
         let mut inserted = 0;
 
-        // 청크 단위로 삽입 (성능 최적화)
+        // UNNEST 패턴으로 일괄 삽입 (N+1 쿼리 문제 해결)
         for chunk in klines.chunks(500) {
-            for kline in chunk {
-                let result = sqlx::query(
-                    r#"
-                    INSERT INTO ohlcv
-                        (symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-                    ON CONFLICT (symbol, timeframe, open_time) DO UPDATE SET
-                        high = GREATEST(ohlcv.high, EXCLUDED.high),
-                        low = LEAST(ohlcv.low, EXCLUDED.low),
-                        close = EXCLUDED.close,
-                        volume = EXCLUDED.volume,
-                        close_time = EXCLUDED.close_time,
-                        fetched_at = NOW()
-                    "#,
-                )
-                .bind(symbol)
-                .bind(&tf_str)
-                .bind(kline.open_time)
-                .bind(kline.open)
-                .bind(kline.high)
-                .bind(kline.low)
-                .bind(kline.close)
-                .bind(kline.volume)
-                .bind(kline.close_time)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| DataError::InsertError(e.to_string()))?;
+            // 각 컬럼에 대한 배열 생성
+            let symbols: Vec<&str> = chunk.iter().map(|_| symbol).collect();
+            let timeframes: Vec<&str> = chunk.iter().map(|_| tf_str.as_str()).collect();
+            let open_times: Vec<DateTime<Utc>> = chunk.iter().map(|k| k.open_time).collect();
+            let opens: Vec<Decimal> = chunk.iter().map(|k| k.open).collect();
+            let highs: Vec<Decimal> = chunk.iter().map(|k| k.high).collect();
+            let lows: Vec<Decimal> = chunk.iter().map(|k| k.low).collect();
+            let closes: Vec<Decimal> = chunk.iter().map(|k| k.close).collect();
+            let volumes: Vec<Decimal> = chunk.iter().map(|k| k.volume).collect();
+            let close_times: Vec<DateTime<Utc>> = chunk.iter().map(|k| k.close_time).collect();
 
-                inserted += result.rows_affected() as usize;
-            }
+            let result = sqlx::query(
+                r#"
+                INSERT INTO ohlcv
+                    (symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at)
+                SELECT * FROM UNNEST(
+                    $1::text[], $2::text[], $3::timestamptz[],
+                    $4::numeric[], $5::numeric[], $6::numeric[], $7::numeric[], $8::numeric[],
+                    $9::timestamptz[]
+                ), NOW()
+                ON CONFLICT (symbol, timeframe, open_time) DO UPDATE SET
+                    high = GREATEST(ohlcv.high, EXCLUDED.high),
+                    low = LEAST(ohlcv.low, EXCLUDED.low),
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    close_time = EXCLUDED.close_time,
+                    fetched_at = NOW()
+                "#,
+            )
+            .bind(&symbols)
+            .bind(&timeframes)
+            .bind(&open_times)
+            .bind(&opens)
+            .bind(&highs)
+            .bind(&lows)
+            .bind(&closes)
+            .bind(&volumes)
+            .bind(&close_times)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| DataError::InsertError(e.to_string()))?;
+
+            inserted += result.rows_affected() as usize;
         }
 
         info!(

@@ -3,6 +3,7 @@
 //! Handles database operations for storing and retrieving trading strategies.
 
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -21,6 +22,10 @@ pub struct StrategyRecord {
     pub is_active: bool,
     pub config: Value,
     pub risk_limits: Value,
+    /// Capital allocated to this strategy (NULL = use full account balance)
+    pub allocated_capital: Option<Decimal>,
+    /// Risk profile: conservative, default, aggressive, or custom
+    pub risk_profile: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_started_at: Option<DateTime<Utc>>,
@@ -38,6 +43,12 @@ pub struct CreateStrategyInput {
     pub market: String,
     pub timeframe: String,
     pub config: Value,
+    /// Risk configuration for this strategy (optional)
+    pub risk_config: Option<Value>,
+    /// Capital allocated to this strategy (optional)
+    pub allocated_capital: Option<Decimal>,
+    /// Risk profile: conservative, default, aggressive, or custom
+    pub risk_profile: Option<String>,
 }
 
 /// Strategy repository for database operations.
@@ -47,11 +58,13 @@ impl StrategyRepository {
     /// Save a new strategy to the database.
     pub async fn create(pool: &PgPool, input: CreateStrategyInput) -> Result<StrategyRecord, sqlx::Error> {
         let symbols_json = serde_json::to_value(&input.symbols).unwrap_or(Value::Array(vec![]));
+        let risk_limits = input.risk_config.unwrap_or_else(|| serde_json::json!({}));
+        let risk_profile = input.risk_profile.unwrap_or_else(|| "default".to_string());
 
         let record = sqlx::query_as::<_, StrategyRecord>(
             r#"
-            INSERT INTO strategies (id, name, description, strategy_type, symbols, market, timeframe, config, is_active)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
+            INSERT INTO strategies (id, name, description, strategy_type, symbols, market, timeframe, config, risk_limits, allocated_capital, risk_profile, is_active)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false)
             RETURNING *
             "#
         )
@@ -63,6 +76,9 @@ impl StrategyRepository {
         .bind(&input.market)
         .bind(&input.timeframe)
         .bind(&input.config)
+        .bind(&risk_limits)
+        .bind(&input.allocated_capital)
+        .bind(&risk_profile)
         .fetch_one(pool)
         .await?;
 
@@ -162,6 +178,86 @@ impl StrategyRepository {
         .await?;
 
         Ok(result.0)
+    }
+
+    /// Update strategy risk configuration.
+    pub async fn update_risk_config(
+        pool: &PgPool,
+        id: &str,
+        risk_config: Value,
+        risk_profile: Option<&str>,
+    ) -> Result<StrategyRecord, sqlx::Error> {
+        let profile = risk_profile.unwrap_or("custom");
+
+        let record = sqlx::query_as::<_, StrategyRecord>(
+            r#"
+            UPDATE strategies
+            SET risk_limits = $2, risk_profile = $3, updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            "#
+        )
+        .bind(id)
+        .bind(risk_config)
+        .bind(profile)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(record)
+    }
+
+    /// Update strategy allocated capital.
+    pub async fn update_allocated_capital(
+        pool: &PgPool,
+        id: &str,
+        allocated_capital: Option<Decimal>,
+    ) -> Result<StrategyRecord, sqlx::Error> {
+        let record = sqlx::query_as::<_, StrategyRecord>(
+            r#"
+            UPDATE strategies
+            SET allocated_capital = $2, updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            "#
+        )
+        .bind(id)
+        .bind(allocated_capital)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(record)
+    }
+
+    /// Update strategy risk settings (both risk config and allocated capital).
+    pub async fn update_risk_settings(
+        pool: &PgPool,
+        id: &str,
+        risk_config: Option<Value>,
+        allocated_capital: Option<Decimal>,
+        risk_profile: Option<&str>,
+    ) -> Result<StrategyRecord, sqlx::Error> {
+        let profile = risk_profile.unwrap_or("custom");
+
+        let record = sqlx::query_as::<_, StrategyRecord>(
+            r#"
+            UPDATE strategies
+            SET
+                risk_limits = COALESCE($2, risk_limits),
+                allocated_capital = $3,
+                risk_profile = $4,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            "#
+        )
+        .bind(id)
+        .bind(risk_config)
+        .bind(allocated_capital)
+        .bind(profile)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(record)
     }
 
     /// Load all strategies from the database and register them with the engine.

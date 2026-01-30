@@ -16,10 +16,11 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::Utc;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
@@ -78,6 +79,12 @@ pub struct StrategyListItem {
     /// 거래 횟수
     #[serde(rename = "tradesCount")]
     pub trades_count: u64,
+    /// 리스크 프로필 (conservative, default, aggressive, custom)
+    #[serde(rename = "riskProfile")]
+    pub risk_profile: Option<String>,
+    /// 할당 자본
+    #[serde(rename = "allocatedCapital")]
+    pub allocated_capital: Option<f64>,
 }
 
 /// 전략 상세 응답.
@@ -114,6 +121,51 @@ pub struct UpdateConfigRequest {
     pub config: Value,
 }
 
+/// 리스크 설정 변경 요청.
+#[derive(Debug, Deserialize)]
+pub struct UpdateRiskSettingsRequest {
+    /// 리스크 설정 (RiskConfig 형식)
+    #[serde(default)]
+    pub risk_config: Option<Value>,
+    /// 할당 자본 (NULL이면 전체 계좌 잔고 사용)
+    #[serde(default)]
+    pub allocated_capital: Option<f64>,
+    /// 리스크 프로필 (conservative, default, aggressive, custom)
+    #[serde(default)]
+    pub risk_profile: Option<String>,
+}
+
+/// 전략 복사 요청.
+#[derive(Debug, Deserialize)]
+pub struct CloneStrategyRequest {
+    /// 새 전략 이름
+    pub new_name: String,
+    /// 파라미터 오버라이드 (옵션)
+    #[serde(default)]
+    pub override_params: Option<Value>,
+    /// 리스크 설정 오버라이드 (옵션)
+    #[serde(default)]
+    pub override_risk_config: Option<Value>,
+    /// 할당 자본 오버라이드 (옵션)
+    #[serde(default)]
+    pub override_allocated_capital: Option<f64>,
+}
+
+/// 전략 복사 응답.
+#[derive(Debug, Serialize)]
+pub struct CloneStrategyResponse {
+    /// 성공 여부
+    pub success: bool,
+    /// 원본 전략 ID
+    pub source_id: String,
+    /// 생성된 전략 ID
+    pub new_id: String,
+    /// 새 전략 이름
+    pub new_name: String,
+    /// 메시지
+    pub message: String,
+}
+
 /// 전략 생성 요청.
 #[derive(Debug, Deserialize)]
 pub struct CreateStrategyRequest {
@@ -123,6 +175,15 @@ pub struct CreateStrategyRequest {
     pub name: Option<String>,
     /// 전략 파라미터
     pub parameters: Value,
+    /// 리스크 설정 (옵션, RiskConfig 형식)
+    #[serde(default)]
+    pub risk_config: Option<Value>,
+    /// 할당 자본 (옵션, NULL이면 전체 계좌 잔고 사용)
+    #[serde(default)]
+    pub allocated_capital: Option<f64>,
+    /// 리스크 프로필 (conservative, default, aggressive, custom)
+    #[serde(default)]
+    pub risk_profile: Option<String>,
 }
 
 /// 전략 생성 응답.
@@ -365,6 +426,9 @@ pub async fn create_strategy(
         "US".to_string()
     };
 
+    // 할당 자본을 Decimal로 변환
+    let allocated_capital = request.allocated_capital.map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO));
+
     // 데이터베이스에 저장 (DB가 연결된 경우)
     if let Some(ref pool) = state.db_pool {
         let input = CreateStrategyInput {
@@ -376,6 +440,9 @@ pub async fn create_strategy(
             market: market.clone(),
             timeframe: timeframe.clone(),
             config: request.parameters.clone(),
+            risk_config: request.risk_config.clone(),
+            allocated_capital,
+            risk_profile: request.risk_profile.clone(),
         };
 
         StrategyRepository::create(pool, input).await.map_err(|e| {
@@ -517,6 +584,8 @@ pub async fn list_strategies(
             pnl: 0.0, // 향후 실제 PnL 계산 연동
             win_rate: 0.0,
             trades_count: status.stats.signals_generated, // 신호 수를 거래 수로 사용
+            risk_profile: None, // 향후 DB에서 조회하여 연동
+            allocated_capital: None, // 향후 DB에서 조회하여 연동
         });
     }
 
@@ -665,6 +734,14 @@ pub async fn update_config(
 
     match engine.update_strategy_config(&id, request.config.clone()).await {
         Ok(()) => {
+            // DB에도 설정 저장 (DB가 연결된 경우)
+            if let Some(pool) = state.db_pool.as_ref() {
+                if let Err(e) = StrategyRepository::update_config(pool, &id, request.config.clone()).await {
+                    tracing::warn!(strategy_id = %id, error = %e, "Failed to persist strategy config to DB");
+                    // DB 저장 실패해도 메모리 업데이트는 성공했으므로 계속 진행
+                }
+            }
+
             // WebSocket 브로드캐스트: 설정 변경 알림
             state.broadcast(ServerMessage::StrategyUpdate(StrategyUpdateData {
                 strategy_id: id.clone(),
@@ -684,6 +761,192 @@ pub async fn update_config(
         }
         Err(err) => Err(engine_error_to_response(err)),
     }
+}
+
+/// 전략 리스크 설정 변경.
+///
+/// PUT /api/v1/strategies/:id/risk
+pub async fn update_risk_settings(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateRiskSettingsRequest>,
+) -> Result<Json<StrategyActionResponse>, (StatusCode, Json<ApiError>)> {
+    // DB가 연결된 경우에만 동작
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new("DB_NOT_CONNECTED", "Database not connected")),
+        )
+    })?;
+
+    // 할당 자본을 Decimal로 변환
+    let allocated_capital = request.allocated_capital.map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO));
+
+    // DB에 리스크 설정 업데이트
+    StrategyRepository::update_risk_settings(
+        pool,
+        &id,
+        request.risk_config.clone(),
+        allocated_capital,
+        request.risk_profile.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to update risk settings: {:?}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new("DB_ERROR", format!("Failed to update risk settings: {}", e))),
+        )
+    })?;
+
+    // 전략 이름 가져오기 (브로드캐스트용)
+    let engine = state.strategy_engine.read().await;
+    let (strategy_name, is_running) = engine
+        .get_strategy_status(&id)
+        .await
+        .map(|s| (s.name, s.running))
+        .unwrap_or_else(|_| (id.clone(), false));
+
+    // WebSocket 브로드캐스트: 리스크 설정 변경 알림
+    state.broadcast(ServerMessage::StrategyUpdate(StrategyUpdateData {
+        strategy_id: id.clone(),
+        name: strategy_name,
+        running: is_running,
+        event: "risk_updated".to_string(),
+        data: Some(serde_json::json!({
+            "risk_profile": request.risk_profile,
+            "allocated_capital": request.allocated_capital,
+        })),
+        timestamp: Utc::now().timestamp_millis(),
+    }));
+
+    Ok(Json(StrategyActionResponse {
+        success: true,
+        strategy_id: id.clone(),
+        action: "update_risk".to_string(),
+        message: format!("Strategy '{}' risk settings updated successfully", id),
+    }))
+}
+
+/// 전략 복사 (파생 전략 생성).
+///
+/// POST /api/v1/strategies/:id/clone
+pub async fn clone_strategy(
+    State(state): State<Arc<AppState>>,
+    Path(source_id): Path<String>,
+    Json(request): Json<CloneStrategyRequest>,
+) -> Result<Json<CloneStrategyResponse>, (StatusCode, Json<ApiError>)> {
+    // DB가 연결된 경우에만 동작
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new("DB_NOT_CONNECTED", "Database not connected")),
+        )
+    })?;
+
+    // 원본 전략 조회
+    let source = StrategyRepository::get_by_id(pool, &source_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", format!("Failed to get source strategy: {}", e))),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiError::new("STRATEGY_NOT_FOUND", format!("Strategy '{}' not found", source_id))),
+            )
+        })?;
+
+    // 전략 타입 확인
+    let strategy_type = source.strategy_type.clone().unwrap_or_else(|| "unknown".to_string());
+
+    // 새 전략 ID 생성
+    let new_id = format!("{}_{}", strategy_type, Uuid::new_v4().to_string()[..8].to_string());
+
+    // 파라미터 병합 (원본 + 오버라이드)
+    let merged_config = if let Some(override_params) = request.override_params {
+        let mut base = source.config.clone();
+        if let (Some(base_obj), Some(override_obj)) = (base.as_object_mut(), override_params.as_object()) {
+            for (key, value) in override_obj {
+                base_obj.insert(key.clone(), value.clone());
+            }
+        }
+        base
+    } else {
+        source.config.clone()
+    };
+
+    // 리스크 설정 병합
+    let merged_risk = request.override_risk_config.unwrap_or(source.risk_limits.clone());
+
+    // 할당 자본 설정
+    let allocated_capital = request
+        .override_allocated_capital
+        .map(|v| Decimal::try_from(v).unwrap_or(Decimal::ZERO))
+        .or(source.allocated_capital);
+
+    // 심볼 목록 추출
+    let symbols: Vec<String> = source
+        .symbols
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    // 새 전략 생성
+    let input = CreateStrategyInput {
+        id: new_id.clone(),
+        name: request.new_name.clone(),
+        description: source.description.clone(),
+        strategy_type: strategy_type.clone(),
+        symbols,
+        market: source.market.clone().unwrap_or_else(|| "KR".to_string()),
+        timeframe: source.timeframe.clone().unwrap_or_else(|| "1d".to_string()),
+        config: merged_config.clone(),
+        risk_config: Some(merged_risk),
+        allocated_capital,
+        risk_profile: source.risk_profile.clone(),
+    };
+
+    StrategyRepository::create(pool, input).await.map_err(|e| {
+        tracing::error!("Failed to create cloned strategy: {:?}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new("DB_ERROR", format!("Failed to create cloned strategy: {}", e))),
+        )
+    })?;
+
+    // 전략 인스턴스 생성 및 엔진에 등록
+    if let Ok(strategy) = create_strategy_instance(&strategy_type) {
+        let engine = state.strategy_engine.read().await;
+        let _ = engine
+            .register_strategy(&new_id, strategy, merged_config, Some(request.new_name.clone()))
+            .await;
+    }
+
+    // WebSocket 브로드캐스트: 전략 복사 알림
+    state.broadcast(ServerMessage::StrategyUpdate(StrategyUpdateData {
+        strategy_id: new_id.clone(),
+        name: request.new_name.clone(),
+        running: false,
+        event: "cloned".to_string(),
+        data: Some(serde_json::json!({
+            "source_id": source_id,
+            "strategy_type": strategy_type,
+        })),
+        timestamp: Utc::now().timestamp_millis(),
+    }));
+
+    Ok(Json(CloneStrategyResponse {
+        success: true,
+        source_id: source_id.clone(),
+        new_id: new_id.clone(),
+        new_name: request.new_name,
+        message: format!("Strategy '{}' cloned to '{}' successfully", source_id, new_id),
+    }))
 }
 
 /// 엔진 통계 조회.
@@ -711,6 +974,8 @@ pub fn strategies_router() -> Router<Arc<AppState>> {
         .route("/:id/start", post(start_strategy))
         .route("/:id/stop", post(stop_strategy))
         .route("/:id/config", put(update_config))
+        .route("/:id/risk", put(update_risk_settings))
+        .route("/:id/clone", post(clone_strategy))
 }
 
 // ==================== 테스트 ====================
