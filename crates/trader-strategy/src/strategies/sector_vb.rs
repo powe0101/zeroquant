@@ -487,7 +487,8 @@ impl Strategy for SectorVbStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (XLK/USD -> XLK)
+        let symbol_str = data.symbol.base.clone();
 
         // 등록된 섹터인지 확인
         if !self.sector_data.contains_key(&symbol_str) {

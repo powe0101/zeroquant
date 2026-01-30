@@ -529,7 +529,8 @@ impl Strategy for SectorMomentumStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (XLK/USD -> XLK)
+        let symbol_str = data.symbol.base.clone();
 
         if !self.sector_data.contains_key(&symbol_str) {
             return Ok(vec![]);
@@ -560,7 +561,8 @@ impl Strategy for SectorMomentumStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol_str = order.symbol.to_string();
+        // base 심볼만 추출 (XLK/USD -> XLK)
+        let symbol_str = order.symbol.base.clone();
 
         if let Some(sector) = self.sector_data.get_mut(&symbol_str) {
             match order.side {

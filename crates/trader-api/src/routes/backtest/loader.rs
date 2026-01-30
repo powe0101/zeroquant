@@ -185,6 +185,32 @@ pub fn expand_strategy_symbols(strategy_id: &str, user_symbols: &[String]) -> Ve
         "haa" => &["SPY", "TLT", "VEA", "VWO", "TIP", "BIL", "IEF"],
         "xaa" => &["SPY", "QQQ", "TLT", "IEF", "VEA", "VWO", "PDBC", "VNQ"],
         "stock_rotation" => &[], // 사용자 지정 심볼만 사용
+        // 올웨더 US: SPY, TLT, IEF, GLD, PDBC, IYK
+        "all_weather" | "all_weather_us" => &["SPY", "TLT", "IEF", "GLD", "PDBC", "IYK"],
+        // 올웨더 KR: 360750, 294400, 148070, 305080, 319640, 261240
+        "all_weather_kr" => &["360750", "294400", "148070", "305080", "319640", "261240"],
+        // 스노우 US: UPRO, TLT, BIL, TIP
+        "snow" | "snow_us" => &["UPRO", "TLT", "BIL", "TIP"],
+        // 스노우 KR: 122630, 148070, 130730
+        "snow_kr" => &["122630", "148070", "130730"],
+        // BAA: 카나리아(SPY, VEA, VWO, BND) + 공격(QQQ, IWM) + 방어(TIP, DBC, BIL, IEF, TLT)
+        "baa" => &[
+            "SPY", "VEA", "VWO", "BND", "QQQ", "IWM", "TIP", "DBC", "BIL", "IEF", "TLT",
+        ],
+        // 섹터 모멘텀 US
+        "sector_momentum" => &[
+            "XLK", "XLF", "XLV", "XLY", "XLP", "XLE", "XLI", "XLB", "XLU", "XLRE", "XLC",
+        ],
+        // 듀얼 모멘텀: 한국 주식 + 미국 채권
+        "dual_momentum" => &["069500", "229200", "TLT", "IEF", "BIL"],
+        // 연금 자동화
+        "pension_bot" => &[
+            "448290", "379780", "294400", "305080", "148070", "319640", "130730",
+        ],
+        // 시총 TOP
+        "market_cap_top" => &[
+            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "JPM",
+        ],
         _ => &[],
     };
 

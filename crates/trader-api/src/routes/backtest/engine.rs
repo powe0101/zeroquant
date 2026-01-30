@@ -638,6 +638,112 @@ pub async fn run_multi_strategy_backtest(
                 .await
                 .map_err(|e| e.to_string())
         }
+        // 추가 다중 자산 전략들
+        "all_weather" | "all_weather_us" | "all_weather_kr" => {
+            let mut strategy = AllWeatherStrategy::new();
+            let default_cfg =
+                serde_json::to_value(AllWeatherConfig::default()).map_err(|e| e.to_string())?;
+            let default_cfg = inject_common_params(default_cfg);
+            let strategy_config = merge_params(default_cfg, params);
+            strategy
+                .initialize(strategy_config)
+                .await
+                .map_err(|e| e.to_string())?;
+            engine
+                .run(&mut strategy, merged_klines)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "snow" | "snow_us" | "snow_kr" => {
+            let mut strategy = SnowStrategy::new();
+            let default_cfg =
+                serde_json::to_value(SnowConfig::default()).map_err(|e| e.to_string())?;
+            let default_cfg = inject_common_params(default_cfg);
+            let strategy_config = merge_params(default_cfg, params);
+            strategy
+                .initialize(strategy_config)
+                .await
+                .map_err(|e| e.to_string())?;
+            engine
+                .run(&mut strategy, merged_klines)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "baa" => {
+            let mut strategy = BaaStrategy::new();
+            let default_cfg =
+                serde_json::to_value(BaaConfig::default()).map_err(|e| e.to_string())?;
+            let default_cfg = inject_common_params(default_cfg);
+            let strategy_config = merge_params(default_cfg, params);
+            strategy
+                .initialize(strategy_config)
+                .await
+                .map_err(|e| e.to_string())?;
+            engine
+                .run(&mut strategy, merged_klines)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "sector_momentum" => {
+            let mut strategy = SectorMomentumStrategy::new();
+            let default_cfg =
+                serde_json::to_value(SectorMomentumConfig::default()).map_err(|e| e.to_string())?;
+            let default_cfg = inject_common_params(default_cfg);
+            let strategy_config = merge_params(default_cfg, params);
+            strategy
+                .initialize(strategy_config)
+                .await
+                .map_err(|e| e.to_string())?;
+            engine
+                .run(&mut strategy, merged_klines)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "dual_momentum" => {
+            let mut strategy = DualMomentumStrategy::new();
+            let default_cfg =
+                serde_json::to_value(DualMomentumConfig::default()).map_err(|e| e.to_string())?;
+            let default_cfg = inject_common_params(default_cfg);
+            let strategy_config = merge_params(default_cfg, params);
+            strategy
+                .initialize(strategy_config)
+                .await
+                .map_err(|e| e.to_string())?;
+            engine
+                .run(&mut strategy, merged_klines)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "pension_bot" => {
+            let mut strategy = PensionBotStrategy::new();
+            let default_cfg =
+                serde_json::to_value(PensionBotConfig::default()).map_err(|e| e.to_string())?;
+            let default_cfg = inject_common_params(default_cfg);
+            let strategy_config = merge_params(default_cfg, params);
+            strategy
+                .initialize(strategy_config)
+                .await
+                .map_err(|e| e.to_string())?;
+            engine
+                .run(&mut strategy, merged_klines)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "market_cap_top" => {
+            let mut strategy = MarketCapTopStrategy::new();
+            let default_cfg =
+                serde_json::to_value(MarketCapTopConfig::default()).map_err(|e| e.to_string())?;
+            let default_cfg = inject_common_params(default_cfg);
+            let strategy_config = merge_params(default_cfg, params);
+            strategy
+                .initialize(strategy_config)
+                .await
+                .map_err(|e| e.to_string())?;
+            engine
+                .run(&mut strategy, merged_klines)
+                .await
+                .map_err(|e| e.to_string())
+        }
         _ => Err(format!(
             "지원하지 않는 다중 자산 전략입니다: {}",
             strategy_id

@@ -649,7 +649,8 @@ impl Strategy for KosdaqFireRainStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (229200/KRW -> 229200)
+        let symbol_str = data.symbol.base.clone();
 
         // 등록된 ETF인지 확인
         if !self.etf_data.contains_key(&symbol_str) {

@@ -599,7 +599,8 @@ impl Strategy for KospiBothSideStrategy {
             None => return Ok(vec![]),
         };
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (122630/KRW -> 122630)
+        let symbol_str = data.symbol.base.clone();
         let is_leverage = symbol_str == config.leverage_ticker;
         let is_inverse = symbol_str == config.inverse_ticker;
 

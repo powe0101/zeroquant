@@ -10,6 +10,7 @@ import {
   listBacktestResults,
   saveBacktestResult,
   deleteBacktestResult,
+  searchSymbols,
   MULTI_ASSET_STRATEGIES,
   type BacktestRequest,
   type BacktestMultiRequest,
@@ -119,21 +120,25 @@ function convertTradesToMarkers(trades: BacktestResult['trades']): TradeMarker[]
   const markers: TradeMarker[] = []
 
   for (const trade of trades) {
-    // entry_date가 없으면 건너뛰기
-    if (!trade.entry_date) continue
+    // entry_time 또는 entry_date 사용 (API 응답 필드명에 따라)
+    const entryTime = trade.entry_time || trade.entry_date
+    if (!entryTime) continue
 
-    // 진입 마커
+    // 진입 마커 (ISO 날짜 형식에서 날짜만 추출)
+    const entryDateStr = entryTime.split('T')[0]
     markers.push({
-      time: trade.entry_date.split(' ')[0],
+      time: entryDateStr,
       type: trade.side === 'Buy' ? 'buy' : 'sell',
       price: parseFloat(trade.entry_price),
       label: trade.side === 'Buy' ? '매수' : '매도',
     })
 
     // 청산 마커
-    if (trade.exit_date) {
+    const exitTime = trade.exit_time || trade.exit_date
+    if (exitTime) {
+      const exitDateStr = exitTime.split('T')[0]
       markers.push({
-        time: trade.exit_date.split(' ')[0],
+        time: exitDateStr,
         type: trade.side === 'Buy' ? 'sell' : 'buy', // 청산은 반대 방향
         price: parseFloat(trade.exit_price),
         label: '청산',
@@ -218,6 +223,7 @@ interface BacktestResultCardProps {
   strategies: Strategy[] | undefined
   index: number
   onDelete: (index: number) => void | Promise<void>
+  symbolDisplayName?: string  // 심볼 표시 이름 (예: "삼성전자 (005930)")
 }
 
 function BacktestResultCard(props: BacktestResultCardProps) {
@@ -313,7 +319,7 @@ function BacktestResultCard(props: BacktestResultCardProps) {
                 {props.strategies?.find((s: Strategy) => s.id === props.result.strategy_id)?.name || props.result.strategy_id}
               </h4>
               <div class="flex items-center gap-3 mt-1 text-sm text-[var(--color-text-muted)]">
-                <span>{props.result.symbol}</span>
+                <span>{props.symbolDisplayName || props.result.symbol}</span>
                 <span class="flex items-center gap-1">
                   <Calendar class="w-4 h-4" />
                   {props.result.start_date} ~ {props.result.end_date}
@@ -705,6 +711,52 @@ export function Backtest() {
   const [isRunning, setIsRunning] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
+  // 심볼 이름 캐시 (ticker -> name)
+  const [symbolNameCache, setSymbolNameCache] = createSignal<Map<string, string>>(new Map())
+
+  // 심볼 이름 조회 및 캐싱
+  const fetchSymbolName = async (ticker: string): Promise<string> => {
+    // 캐시에 있으면 반환
+    const cached = symbolNameCache().get(ticker)
+    if (cached) return cached
+
+    // API로 조회
+    try {
+      const results = await searchSymbols(ticker, 1)
+      if (results.length > 0 && results[0].ticker === ticker) {
+        const name = results[0].name
+        // 캐시에 저장
+        setSymbolNameCache(prev => {
+          const newMap = new Map(prev)
+          newMap.set(ticker, name)
+          return newMap
+        })
+        return name
+      }
+    } catch (err) {
+      console.warn(`심볼 이름 조회 실패: ${ticker}`, err)
+    }
+    return '' // 이름을 찾지 못하면 빈 문자열
+  }
+
+  // 심볼 표시 이름 반환 (캐시된 값 사용)
+  const getSymbolDisplayName = (ticker: string): string => {
+    const name = symbolNameCache().get(ticker)
+    return name ? `${name} (${ticker})` : ticker
+  }
+
+  // 결과가 로드될 때 심볼 이름 미리 캐싱
+  createEffect(() => {
+    const currentResults = results()
+    for (const result of currentResults) {
+      // 다중 심볼인 경우 첫 번째만 조회
+      const symbol = result.symbol.split(',')[0].trim()
+      if (!symbolNameCache().has(symbol)) {
+        fetchSymbolName(symbol) // 비동기로 캐싱 (화면 갱신 트리거)
+      }
+    }
+  })
+
   const handleRunBacktest = async (e: Event) => {
     e.preventDefault()
     setError(null)
@@ -985,7 +1037,21 @@ export function Backtest() {
           </h3>
           <Show when={results().length > 0}>
             <button
-              onClick={() => setResults([])}
+              onClick={async () => {
+                // DB에서 모든 결과 삭제
+                const currentResults = results()
+                for (const result of currentResults) {
+                  if (result.id) {
+                    try {
+                      await deleteBacktestResult(result.id)
+                    } catch (e) {
+                      console.error('결과 삭제 실패:', result.id, e)
+                    }
+                  }
+                }
+                // 로컬 상태 초기화
+                setResults([])
+              }}
               class="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex items-center gap-1"
             >
               <RefreshCw class="w-4 h-4" />
@@ -1011,6 +1077,7 @@ export function Backtest() {
                   result={result}
                   strategies={strategies()}
                   index={index()}
+                  symbolDisplayName={getSymbolDisplayName(result.symbol.split(',')[0].trim())}
                   onDelete={async (idx) => {
                     const target = results()[idx] as StoredBacktestResult
                     // DB에 저장된 결과라면 API 호출하여 삭제

@@ -492,7 +492,8 @@ impl Strategy for DualMomentumStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (SPY/USD -> SPY)
+        let symbol_str = data.symbol.base.clone();
 
         if !self.asset_data.contains_key(&symbol_str) {
             return Ok(vec![]);
@@ -523,7 +524,8 @@ impl Strategy for DualMomentumStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol_str = order.symbol.to_string();
+        // base 심볼만 추출 (SPY/USD -> SPY)
+        let symbol_str = order.symbol.base.clone();
 
         if let Some(asset) = self.asset_data.get_mut(&symbol_str) {
             match order.side {

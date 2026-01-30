@@ -484,7 +484,14 @@ impl BacktestEngine {
         }
 
         // 실행 가격 계산 (슬리피지 적용)
-        let base_price = signal.suggested_price.unwrap_or(kline.close);
+        // 다중 자산 전략에서는 신호 심볼과 현재 kline 심볼이 다를 수 있음
+        // 1. signal.suggested_price가 있으면 사용
+        // 2. current_prices에서 해당 심볼의 가격 사용
+        // 3. fallback: kline.close (단일 자산 전략)
+        let base_price = signal
+            .suggested_price
+            .or_else(|| self.current_prices.get(&key).copied())
+            .unwrap_or(kline.close);
         let slippage = base_price * self.config.slippage_rate;
         let execution_price = match signal.side {
             Side::Buy => base_price + slippage,  // 매수는 높은 가격
@@ -543,7 +550,14 @@ impl BacktestEngine {
         };
 
         // 실행 가격 계산 (슬리피지 적용)
-        let base_price = signal.suggested_price.unwrap_or(kline.close);
+        // 다중 자산 전략에서는 신호 심볼과 현재 kline 심볼이 다를 수 있음
+        // 1. signal.suggested_price가 있으면 사용
+        // 2. current_prices에서 해당 심볼의 가격 사용
+        // 3. fallback: kline.close (단일 자산 전략)
+        let base_price = signal
+            .suggested_price
+            .or_else(|| self.current_prices.get(&key).copied())
+            .unwrap_or(kline.close);
         let slippage = base_price * self.config.slippage_rate;
         let execution_price = match position.side {
             Side::Buy => base_price - slippage,  // 롱 청산은 낮은 가격

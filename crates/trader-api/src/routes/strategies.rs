@@ -31,10 +31,13 @@ use crate::state::AppState;
 use crate::websocket::{ServerMessage, StrategyUpdateData};
 use trader_strategy::{
     strategies::{
-        AllWeatherStrategy, BollingerStrategy, CandlePatternStrategy, GridStrategy,
-        HaaStrategy, InfinityBotStrategy, MagicSplitStrategy, MarketCapTopStrategy,
-        MarketInterestDayStrategy, RsiStrategy, SimplePowerStrategy, SmaStrategy,
-        SnowStrategy, StockRotationStrategy, TrailingStopStrategy,
+        AllWeatherStrategy, BaaStrategy, BollingerStrategy, CandlePatternStrategy,
+        DualMomentumStrategy, GridStrategy, HaaStrategy, InfinityBotStrategy,
+        KosdaqFireRainStrategy, KospiBothSideStrategy, MagicSplitStrategy,
+        MarketCapTopStrategy, MarketInterestDayStrategy, PensionBotStrategy,
+        RsiStrategy, SectorMomentumStrategy, SectorVbStrategy, SimplePowerStrategy,
+        SmallCapQuantStrategy, SmaStrategy, SnowStrategy, StockGuganStrategy,
+        StockRotationStrategy, TrailingStopStrategy, Us3xLeverageStrategy,
         VolatilityBreakoutStrategy, XaaStrategy,
     },
     EngineError, EngineStats, Strategy, StrategyStatus,
@@ -268,6 +271,17 @@ fn create_strategy_instance(strategy_type: &str) -> Result<Box<dyn Strategy>, St
         "all_weather" | "all_weather_us" | "all_weather_kr" => Ok(Box::new(AllWeatherStrategy::new())),
         "snow" | "snow_us" | "snow_kr" => Ok(Box::new(SnowStrategy::new())),
         "market_cap_top" => Ok(Box::new(MarketCapTopStrategy::new())),
+        // 3차 전략
+        "baa" => Ok(Box::new(BaaStrategy::new())),
+        "sector_momentum" => Ok(Box::new(SectorMomentumStrategy::new())),
+        "dual_momentum" => Ok(Box::new(DualMomentumStrategy::new())),
+        "small_cap_quant" => Ok(Box::new(SmallCapQuantStrategy::new())),
+        "pension_bot" | "pension" => Ok(Box::new(PensionBotStrategy::new())),
+        "sector_vb" | "sector_volatility" => Ok(Box::new(SectorVbStrategy::new())),
+        "kospi_bothside" | "kospi_both" => Ok(Box::new(KospiBothSideStrategy::new())),
+        "kosdaq_fire_rain" | "kosdaq_surge" => Ok(Box::new(KosdaqFireRainStrategy::new())),
+        "us_3x_leverage" | "us_leverage" => Ok(Box::new(Us3xLeverageStrategy::new())),
+        "stock_gugan" | "gugan" => Ok(Box::new(StockGuganStrategy::new())),
         _ => Err(format!("Unknown strategy type: {}", strategy_type)),
     }
 }
@@ -294,6 +308,17 @@ fn get_strategy_default_name(strategy_type: &str) -> &'static str {
         "all_weather" | "all_weather_us" | "all_weather_kr" => "올웨더",
         "snow" | "snow_us" | "snow_kr" => "스노우",
         "market_cap_top" => "시총 TOP",
+        // 3차 전략
+        "baa" => "BAA",
+        "sector_momentum" => "섹터 모멘텀",
+        "dual_momentum" => "듀얼 모멘텀",
+        "small_cap_quant" => "소형주 퀀트",
+        "pension_bot" | "pension" => "연금 자동화",
+        "sector_vb" | "sector_volatility" => "섹터 변동성 돌파",
+        "kospi_bothside" | "kospi_both" => "코스피 양방향",
+        "kosdaq_fire_rain" | "kosdaq_surge" => "코스닥 급등주",
+        "us_3x_leverage" | "us_leverage" => "미국 3배 레버리지",
+        "stock_gugan" | "gugan" => "주식 구간 매매",
         _ => "Unknown Strategy",
     }
 }
@@ -306,22 +331,32 @@ fn get_strategy_default_timeframe(strategy_type: &str) -> &'static str {
         "magic_split" | "split" => "1m",
         "infinity_bot" => "1m",
         "trailing_stop" => "1m",
+        "stock_gugan" | "gugan" => "1m",
         // 분봉 전략: 15m
         "rsi" | "rsi_mean_reversion" => "15m",
         "bollinger" | "bollinger_bands" => "15m",
         "sma" | "sma_crossover" | "ma_crossover" => "15m",
         "candle_pattern" => "15m",
+        "kospi_bothside" | "kospi_both" => "15m",
+        "kosdaq_fire_rain" | "kosdaq_surge" => "15m",
         // 일봉 전략: 1d
         "volatility_breakout" | "volatility" => "1d",
         "snow" | "snow_us" | "snow_kr" => "1d",
         "stock_rotation" | "rotation" => "1d",
         "market_interest_day" => "1d",
+        "sector_vb" | "sector_volatility" => "1d",
+        "us_3x_leverage" | "us_leverage" => "1d",
         // 자산배분 전략 (월 리밸런싱이지만 일봉 데이터 사용): 1d
         "simple_power" => "1d",
         "haa" => "1d",
         "xaa" => "1d",
         "all_weather" | "all_weather_us" | "all_weather_kr" => "1d",
         "market_cap_top" => "1d",
+        "baa" => "1d",
+        "sector_momentum" => "1d",
+        "dual_momentum" => "1d",
+        "small_cap_quant" => "1d",
+        "pension_bot" | "pension" => "1d",
         _ => "1d",
     }
 }
@@ -340,6 +375,7 @@ fn get_strategy_default_symbols(strategy_type: &str) -> Vec<String> {
         "infinity_bot" => vec![],
         "trailing_stop" => vec![],
         "market_interest_day" => vec![],
+        "stock_gugan" | "gugan" => vec![],
         // 자산배분 전략: 권장 심볼 목록
         "simple_power" => vec!["TQQQ", "SCHD", "PFIX", "TMF"].iter().map(|s| s.to_string()).collect(),
         "haa" => vec!["TIP", "SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "PDBC", "VNQ", "BIL"].iter().map(|s| s.to_string()).collect(),
@@ -350,6 +386,16 @@ fn get_strategy_default_symbols(strategy_type: &str) -> Vec<String> {
         "snow" | "snow_us" => vec!["TIP", "UPRO", "TLT", "BIL"].iter().map(|s| s.to_string()).collect(),
         "snow_kr" => vec!["140700", "122630", "148070", "272580"].iter().map(|s| s.to_string()).collect(),
         "market_cap_top" => vec!["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "JPM", "V"].iter().map(|s| s.to_string()).collect(),
+        // 3차 전략
+        "baa" => vec!["SPY", "VEA", "VWO", "BND", "QQQ", "IWM", "TIP", "DBC", "BIL", "IEF", "TLT"].iter().map(|s| s.to_string()).collect(),
+        "sector_momentum" => vec!["XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE"].iter().map(|s| s.to_string()).collect(),
+        "dual_momentum" => vec!["069500", "122630", "IEF", "TLT"].iter().map(|s| s.to_string()).collect(),
+        "small_cap_quant" => vec![],  // 동적으로 선정
+        "pension_bot" | "pension" => vec!["SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "TIP", "BIL"].iter().map(|s| s.to_string()).collect(),
+        "sector_vb" | "sector_volatility" => vec!["091160", "091170", "091180", "091220", "091230"].iter().map(|s| s.to_string()).collect(),
+        "kospi_bothside" | "kospi_both" => vec!["122630", "252670"].iter().map(|s| s.to_string()).collect(),
+        "kosdaq_fire_rain" | "kosdaq_surge" => vec!["122630", "252670", "233740", "251340"].iter().map(|s| s.to_string()).collect(),
+        "us_3x_leverage" | "us_leverage" => vec!["TQQQ", "SQQQ", "UPRO", "SPXU", "TMF", "TMV"].iter().map(|s| s.to_string()).collect(),
         _ => vec![],
     }
 }

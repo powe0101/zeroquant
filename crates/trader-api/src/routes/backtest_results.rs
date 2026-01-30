@@ -503,12 +503,8 @@ pub async fn delete_backtest_result(
 /// 백테스트 결과 라우터 생성
 pub fn backtest_results_router() -> Router<Arc<AppState>> {
     Router::new()
-        // 결과 목록 조회
-        .route("/", get(list_backtest_results))
-        // 결과 저장
-        .route("/", post(save_backtest_result))
-        // 단일 결과 조회
-        .route("/{id}", get(get_backtest_result))
-        // 결과 삭제
-        .route("/{id}", delete(delete_backtest_result))
+        // 결과 목록 조회 + 저장 (같은 경로에 GET/POST)
+        .route("/", get(list_backtest_results).post(save_backtest_result))
+        // 단일 결과 조회 + 삭제 (같은 경로에 GET/DELETE)
+        .route("/:id", get(get_backtest_result).delete(delete_backtest_result))
 }

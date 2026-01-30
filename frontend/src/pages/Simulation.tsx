@@ -66,21 +66,42 @@ interface CandleDataResponse {
   totalCount: number
 }
 
-// 캔들 데이터 조회 (최근 N일)
+// 날짜 간 일수 계산
+function daysBetween(startDate: string, endDate: string): number {
+  const start = new Date(startDate)
+  const end = new Date(endDate)
+  const diffTime = Math.abs(end.getTime() - start.getTime())
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1 // +1 for inclusive
+}
+
+// 캔들 데이터 조회 (백테스트 기간에 해당하는 데이터)
 async function fetchCandlesForSimulation(
   symbol: string,
-  days: number = 200
+  startDate: string,
+  endDate: string
 ): Promise<CandleDataResponse | null> {
   try {
+    // 실제 기간만큼 요청 (여유 있게 20% 추가)
+    const days = daysBetween(startDate, endDate)
+    const limit = Math.ceil(days * 1.2)
+
     const params = new URLSearchParams({
       timeframe: '1d',
-      limit: days.toString(),
+      limit: limit.toString(),
       sortBy: 'time',
       sortOrder: 'asc',
     })
     const res = await fetch(`${API_BASE}/dataset/${encodeURIComponent(symbol)}?${params}`)
     if (!res.ok) return null
-    return res.json()
+    const data: CandleDataResponse = await res.json()
+
+    // 백테스트 기간에 해당하는 캔들만 필터링
+    const filtered = data.candles.filter(c => {
+      const date = c.time.split(' ')[0]
+      return date >= startDate && date <= endDate
+    })
+
+    return { ...data, candles: filtered, totalCount: filtered.length }
   } catch {
     return null
   }
@@ -157,6 +178,11 @@ export function Simulation() {
   const [initialBalance, setInitialBalance] = createSignal('10000000')
   const [speed, setSpeed] = createSignal(1)
 
+  // 시뮬레이션 시작 날짜 (종료일은 오늘로 자동 설정)
+  const today = new Date().toISOString().split('T')[0]
+  const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  const [startDate, setStartDate] = createSignal(oneYearAgo)
+
   // 가격 차트 데이터
   const [candleData, setCandleData] = createSignal<CandlestickDataPoint[]>([])
   const [isLoadingCandles, setIsLoadingCandles] = createSignal(false)
@@ -167,30 +193,83 @@ export function Simulation() {
 
   // 현재 시뮬레이션 시간까지의 캔들만 필터링 (스트리밍 효과)
   const filteredCandleData = createMemo(() => {
-    const currentSimTime = status()?.current_simulation_time
+    const currentStatus = status()
+    const startedAt = currentStatus?.started_at
+    const simStartDate = currentStatus?.simulation_start_date  // 백테스트 시작 날짜
+    const speed = currentStatus?.speed || 1
     const candles = candleData()
 
-    // 시뮬레이션이 실행 중이 아니거나 시간 정보가 없으면 전체 데이터 반환
-    if (!currentSimTime || !candles.length) {
-      return candles
+    // 캔들 데이터가 없으면 빈 배열
+    if (!candles.length) {
+      return []
     }
 
-    // current_simulation_time까지의 캔들만 필터링
-    const simTimeStr = currentSimTime.split('T')[0] // "YYYY-MM-DD" 형식
-    return candles.filter(c => (c.time as string) <= simTimeStr)
+    // 시뮬레이션이 시작되지 않았으면 빈 배열 반환 (차트 숨김)
+    if (currentStatus?.state === 'stopped' || !startedAt) {
+      return []
+    }
+
+    // 백테스트 시작 날짜 기준으로 스트리밍 (없으면 첫 캔들 날짜 사용)
+    // 일간 캔들에서 실용적인 스트리밍: 1초 실제 = 1일 시뮬레이션 × 배속
+    const baseDate = simStartDate
+      ? new Date(simStartDate)
+      : new Date(candles[0].time as string)
+    const startedAtDate = new Date(startedAt)
+    const now = new Date()
+
+    // 실제 경과 시간(초)
+    const elapsedRealSeconds = (now.getTime() - startedAtDate.getTime()) / 1000
+
+    // 시뮬레이션 경과 일수 = 경과 초 × 배속 (1초 = 1일)
+    const elapsedSimDays = Math.floor(elapsedRealSeconds * speed)
+
+    // 백테스트 시작 날짜 + 시뮬레이션 경과 일수 = 현재 시뮬레이션 날짜
+    const currentSimDate = new Date(baseDate)
+    currentSimDate.setDate(currentSimDate.getDate() + elapsedSimDays)
+    const currentSimDateStr = currentSimDate.toISOString().split('T')[0]
+
+    // 현재 시뮬레이션 날짜까지의 캔들만 필터링
+    return candles.filter(c => {
+      const candleTime = c.time as string
+      return candleTime <= currentSimDateStr
+    })
   })
 
   // 현재 시뮬레이션 시간까지의 마커만 필터링
   const filteredTradeMarkers = createMemo(() => {
-    const currentSimTime = status()?.current_simulation_time
+    const currentStatus = status()
+    const startedAt = currentStatus?.started_at
+    const simStartDate = currentStatus?.simulation_start_date  // 백테스트 시작 날짜
+    const speed = currentStatus?.speed || 1
     const markers = tradeMarkers()
+    const candles = candleData()
 
-    if (!currentSimTime || !markers.length) {
-      return markers
+    // 마커가 없거나 캔들 데이터가 없으면 빈 배열
+    if (!markers.length || !candles.length) {
+      return []
     }
 
-    const simTimeStr = currentSimTime.split('T')[0]
-    return markers.filter(m => (m.time as string) <= simTimeStr)
+    // 시뮬레이션이 시작되지 않았으면 빈 배열
+    if (currentStatus?.state === 'stopped' || !startedAt) {
+      return []
+    }
+
+    // 백테스트 시작 날짜 기준으로 스트리밍 (없으면 첫 캔들 날짜 사용)
+    const baseDate = simStartDate
+      ? new Date(simStartDate)
+      : new Date(candles[0].time as string)
+    const startedAtDate = new Date(startedAt)
+    const now = new Date()
+    const elapsedRealSeconds = (now.getTime() - startedAtDate.getTime()) / 1000
+    const elapsedSimDays = Math.floor(elapsedRealSeconds * speed)
+    const currentSimDate = new Date(baseDate)
+    currentSimDate.setDate(currentSimDate.getDate() + elapsedSimDays)
+    const currentSimDateStr = currentSimDate.toISOString().split('T')[0]
+
+    return markers.filter(m => {
+      const markerTime = m.time as string
+      return markerTime <= currentSimDateStr
+    })
   })
 
   // 자산 곡선 데이터
@@ -291,10 +370,13 @@ export function Simulation() {
     setError(null)
 
     try {
+      // 시뮬레이션 시작 (시작일만 전달, 종료일은 오늘로 자동 설정)
       await startSimulation({
         strategy_id: selectedStrategy(),
         initial_balance: parseInt(initialBalance(), 10),
         speed: speed(),
+        start_date: startDate(),
+        end_date: today,  // 오늘 날짜까지 시뮬레이션
       })
 
       // 자산 곡선 초기화
@@ -353,7 +435,7 @@ export function Simulation() {
     }
   }
 
-  // 가격 차트 데이터 로드
+  // 가격 차트 데이터 로드 (시뮬레이션 시작일 ~ 오늘)
   const loadCandleData = async () => {
     if (candleData().length > 0 || isLoadingCandles()) return
 
@@ -361,10 +443,15 @@ export function Simulation() {
     const strategy = strategies()?.find(s => s.strategyType === selectedStrategy())
     if (!strategy?.symbols || strategy.symbols.length === 0) return
 
+    // 시뮬레이션 시작일 (status에서 가져오거나 폼 값 사용), 종료일은 오늘
+    const currentStatus = status()
+    const simStartDate = currentStatus?.simulation_start_date || startDate()
+    const simEndDate = currentStatus?.simulation_end_date || today
+
     setIsLoadingCandles(true)
     try {
       const symbol = strategy.symbols[0] // 첫 번째 심볼 사용
-      const data = await fetchCandlesForSimulation(symbol, 200)
+      const data = await fetchCandlesForSimulation(symbol, simStartDate, simEndDate)
       if (data) {
         setCandleData(convertCandlesToChartData(data.candles))
       }
@@ -433,6 +520,18 @@ export function Simulation() {
                 onInput={(e) => setInitialBalance(e.currentTarget.value)}
                 disabled={!isStopped()}
                 class="w-40 px-4 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50"
+              />
+            </div>
+
+            {/* 시뮬레이션 시작일 */}
+            <div>
+              <label class="block text-sm text-[var(--color-text-muted)] mb-1">시작일</label>
+              <input
+                type="date"
+                value={startDate()}
+                onInput={(e) => setStartDate(e.currentTarget.value)}
+                disabled={!isStopped()}
+                class="px-3 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50"
               />
             </div>
 
@@ -757,7 +856,7 @@ export function Simulation() {
       </div>
 
       {/* Price Chart + Trade Markers */}
-      <Show when={trades().length > 0}>
+      <Show when={selectedStrategy()}>
         <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
           <details
             onToggle={(e) => {

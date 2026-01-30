@@ -353,7 +353,24 @@ pub async fn run_multi_backtest(
     }
 
     // 다중 자산 전략만 허용
-    let valid_multi_strategies = ["simple_power", "haa", "xaa", "stock_rotation"];
+    let valid_multi_strategies = [
+        "simple_power",
+        "haa",
+        "xaa",
+        "stock_rotation",
+        // 추가 다중 자산 전략들
+        "all_weather",
+        "all_weather_us",
+        "all_weather_kr",
+        "snow",
+        "snow_us",
+        "snow_kr",
+        "baa",
+        "sector_momentum",
+        "dual_momentum",
+        "pension_bot",
+        "market_cap_top",
+    ];
     if !valid_multi_strategies.contains(&request.strategy_id.as_str()) {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -468,8 +485,7 @@ pub fn backtest_router() -> Router<Arc<AppState>> {
         .route("/run", post(run_backtest))
         // 다중 자산 백테스트 실행
         .route("/run-multi", post(run_multi_backtest))
-        // 백테스트 결과 조회
-        .route("/results/:id", get(get_backtest_result))
+        // 백테스트 결과 조회는 backtest_results_router에서 처리
 }
 
 // ==================== 내장 전략 목록 ====================

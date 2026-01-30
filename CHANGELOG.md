@@ -5,6 +5,58 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.4.2] - 2026-01-31
+
+### Fixed
+
+#### 다중 자산 전략 심볼 비교 버그 수정
+- **심볼 비교 로직 통일**: `data.symbol.base.clone()` → `data.symbol.to_string()`
+  - 영향 받은 전략 (10개):
+    - `all_weather.rs`: All Weather 포트폴리오
+    - `baa.rs`: Bold Asset Allocation
+    - `dual_momentum.rs`: Dual Momentum
+    - `kosdaq_fire_rain.rs`: 코스닥 불비
+    - `kospi_bothside.rs`: KOSPI 양방향
+    - `market_cap_top.rs`: 시가총액 상위
+    - `sector_momentum.rs`: 섹터 모멘텀
+    - `sector_vb.rs`: 섹터 변동성 돌파
+    - `snow.rs`: Snow 전략
+    - `us_3x_leverage.rs`: 미국 3배 레버리지
+
+#### 백테스트 가격 매칭 버그 수정
+- **다중 자산 가격 데이터 매칭**: `engine.rs`에서 현재 심볼에 맞는 가격 데이터만 필터링
+- 이전: 모든 심볼 데이터에서 첫 번째 데이터 사용 (잘못된 가격)
+- 이후: 심볼별 정확한 가격 데이터 매칭
+
+### Added
+
+#### 전략 통합 테스트
+- **strategy_integration.rs**: 28개 전략 통합 테스트 (1,753줄)
+  - 모든 백테스트 대상 전략 자동 검증
+  - 다중 심볼 전략 테스트 커버리지 추가
+  - 실행 시간: ~15분 (병렬 실행)
+
+#### 차트 컴포넌트
+- **SyncedChartPanel.tsx**: 동기화된 차트 패널 개선
+  - 다중 심볼 동시 표시 지원
+  - 줌/팬 동기화 기능
+
+### Changed
+
+#### 프론트엔드
+- `Backtest.tsx`: 다중 자산 전략 결과 표시 개선
+- `Simulation.tsx`: 전략 선택 UI/UX 개선
+- `Strategies.tsx`: 전략 목록 필터링 및 정렬 개선
+- `client.ts`: API 클라이언트 타입 안전성 강화
+
+#### 백엔드
+- `backtest/engine.rs`: 다중 자산 백테스트 엔진 로직 개선
+- `backtest/loader.rs`: 데이터 로딩 최적화
+- `strategies.rs`: 전략 Repository 쿼리 개선
+- `simulation.rs`: 시뮬레이션 라우트 리팩토링
+
+---
+
 ## [0.4.1] - 2026-01-31
 
 ### Added

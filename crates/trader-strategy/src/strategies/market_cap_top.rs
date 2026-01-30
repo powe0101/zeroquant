@@ -569,7 +569,8 @@ impl Strategy for MarketCapTopStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (AAPL/USD -> AAPL)
+        let symbol_str = data.symbol.base.clone();
 
         // 활성 심볼이 아니면 무시
         if !self.active_symbols.contains(&symbol_str) {

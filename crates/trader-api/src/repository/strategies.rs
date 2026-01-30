@@ -268,8 +268,13 @@ impl StrategyRepository {
         engine: &trader_strategy::StrategyEngine,
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         use trader_strategy::strategies::{
-            BollingerStrategy, GridStrategy, HaaStrategy, MagicSplitStrategy,
-            RsiStrategy, SimplePowerStrategy, SmaStrategy, StockRotationStrategy,
+            AllWeatherStrategy, BaaStrategy, BollingerStrategy, CandlePatternStrategy,
+            DualMomentumStrategy, GridStrategy, HaaStrategy, InfinityBotStrategy,
+            KosdaqFireRainStrategy, KospiBothSideStrategy, MagicSplitStrategy,
+            MarketCapTopStrategy, MarketInterestDayStrategy, PensionBotStrategy,
+            RsiStrategy, SectorMomentumStrategy, SectorVbStrategy, SimplePowerStrategy,
+            SmallCapQuantStrategy, SmaStrategy, SnowStrategy, StockGuganStrategy,
+            StockRotationStrategy, TrailingStopStrategy, Us3xLeverageStrategy,
             VolatilityBreakoutStrategy, XaaStrategy,
         };
         use trader_strategy::Strategy;
@@ -282,16 +287,39 @@ impl StrategyRepository {
 
             // Create strategy instance based on type
             let strategy: Option<Box<dyn Strategy>> = match strategy_type {
+                // 기본 전략들
                 "rsi" | "rsi_mean_reversion" => Some(Box::new(RsiStrategy::new())),
                 "grid" | "grid_trading" => Some(Box::new(GridStrategy::new())),
                 "bollinger" | "bollinger_bands" => Some(Box::new(BollingerStrategy::new())),
                 "volatility_breakout" | "volatility" => Some(Box::new(VolatilityBreakoutStrategy::new())),
                 "magic_split" | "split" => Some(Box::new(MagicSplitStrategy::new())),
+                "sma" | "sma_crossover" | "ma_crossover" => Some(Box::new(SmaStrategy::new())),
+
+                // 다중 자산 전략들
                 "simple_power" => Some(Box::new(SimplePowerStrategy::new())),
                 "haa" => Some(Box::new(HaaStrategy::new())),
                 "xaa" => Some(Box::new(XaaStrategy::new())),
-                "sma" | "sma_crossover" | "ma_crossover" => Some(Box::new(SmaStrategy::new())),
                 "stock_rotation" => Some(Box::new(StockRotationStrategy::new())),
+                "all_weather" | "all_weather_us" | "all_weather_kr" => Some(Box::new(AllWeatherStrategy::new())),
+                "snow" | "snow_us" | "snow_kr" => Some(Box::new(SnowStrategy::new())),
+                "baa" => Some(Box::new(BaaStrategy::new())),
+                "sector_momentum" => Some(Box::new(SectorMomentumStrategy::new())),
+                "dual_momentum" => Some(Box::new(DualMomentumStrategy::new())),
+                "pension_bot" => Some(Box::new(PensionBotStrategy::new())),
+                "market_cap_top" => Some(Box::new(MarketCapTopStrategy::new())),
+
+                // 기타 전략들
+                "trailing_stop" => Some(Box::new(TrailingStopStrategy::new())),
+                "candle_pattern" => Some(Box::new(CandlePatternStrategy::new())),
+                "infinity_bot" => Some(Box::new(InfinityBotStrategy::new())),
+                "market_interest_day" => Some(Box::new(MarketInterestDayStrategy::new())),
+                "sector_vb" => Some(Box::new(SectorVbStrategy::new())),
+                "kospi_bothside" => Some(Box::new(KospiBothSideStrategy::new())),
+                "kosdaq_fire_rain" => Some(Box::new(KosdaqFireRainStrategy::new())),
+                "us_3x_leverage" => Some(Box::new(Us3xLeverageStrategy::new())),
+                "stock_gugan" => Some(Box::new(StockGuganStrategy::new())),
+                "small_cap_quant" => Some(Box::new(SmallCapQuantStrategy::new())),
+
                 _ => {
                     tracing::warn!("Unknown strategy type: {} for strategy {}", strategy_type, record.id);
                     None

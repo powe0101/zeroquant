@@ -571,7 +571,8 @@ impl Strategy for Us3xLeverageStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (TQQQ/USD -> TQQQ)
+        let symbol_str = data.symbol.base.clone();
 
         // 등록된 ETF인지 확인
         if !self.etf_data.contains_key(&symbol_str) {

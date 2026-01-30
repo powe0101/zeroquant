@@ -106,7 +106,7 @@ pub struct SimulationEngine {
     pub positions: HashMap<String, SimulationPosition>,
     /// 거래 내역
     pub trades: Vec<SimulationTrade>,
-    /// 시작 시간
+    /// 시작 시간 (실제 시간)
     pub started_at: Option<DateTime<Utc>>,
     /// 시뮬레이션 속도 (1.0 = 실시간)
     pub speed: f64,
@@ -114,6 +114,10 @@ pub struct SimulationEngine {
     pub total_realized_pnl: Decimal,
     /// 총 수수료
     pub total_commission: Decimal,
+    /// 시뮬레이션(백테스트) 시작 날짜
+    pub simulation_start_date: Option<String>,
+    /// 시뮬레이션(백테스트) 종료 날짜
+    pub simulation_end_date: Option<String>,
 }
 
 impl Default for SimulationEngine {
@@ -129,6 +133,8 @@ impl Default for SimulationEngine {
             speed: 1.0,
             total_realized_pnl: Decimal::ZERO,
             total_commission: Decimal::ZERO,
+            simulation_start_date: None,
+            simulation_end_date: None,
         }
     }
 }
@@ -144,7 +150,14 @@ impl SimulationEngine {
     }
 
     /// 시뮬레이션 시작
-    pub fn start(&mut self, strategy_id: String, initial_balance: Decimal, speed: f64) {
+    pub fn start(
+        &mut self,
+        strategy_id: String,
+        initial_balance: Decimal,
+        speed: f64,
+        start_date: Option<String>,
+        end_date: Option<String>,
+    ) {
         self.state = SimulationState::Running;
         self.strategy_id = Some(strategy_id);
         self.initial_balance = initial_balance;
@@ -155,6 +168,8 @@ impl SimulationEngine {
         self.speed = speed;
         self.total_realized_pnl = Decimal::ZERO;
         self.total_commission = Decimal::ZERO;
+        self.simulation_start_date = start_date;
+        self.simulation_end_date = end_date;
     }
 
     /// 시뮬레이션 중지
@@ -342,6 +357,12 @@ pub struct SimulationStartRequest {
     /// 시뮬레이션 속도 (1.0 = 실시간, 2.0 = 2배속)
     #[serde(default = "default_speed")]
     pub speed: f64,
+    /// 시뮬레이션(백테스트) 시작 날짜 (YYYY-MM-DD)
+    #[serde(default)]
+    pub start_date: Option<String>,
+    /// 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD)
+    #[serde(default)]
+    pub end_date: Option<String>,
 }
 
 fn default_initial_balance() -> Decimal {
@@ -401,12 +422,16 @@ pub struct SimulationStatusResponse {
     pub position_count: usize,
     /// 거래 횟수
     pub trade_count: usize,
-    /// 시작 시간
+    /// 시작 시간 (실제 시간)
     pub started_at: Option<DateTime<Utc>>,
     /// 시뮬레이션 속도
     pub speed: f64,
     /// 현재 시뮬레이션 시간 (배속 적용된 가상 시간)
     pub current_simulation_time: Option<DateTime<Utc>>,
+    /// 시뮬레이션(백테스트) 시작 날짜 (YYYY-MM-DD)
+    pub simulation_start_date: Option<String>,
+    /// 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD)
+    pub simulation_end_date: Option<String>,
 }
 
 /// 가상 주문 요청
@@ -514,7 +539,13 @@ pub async fn start_simulation(
     }
 
     // 시뮬레이션 시작
-    engine.start(request.strategy_id, request.initial_balance, request.speed);
+    engine.start(
+        request.strategy_id,
+        request.initial_balance,
+        request.speed,
+        request.start_date,
+        request.end_date,
+    );
 
     Ok(Json(SimulationStartResponse {
         success: true,
@@ -638,6 +669,8 @@ pub async fn get_simulation_status(
         started_at: engine.started_at,
         speed: engine.speed,
         current_simulation_time,
+        simulation_start_date: engine.simulation_start_date.clone(),
+        simulation_end_date: engine.simulation_end_date.clone(),
     })
 }
 

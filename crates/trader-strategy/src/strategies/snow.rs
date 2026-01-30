@@ -321,7 +321,8 @@ impl Strategy for SnowStrategy {
         };
         let assets = self.assets.as_ref().unwrap();
 
-        let symbol = data.symbol.to_string();
+        // base 심볼만 추출 (SPY/USD -> SPY)
+        let symbol = data.symbol.base.clone();
         let now = data.timestamp;
 
         // 이 전략의 자산인지 확인

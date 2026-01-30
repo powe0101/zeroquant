@@ -569,7 +569,8 @@ impl Strategy for BaaStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = data.symbol.to_string();
+        // base 심볼만 추출 (SPY/USD -> SPY)
+        let symbol_str = data.symbol.base.clone();
 
         // 등록된 자산인지 확인
         let asset_exists = self.asset_data.contains_key(&symbol_str);

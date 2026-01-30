@@ -324,7 +324,24 @@ export interface BacktestMultiResult extends Omit<BacktestResult, 'symbol'> {
 }
 
 // 다중 자산 전략 ID 목록
-export const MULTI_ASSET_STRATEGIES = ['simple_power', 'haa', 'xaa', 'stock_rotation'];
+export const MULTI_ASSET_STRATEGIES = [
+  'simple_power',
+  'haa',
+  'xaa',
+  'stock_rotation',
+  // 추가 다중 자산 전략들
+  'all_weather',
+  'all_weather_us',
+  'all_weather_kr',
+  'snow',
+  'snow_us',
+  'snow_kr',
+  'baa',
+  'sector_momentum',
+  'dual_momentum',
+  'pension_bot',
+  'market_cap_top',
+];
 
 // ==================== SDUI (Server Driven UI) 타입 ====================
 
@@ -609,6 +626,10 @@ export interface SimulationStartRequest {
   strategy_id: string;
   initial_balance?: number;
   speed?: number;
+  /** 시뮬레이션(백테스트) 시작 날짜 (YYYY-MM-DD) */
+  start_date?: string;
+  /** 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD) */
+  end_date?: string;
 }
 
 /** 시뮬레이션 시작 응답 */
@@ -643,6 +664,10 @@ export interface SimulationStatusResponse {
   speed: number;
   /** 현재 시뮬레이션 시간 (배속 적용된 가상 시간) */
   current_simulation_time: string | null;
+  /** 시뮬레이션(백테스트) 시작 날짜 (YYYY-MM-DD) */
+  simulation_start_date: string | null;
+  /** 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD) */
+  simulation_end_date: string | null;
 }
 
 /** 시뮬레이션 포지션 */

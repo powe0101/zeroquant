@@ -1,7 +1,7 @@
 import { createSignal, createResource, For, Show, createEffect } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 import { Play, Pause, Settings, TrendingUp, TrendingDown, AlertCircle, RefreshCw, X, ChevronRight, Search, BarChart3, Activity, Trash2, Copy } from 'lucide-solid'
-import { getStrategies, startStrategy, stopStrategy, getBacktestStrategies, createStrategy, getStrategy, updateStrategyConfig, deleteStrategy, cloneStrategy } from '../api/client'
+import { getStrategies, startStrategy, stopStrategy, getBacktestStrategies, createStrategy, getStrategy, updateStrategyConfig, deleteStrategy, cloneStrategy, searchSymbols } from '../api/client'
 import type { Strategy } from '../types'
 import type { BacktestStrategy, UiSchema } from '../api/client'
 import { DynamicForm } from '../components/DynamicForm'
@@ -96,6 +96,39 @@ export function Strategies() {
   const [isUpdating, setIsUpdating] = createSignal(false)
   const [updateError, setUpdateError] = createSignal<string | null>(null)
 
+  // ==================== 심볼 이름 캐시 ====================
+  const [symbolNameCache, setSymbolNameCache] = createSignal<Map<string, string>>(new Map())
+
+  // 심볼 이름 조회 및 캐싱
+  const fetchSymbolName = async (ticker: string): Promise<string> => {
+    // 캐시에 있으면 반환
+    const cached = symbolNameCache().get(ticker)
+    if (cached !== undefined) return cached
+
+    // 알파벳으로 시작하는 US 심볼은 이름 조회 생략 (SPY, TQQQ 등)
+    if (/^[A-Z]+$/.test(ticker)) {
+      setSymbolNameCache(prev => new Map(prev).set(ticker, ''))
+      return ''
+    }
+
+    try {
+      // API로 조회
+      const results = await searchSymbols(ticker, 1)
+      const name = results.length > 0 ? results[0].name : ''
+      setSymbolNameCache(prev => new Map(prev).set(ticker, name))
+      return name
+    } catch {
+      setSymbolNameCache(prev => new Map(prev).set(ticker, ''))
+      return ''
+    }
+  }
+
+  // 심볼 표시 이름 반환 (캐시된 값 사용)
+  const getSymbolDisplayName = (ticker: string): string => {
+    const name = symbolNameCache().get(ticker)
+    return name ? `${ticker} (${name})` : ticker
+  }
+
   // 전략 템플릿 목록 가져오기
   const [strategyTemplates] = createResource(async () => {
     const response = await getBacktestStrategies()
@@ -104,6 +137,25 @@ export function Strategies() {
 
   // 전략 목록 가져오기
   const [strategies, { refetch }] = createResource(getStrategies)
+
+  // 전략 로드 시 심볼 이름 프리페치
+  createEffect(() => {
+    const strategyList = strategies()
+    if (!strategyList) return
+
+    // 모든 심볼 수집
+    const allSymbols = new Set<string>()
+    strategyList.forEach(s => {
+      s.symbols?.forEach(sym => allSymbols.add(sym))
+    })
+
+    // 캐시에 없는 심볼만 조회
+    allSymbols.forEach(symbol => {
+      if (!symbolNameCache().has(symbol)) {
+        fetchSymbolName(symbol)
+      }
+    })
+  })
 
   // 카테고리 목록
   const categories = () => {
@@ -121,6 +173,9 @@ export function Strategies() {
     // 카테고리 필터
     if (selectedCategory()) {
       templates = templates.filter(s => s.category === selectedCategory())
+    } else {
+      // "전체" 탭 선택 시 "사용자정의" 카테고리 제외
+      templates = templates.filter(s => s.category !== '사용자정의')
     }
 
     // 검색 필터
@@ -698,7 +753,7 @@ export function Strategies() {
                   <For each={strategy.symbols}>
                     {(symbol) => (
                       <span class="px-2 py-0.5 text-xs bg-[var(--color-surface-light)] text-[var(--color-text-muted)] rounded">
-                        {symbol}
+                        {getSymbolDisplayName(symbol)}
                       </span>
                     )}
                   </For>

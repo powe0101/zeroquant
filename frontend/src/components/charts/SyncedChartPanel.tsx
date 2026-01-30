@@ -226,6 +226,30 @@ export function SyncedChartPanel(props: SyncedChartPanelProps) {
       mainSeries.setData(uniqueData as CandlestickData[] | LineData[])
     }
 
+    // 초기 마커 설정
+    if (props.markers && props.markers.length > 0) {
+      const seriesMarkers: SeriesMarker<Time>[] = props.markers
+        .map((marker) => {
+          const config = getMarkerConfig(marker.type)
+          return {
+            time: marker.time as Time,
+            position: config.position,
+            color: config.color,
+            shape: config.shape,
+            text: marker.label || config.defaultLabel,
+          }
+        })
+        .sort((a, b) => {
+          const timeA = typeof a.time === 'string' ? a.time : String(a.time)
+          const timeB = typeof b.time === 'string' ? b.time : String(b.time)
+          return timeA.localeCompare(timeB)
+        })
+
+      if (seriesMarkers.length > 0) {
+        markersPlugin = createSeriesMarkers(mainSeries, seriesMarkers)
+      }
+    }
+
     // 동기화 이벤트 구독
     mainChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       syncTimeScale(mainChart!, range)

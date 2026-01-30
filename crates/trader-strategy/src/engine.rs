@@ -114,7 +114,7 @@ pub struct EngineConfig {
 }
 
 fn default_max_strategies() -> usize {
-    20
+    usize::MAX // 전략 수 제한 없음
 }
 fn default_signal_buffer() -> usize {
     1000
