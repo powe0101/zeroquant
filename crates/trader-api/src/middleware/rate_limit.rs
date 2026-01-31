@@ -2,6 +2,8 @@
 //!
 //! Token Bucket 알고리즘 기반 rate limiting을 제공합니다.
 
+#![allow(dead_code)] // Rate limiting 레이어는 향후 프로덕션 배포 시 활성화 예정
+
 use axum::{
     extract::Request,
     http::{HeaderValue, StatusCode},

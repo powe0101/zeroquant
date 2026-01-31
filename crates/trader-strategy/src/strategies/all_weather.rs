@@ -12,7 +12,6 @@
 //! - 채권(148070, 305080): 각 15%
 //! - 금(319640): 15%, 현금(261240): 15%
 
-use crate::strategies::common::deserialize_symbol;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Utc};

@@ -54,7 +54,10 @@ impl KisUsClient {
     /// 새로운 해외 주식 클라이언트 생성 (소유권 이전).
     ///
     /// 단일 클라이언트만 사용하는 경우 이 메서드를 사용합니다.
-    pub fn new(oauth: KisOAuth) -> Self {
+    ///
+    /// # Errors
+    /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
+    pub fn new(oauth: KisOAuth) -> Result<Self, ExchangeError> {
         Self::with_shared_oauth(Arc::new(oauth))
     }
 
@@ -62,13 +65,16 @@ impl KisUsClient {
     ///
     /// 동일한 `app_key`를 사용하는 여러 클라이언트(국내/해외, 실계좌/모의투자)가
     /// 토큰을 공유하려면 이 메서드를 사용합니다.
-    pub fn with_shared_oauth(oauth: Arc<KisOAuth>) -> Self {
+    ///
+    /// # Errors
+    /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
+    pub fn with_shared_oauth(oauth: Arc<KisOAuth>) -> Result<Self, ExchangeError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(oauth.config().timeout_secs))
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| ExchangeError::NetworkError(format!("HTTP client 생성 실패: {}", e)))?;
 
-        Self { oauth, client }
+        Ok(Self { oauth, client })
     }
 
     /// 내부 OAuth 참조 반환 (토큰 캐싱용).

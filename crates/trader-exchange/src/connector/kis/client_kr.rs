@@ -8,6 +8,8 @@
 //! - 현재가 조회
 //! - 호가 조회
 //! - 현금 매수/매도 주문
+
+#![allow(dead_code)] // KIS API 응답 필드 전체 매핑
 //! - 주문 정정/취소
 //! - 잔고 조회
 //! - 매수가능금액 조회
@@ -37,7 +39,10 @@ impl KisKrClient {
     /// 새로운 국내 주식 클라이언트 생성 (소유권 이전).
     ///
     /// 단일 클라이언트만 사용하는 경우 이 메서드를 사용합니다.
-    pub fn new(oauth: KisOAuth) -> Self {
+    ///
+    /// # Errors
+    /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
+    pub fn new(oauth: KisOAuth) -> Result<Self, ExchangeError> {
         Self::with_shared_oauth(Arc::new(oauth))
     }
 
@@ -48,17 +53,20 @@ impl KisKrClient {
     ///
     /// # 예시
     /// ```ignore
-    /// let oauth = Arc::new(KisOAuth::new(config));
-    /// let kr_client = KisKrClient::with_shared_oauth(Arc::clone(&oauth));
-    /// let us_client = KisUsClient::with_shared_oauth(oauth);
+    /// let oauth = Arc::new(KisOAuth::new(config)?);
+    /// let kr_client = KisKrClient::with_shared_oauth(Arc::clone(&oauth))?;
+    /// let us_client = KisUsClient::with_shared_oauth(oauth)?;
     /// ```
-    pub fn with_shared_oauth(oauth: Arc<KisOAuth>) -> Self {
+    ///
+    /// # Errors
+    /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
+    pub fn with_shared_oauth(oauth: Arc<KisOAuth>) -> Result<Self, ExchangeError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(oauth.config().timeout_secs))
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| ExchangeError::NetworkError(format!("HTTP client 생성 실패: {}", e)))?;
 
-        Self { oauth, client }
+        Ok(Self { oauth, client })
     }
 
     /// 내부 OAuth 참조 반환 (토큰 캐싱용).

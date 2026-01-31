@@ -98,18 +98,21 @@ pub struct KisOAuth {
 
 impl KisOAuth {
     /// 새로운 OAuth 관리자 생성.
-    pub fn new(config: KisConfig) -> Self {
+    ///
+    /// # Errors
+    /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
+    pub fn new(config: KisConfig) -> Result<Self, ExchangeError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| ExchangeError::NetworkError(format!("HTTP client 생성 실패: {}", e)))?;
 
-        Self {
+        Ok(Self {
             config,
             client,
             token: Arc::new(RwLock::new(None)),
             websocket_key: Arc::new(RwLock::new(None)),
-        }
+        })
     }
 
     /// 유효한 접근 토큰 반환, 필요시 갱신.

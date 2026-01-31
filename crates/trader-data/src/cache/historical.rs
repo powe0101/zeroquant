@@ -50,7 +50,6 @@ use crate::storage::krx::KrxDataSource;
 use crate::storage::ohlcv::{timeframe_to_string, OhlcvCache};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc, Weekday};
 use chrono_tz::Tz;
-use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use sqlx::postgres::PgPool;
 use std::collections::HashMap;

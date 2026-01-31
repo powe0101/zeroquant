@@ -19,9 +19,7 @@
 use crate::strategies::common::deserialize_symbol;
 use crate::Strategy;
 use async_trait::async_trait;
-use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;

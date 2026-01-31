@@ -1,5 +1,7 @@
 //! 시뮬레이션 거래소 구현.
 
+#![allow(dead_code)] // 시뮬레이션 상태 추적 필드 (디버깅용)
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;

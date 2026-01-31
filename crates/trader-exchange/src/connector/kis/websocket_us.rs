@@ -19,7 +19,7 @@
 //! use trader_exchange::connector::kis::{KisConfig, KisOAuth, KisUsWebSocket};
 //!
 //! let config = KisConfig::new("app_key", "app_secret", "12345678-01");
-//! let oauth = KisOAuth::new(config);
+//! let oauth = KisOAuth::new(config)?;
 //! let mut ws = KisUsWebSocket::new(oauth);
 //!
 //! // AAPL 실시간 체결가 구독
@@ -565,6 +565,6 @@ mod tests {
             "12345678-01".to_string(),
             KisAccountType::Paper,
         );
-        KisOAuth::new(config)
+        KisOAuth::new(config).expect("테스트용 OAuth 생성 실패")
     }
 }

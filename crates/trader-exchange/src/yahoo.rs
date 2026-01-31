@@ -24,8 +24,10 @@
 //! let klines = provider.get_klines("AAPL", Timeframe::D1, 100).await?;
 //! ```
 
+#![allow(dead_code)] // 향후 확장을 위한 헬퍼 메서드
+
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use rust_decimal::Decimal;
 use tracing::{debug, info, warn};
 use yahoo_finance_api as yahoo;
@@ -226,11 +228,9 @@ impl YahooFinanceProvider {
     }
 }
 
-impl Default for YahooFinanceProvider {
-    fn default() -> Self {
-        Self::new().expect("Failed to create YahooFinanceProvider")
-    }
-}
+// NOTE: Default 트레잇 구현 제거됨
+// `new()`가 `Result`를 반환하므로 Default 트레잇은 적합하지 않습니다.
+// 대신 `YahooFinanceProvider::new()?`를 사용하세요.
 
 #[async_trait]
 impl HistoricalDataProvider for YahooFinanceProvider {

@@ -38,14 +38,14 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide,
     TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
 
 /// BAA 버전 타입.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -380,7 +380,7 @@ impl BaaStrategy {
 
     /// 목표 배분 계산.
     fn calculate_target_allocations(&self) -> Vec<TargetAllocation> {
-        let config = match self.config.as_ref() {
+        let _config = match self.config.as_ref() {
             Some(c) => c,
             None => return Vec::new(),
         };

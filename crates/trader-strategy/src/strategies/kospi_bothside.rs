@@ -18,7 +18,6 @@
 //! # 권장 타임프레임
 //! - 일봉 (1D)
 
-use crate::strategies::common::deserialize_symbol;
 use crate::Strategy;
 use async_trait::async_trait;
 use rust_decimal::prelude::*;
@@ -28,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use chrono::{DateTime, Utc};
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
 use tracing::{debug, info, warn};
 
 /// 코스피 양방향 전략 설정.

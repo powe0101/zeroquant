@@ -514,20 +514,7 @@ pub async fn start_simulation(
     State(_state): State<Arc<AppState>>,
     Json(request): Json<SimulationStartRequest>,
 ) -> Result<Json<SimulationStartResponse>, (StatusCode, Json<SimulationApiError>)> {
-    let mut engine = SIMULATION_ENGINE.write().await;
-
-    // 이미 실행 중인지 확인
-    if engine.state == SimulationState::Running {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(SimulationApiError::new(
-                "ALREADY_RUNNING",
-                "시뮬레이션이 이미 실행 중입니다",
-            )),
-        ));
-    }
-
-    // 속도 검증
+    // 락 획득 전에 입력 검증 수행
     if request.speed <= 0.0 || request.speed > 100.0 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -538,19 +525,45 @@ pub async fn start_simulation(
         ));
     }
 
-    // 시뮬레이션 시작
-    engine.start(
-        request.strategy_id,
-        request.initial_balance,
-        request.speed,
-        request.start_date,
-        request.end_date,
-    );
+    // 최소 락 홀드: 상태 확인, 시작, 결과 추출 후 즉시 해제
+    let started_at = {
+        let mut engine = SIMULATION_ENGINE.write().await;
+
+        // 이미 실행 중인지 확인
+        if engine.state == SimulationState::Running {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(SimulationApiError::new(
+                    "ALREADY_RUNNING",
+                    "시뮬레이션이 이미 실행 중입니다",
+                )),
+            ));
+        }
+
+        // 시뮬레이션 시작
+        engine.start(
+            request.strategy_id,
+            request.initial_balance,
+            request.speed,
+            request.start_date,
+            request.end_date,
+        );
+
+        engine.started_at.ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SimulationApiError::new(
+                    "ENGINE_NOT_STARTED",
+                    "시뮬레이션 엔진이 올바르게 시작되지 않았습니다",
+                )),
+            )
+        })?
+    };  // 락 해제됨
 
     Ok(Json(SimulationStartResponse {
         success: true,
         message: "시뮬레이션이 시작되었습니다".to_string(),
-        started_at: engine.started_at.unwrap(),
+        started_at,
     }))
 }
 
@@ -560,27 +573,33 @@ pub async fn start_simulation(
 pub async fn stop_simulation(
     State(_state): State<Arc<AppState>>,
 ) -> Result<Json<SimulationStopResponse>, (StatusCode, Json<SimulationApiError>)> {
-    let mut engine = SIMULATION_ENGINE.write().await;
+    // 최소 락 홀드: 필요한 데이터만 추출하고 상태 변경 후 즉시 해제
+    let (final_equity, initial_balance, total_trades) = {
+        let mut engine = SIMULATION_ENGINE.write().await;
 
-    if engine.state == SimulationState::Stopped {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(SimulationApiError::new(
-                "NOT_RUNNING",
-                "시뮬레이션이 실행 중이 아닙니다",
-            )),
-        ));
-    }
+        if engine.state == SimulationState::Stopped {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(SimulationApiError::new(
+                    "NOT_RUNNING",
+                    "시뮬레이션이 실행 중이 아닙니다",
+                )),
+            ));
+        }
 
-    let final_equity = engine.total_equity();
-    let total_return_pct = if engine.initial_balance > Decimal::ZERO {
-        (final_equity - engine.initial_balance) / engine.initial_balance * dec!(100)
+        let final_equity = engine.total_equity();
+        let initial_balance = engine.initial_balance;
+        let total_trades = engine.trades.len();
+        engine.stop();
+        (final_equity, initial_balance, total_trades)
+    };  // 락 해제됨
+
+    // 락 없이 계산 수행
+    let total_return_pct = if initial_balance > Decimal::ZERO {
+        (final_equity - initial_balance) / initial_balance * dec!(100)
     } else {
         Decimal::ZERO
     };
-    let total_trades = engine.trades.len();
-
-    engine.stop();
 
     Ok(Json(SimulationStopResponse {
         success: true,
@@ -632,23 +651,53 @@ pub async fn pause_simulation(
 pub async fn get_simulation_status(
     State(_state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let engine = SIMULATION_ENGINE.read().await;
+    // 최소 락 홀드: 필요한 모든 데이터를 빠르게 추출
+    let (
+        state,
+        strategy_id,
+        initial_balance,
+        current_balance,
+        total_equity,
+        unrealized_pnl,
+        total_realized_pnl,
+        position_count,
+        trade_count,
+        started_at,
+        speed,
+        simulation_start_date,
+        simulation_end_date,
+    ) = {
+        let engine = SIMULATION_ENGINE.read().await;
+        (
+            engine.state,
+            engine.strategy_id.clone(),
+            engine.initial_balance,
+            engine.current_balance,
+            engine.total_equity(),
+            engine.positions.values().map(|p| p.unrealized_pnl).sum::<Decimal>(),
+            engine.total_realized_pnl,
+            engine.positions.len(),
+            engine.trades.len(),
+            engine.started_at,
+            engine.speed,
+            engine.simulation_start_date.clone(),
+            engine.simulation_end_date.clone(),
+        )
+    };  // 락 해제됨
 
-    let total_equity = engine.total_equity();
-    let unrealized_pnl: Decimal = engine.positions.values().map(|p| p.unrealized_pnl).sum();
-    let return_pct = if engine.initial_balance > Decimal::ZERO {
-        (total_equity - engine.initial_balance) / engine.initial_balance * dec!(100)
+    // 락 없이 계산 수행
+    let return_pct = if initial_balance > Decimal::ZERO {
+        (total_equity - initial_balance) / initial_balance * dec!(100)
     } else {
         Decimal::ZERO
     };
 
     // 현재 시뮬레이션 시간 계산 (배속 적용)
-    // current_simulation_time = started_at + (now - started_at) * speed
-    let current_simulation_time = if engine.state == SimulationState::Running {
-        engine.started_at.map(|start| {
+    let current_simulation_time = if state == SimulationState::Running {
+        started_at.map(|start| {
             let now = Utc::now();
             let elapsed_real_ms = (now - start).num_milliseconds();
-            let elapsed_sim_ms = (elapsed_real_ms as f64 * engine.speed) as i64;
+            let elapsed_sim_ms = (elapsed_real_ms as f64 * speed) as i64;
             start + chrono::Duration::milliseconds(elapsed_sim_ms)
         })
     } else {
@@ -656,21 +705,21 @@ pub async fn get_simulation_status(
     };
 
     Json(SimulationStatusResponse {
-        state: engine.state,
-        strategy_id: engine.strategy_id.clone(),
-        initial_balance: engine.initial_balance,
-        current_balance: engine.current_balance,
+        state,
+        strategy_id,
+        initial_balance,
+        current_balance,
         total_equity,
         unrealized_pnl,
-        realized_pnl: engine.total_realized_pnl,
+        realized_pnl: total_realized_pnl,
         return_pct,
-        position_count: engine.positions.len(),
-        trade_count: engine.trades.len(),
-        started_at: engine.started_at,
-        speed: engine.speed,
+        position_count,
+        trade_count,
+        started_at,
+        speed,
         current_simulation_time,
-        simulation_start_date: engine.simulation_start_date.clone(),
-        simulation_end_date: engine.simulation_end_date.clone(),
+        simulation_start_date,
+        simulation_end_date,
     })
 }
 
@@ -806,7 +855,7 @@ mod tests {
         assert_eq!(engine.state, SimulationState::Stopped);
         assert_eq!(engine.current_balance, dec!(1_000_000));
 
-        engine.start("test_strategy".to_string(), dec!(1_000_000), 1.0);
+        engine.start("test_strategy".to_string(), dec!(1_000_000), 1.0, None, None);
         assert_eq!(engine.state, SimulationState::Running);
 
         engine.pause();
@@ -822,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn test_simulation_order_execution() {
         let mut engine = SimulationEngine::new(dec!(1_000_000));
-        engine.start("test".to_string(), dec!(1_000_000), 1.0);
+        engine.start("test".to_string(), dec!(1_000_000), 1.0, None, None);
 
         // 매수 주문
         let result = engine.execute_order("BTC/USDT", "Buy", dec!(0.1), dec!(50000));
@@ -848,7 +897,7 @@ mod tests {
     #[tokio::test]
     async fn test_simulation_insufficient_balance() {
         let mut engine = SimulationEngine::new(dec!(1000));
-        engine.start("test".to_string(), dec!(1000), 1.0);
+        engine.start("test".to_string(), dec!(1000), 1.0, None, None);
 
         // 잔고 부족 주문
         let result = engine.execute_order("BTC/USDT", "Buy", dec!(1), dec!(50000));

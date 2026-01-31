@@ -375,7 +375,7 @@ impl InfinityBotStrategy {
 
     /// 신호 생성
     fn generate_signals(&mut self, current_price: Decimal, open_price: Decimal, timestamp: i64) -> Vec<Signal> {
-        let config = self.config.as_ref().unwrap().clone();
+        let _config = self.config.as_ref().unwrap().clone();
         let symbol = self.symbol.as_ref().unwrap().clone();
         let mut signals = Vec::new();
 
@@ -385,7 +385,7 @@ impl InfinityBotStrategy {
         // 1. 익절 확인
         if self.state.total_quantity > Decimal::ZERO && self.should_take_profit(current_price) {
             let profit = (current_price - self.state.avg_price) * self.state.total_quantity;
-            let quantity = self.state.total_quantity;
+            let _quantity = self.state.total_quantity;
 
             self.state.cumulative_profit += profit;
             self.state.completed_cycles += 1;

@@ -123,8 +123,8 @@ pub async fn health_ready(
         ComponentStatus::not_configured()
     };
 
-    // Redis 상태 확인
-    let redis_status = if state.redis.is_some() {
+    // Redis 캐시 상태 확인
+    let redis_status = if state.has_cache() {
         if state.is_redis_healthy().await {
             ComponentStatus::up()
         } else {
@@ -138,15 +138,17 @@ pub async fn health_ready(
         ComponentStatus::not_configured()
     };
 
-    // 전략 엔진 상태 확인
-    let engine_status = {
+    // 전략 엔진 상태 확인 - 최소 락 홀드
+    let stats = {
         let engine = state.strategy_engine.read().await;
-        let stats = engine.get_engine_stats().await;
-        ComponentStatus::up_with_info(format!(
-            "{} strategies registered, {} running",
-            stats.total_strategies, stats.running_strategies
-        ))
-    };
+        engine.get_engine_stats().await
+    };  // 락 해제됨
+
+    // 락 없이 상태 생성
+    let engine_status = ComponentStatus::up_with_info(format!(
+        "{} strategies registered, {} running",
+        stats.total_strategies, stats.running_strategies
+    ));
 
     let response = HealthResponse {
         status: overall_status.to_string(),

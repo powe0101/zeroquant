@@ -2,6 +2,8 @@
 //!
 //! WebSocket 연결을 통해 실시간 시장 데이터 스트리밍을 제공합니다.
 
+#![allow(dead_code)] // WebSocket 연결 상태 추적 필드
+
 use crate::connector::binance::BinanceConfig;
 use crate::traits::{ExchangeResult, MarketEvent, MarketStream};
 use crate::ExchangeError;

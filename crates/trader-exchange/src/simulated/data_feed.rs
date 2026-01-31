@@ -2,6 +2,8 @@
 //!
 //! 백테스팅을 위한 과거 데이터 로딩 및 재생을 관리합니다.
 
+#![allow(dead_code)] // 테스트/디버깅용 유틸리티 함수
+
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;

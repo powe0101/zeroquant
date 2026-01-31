@@ -12,7 +12,7 @@ use trader_risk::RiskManager;
 use trader_execution::OrderExecutor;
 use trader_exchange::connector::kis::{KisKrClient, KisUsClient, KisOAuth};
 use trader_core::crypto::CredentialEncryptor;
-use trader_data::SymbolResolver;
+use trader_data::{SymbolResolver, RedisCache, RedisConfig};
 use trader_analytics::ml::MlService;
 
 use crate::websocket::{SharedSubscriptionManager, ServerMessage};
@@ -53,8 +53,9 @@ pub struct AppState {
     /// 데이터베이스 연결 풀 (TimescaleDB/PostgreSQL)
     pub db_pool: Option<sqlx::PgPool>,
 
-    /// Redis 연결 (캐싱 및 세션 관리용)
-    pub redis: Option<redis::Client>,
+    /// Redis 캐시 (trader-data의 RedisCache 활용)
+    /// 전략 목록, 심볼 정보, 백테스트 결과 등 캐싱에 사용
+    pub cache: Option<Arc<RedisCache>>,
 
     /// KIS 국내 주식 클라이언트 (한국투자증권 API)
     pub kis_kr_client: Option<Arc<KisKrClient>>,
@@ -122,7 +123,7 @@ impl AppState {
             risk_manager: Arc::new(RwLock::new(risk_manager)),
             executor: Arc::new(RwLock::new(executor)),
             db_pool: None,
-            redis: None,
+            cache: None,
             kis_kr_client: None,
             kis_us_client: None,
             kis_clients_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -157,9 +158,31 @@ impl AppState {
         self
     }
 
-    /// Redis 연결 설정.
-    pub fn with_redis(mut self, client: redis::Client) -> Self {
-        self.redis = Some(client);
+    /// Redis 캐시 설정.
+    ///
+    /// trader-data의 RedisCache를 사용하여 API 응답 캐싱을 활성화합니다.
+    /// 전략 목록(5분 TTL), 심볼 정보(1시간 TTL) 등 자주 조회되는 데이터를 캐싱합니다.
+    pub fn with_cache(mut self, cache: RedisCache) -> Self {
+        self.cache = Some(Arc::new(cache));
+        self
+    }
+
+    /// Redis URL에서 캐시 연결 생성 (편의 메서드).
+    pub async fn with_redis_url(mut self, redis_url: &str) -> Self {
+        let config = RedisConfig {
+            url: redis_url.to_string(),
+            default_ttl_secs: 300, // 기본 5분
+            pool_size: 10,
+        };
+        match RedisCache::connect(&config).await {
+            Ok(cache) => {
+                tracing::info!("Redis 캐시 연결 성공");
+                self.cache = Some(Arc::new(cache));
+            }
+            Err(e) => {
+                tracing::warn!("Redis 캐시 연결 실패: {}. 캐시 없이 계속합니다.", e);
+            }
+        }
         self
     }
 
@@ -221,20 +244,18 @@ impl AppState {
         }
     }
 
-    /// Redis 연결 상태 확인.
+    /// Redis 캐시 연결 상태 확인.
     pub async fn is_redis_healthy(&self) -> bool {
-        if let Some(client) = &self.redis {
-            if let Ok(mut conn) = client.get_multiplexed_async_connection().await {
-                redis::cmd("PING")
-                    .query_async::<String>(&mut conn)
-                    .await
-                    .is_ok()
-            } else {
-                false
-            }
+        if let Some(cache) = &self.cache {
+            cache.health_check().await.unwrap_or(false)
         } else {
             false
         }
+    }
+
+    /// 캐시 설정 여부 확인.
+    pub fn has_cache(&self) -> bool {
+        self.cache.is_some()
     }
 
     /// KIS 국내 클라이언트 설정 여부 확인.
@@ -322,6 +343,85 @@ impl AppState {
     pub async fn is_ml_prediction_enabled(&self) -> bool {
         let ml_service = self.ml_service.read().await;
         ml_service.is_prediction_enabled()
+    }
+
+    // =========================================================================
+    // 캐시 유틸리티 메서드
+    // =========================================================================
+
+    /// 캐시에서 값을 조회합니다.
+    ///
+    /// 캐시가 설정되지 않은 경우 None을 반환합니다.
+    pub async fn cache_get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        if let Some(cache) = &self.cache {
+            cache.get(key).await.ok().flatten()
+        } else {
+            None
+        }
+    }
+
+    /// 캐시에 값을 저장합니다.
+    ///
+    /// 캐시가 설정되지 않은 경우 아무 동작도 하지 않습니다.
+    pub async fn cache_set<T: serde::Serialize>(&self, key: &str, value: &T, ttl_secs: u64) {
+        if let Some(cache) = &self.cache {
+            let _ = cache.set_with_ttl(key, value, ttl_secs).await;
+        }
+    }
+
+    /// 캐시에서 값을 조회하거나, 없으면 fetch 함수를 호출하여 저장 후 반환합니다.
+    ///
+    /// # Arguments
+    /// * `key` - 캐시 키
+    /// * `ttl_secs` - TTL (초)
+    /// * `fetch` - 캐시 미스 시 호출할 async 함수
+    ///
+    /// # Example
+    /// ```ignore
+    /// let strategies = state.cache_get_or_fetch(
+    ///     "strategies:list",
+    ///     300, // 5분
+    ///     || async { fetch_strategies_from_db().await }
+    /// ).await;
+    /// ```
+    pub async fn cache_get_or_fetch<T, F, Fut>(&self, key: &str, ttl_secs: u64, fetch: F) -> T
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned,
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = T>,
+    {
+        // 캐시 조회 시도
+        if let Some(cached) = self.cache_get::<T>(key).await {
+            return cached;
+        }
+
+        // 캐시 미스: 데이터 fetch
+        let value = fetch().await;
+
+        // 캐시에 저장
+        self.cache_set(key, &value, ttl_secs).await;
+
+        value
+    }
+
+    /// 캐시 키를 무효화(삭제)합니다.
+    pub async fn cache_invalidate(&self, key: &str) {
+        if let Some(cache) = &self.cache {
+            let _ = cache.delete(key).await;
+        }
+    }
+
+    /// 패턴에 일치하는 모든 캐시 키를 무효화합니다.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // 모든 전략 관련 캐시 삭제
+    /// state.cache_invalidate_pattern("strategies:*").await;
+    /// ```
+    pub async fn cache_invalidate_pattern(&self, pattern: &str) {
+        if let Some(cache) = &self.cache {
+            let _ = cache.delete_pattern(pattern).await;
+        }
     }
 }
 

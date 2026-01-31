@@ -1,6 +1,12 @@
 //! 백테스트 실행 함수들
 //!
 //! 전략별 백테스트를 실행하고 결과를 변환하는 함수를 제공합니다.
+//!
+//! # CPU-intensive 작업 처리
+//!
+//! 백테스트는 대량의 캔들 데이터를 처리하는 CPU-intensive 작업입니다.
+//! Tokio async runtime의 worker thread를 블로킹하지 않도록
+//! `tokio::task::spawn_blocking`을 사용하여 별도의 blocking thread pool에서 실행합니다.
 
 use chrono::{NaiveDate, TimeZone, Utc};
 use rust_decimal::Decimal;
@@ -38,7 +44,6 @@ use trader_strategy::strategies::{
     SnowStrategy, SnowConfig,
     StockGuganStrategy, StockGuganConfig,
     StockRotationStrategy, StockRotationConfig,
-    TrailingStopStrategy, TrailingStopConfig,
     Us3xLeverageStrategy, Us3xLeverageConfig,
     VolatilityBreakoutStrategy,
     XaaStrategy, XaaConfig,
@@ -46,7 +51,43 @@ use trader_strategy::strategies::{
 use trader_strategy::Strategy;
 
 /// 전략별 백테스트 실행
+///
+/// CPU-intensive 백테스트 계산을 `spawn_blocking`으로 별도 thread pool에서 실행하여
+/// Tokio async runtime의 worker thread를 블로킹하지 않습니다.
 pub async fn run_strategy_backtest(
+    strategy_id: &str,
+    config: BacktestConfig,
+    klines: &[Kline],
+    params: &Option<serde_json::Value>,
+) -> Result<BacktestReport, String> {
+    // 데이터를 owned 타입으로 변환하여 spawn_blocking으로 이동
+    let strategy_id = strategy_id.to_string();
+    let klines = klines.to_vec();
+    let params = params.clone();
+
+    // CPU-intensive 작업을 blocking thread pool에서 실행
+    let report = tokio::task::spawn_blocking(move || {
+        // blocking 컨텍스트에서 async 코드를 실행하기 위해 새 runtime 생성
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Runtime 생성 실패: {}", e))?;
+
+        rt.block_on(run_strategy_backtest_inner(
+            &strategy_id,
+            config,
+            &klines,
+            &params,
+        ))
+    })
+    .await
+    .map_err(|e| format!("백테스트 태스크 실행 실패: {}", e))??;
+
+    Ok(report)
+}
+
+/// 내부 백테스트 실행 함수 (sync 컨텍스트에서 호출됨)
+async fn run_strategy_backtest_inner(
     strategy_id: &str,
     config: BacktestConfig,
     klines: &[Kline],
@@ -266,20 +307,6 @@ pub async fn run_strategy_backtest(
                 }),
                 params,
             );
-            strategy
-                .initialize(strategy_config)
-                .await
-                .map_err(|e| e.to_string())?;
-            engine
-                .run(&mut strategy, klines)
-                .await
-                .map_err(|e| e.to_string())
-        }
-        "trailing_stop" => {
-            let mut strategy = TrailingStopStrategy::new();
-            let default_cfg =
-                serde_json::to_value(TrailingStopConfig::default()).map_err(|e| e.to_string())?;
-            let strategy_config = merge_params(default_cfg, params);
             strategy
                 .initialize(strategy_config)
                 .await
@@ -524,7 +551,46 @@ pub async fn run_strategy_backtest(
 }
 
 /// 다중 자산 전략 백테스트 실행
+///
+/// CPU-intensive 백테스트 계산을 `spawn_blocking`으로 별도 thread pool에서 실행하여
+/// Tokio async runtime의 worker thread를 블로킹하지 않습니다.
 pub async fn run_multi_strategy_backtest(
+    strategy_id: &str,
+    config: BacktestConfig,
+    merged_klines: &[Kline],
+    multi_klines: &HashMap<String, Vec<Kline>>,
+    params: &Option<serde_json::Value>,
+) -> Result<BacktestReport, String> {
+    // 데이터를 owned 타입으로 변환하여 spawn_blocking으로 이동
+    let strategy_id = strategy_id.to_string();
+    let merged_klines = merged_klines.to_vec();
+    let multi_klines = multi_klines.clone();
+    let params = params.clone();
+
+    // CPU-intensive 작업을 blocking thread pool에서 실행
+    let report = tokio::task::spawn_blocking(move || {
+        // blocking 컨텍스트에서 async 코드를 실행하기 위해 새 runtime 생성
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("Runtime 생성 실패: {}", e))?;
+
+        rt.block_on(run_multi_strategy_backtest_inner(
+            &strategy_id,
+            config,
+            &merged_klines,
+            &multi_klines,
+            &params,
+        ))
+    })
+    .await
+    .map_err(|e| format!("다중 자산 백테스트 태스크 실행 실패: {}", e))??;
+
+    Ok(report)
+}
+
+/// 내부 다중 자산 백테스트 실행 함수 (sync 컨텍스트에서 호출됨)
+async fn run_multi_strategy_backtest_inner(
     strategy_id: &str,
     config: BacktestConfig,
     merged_klines: &[Kline],

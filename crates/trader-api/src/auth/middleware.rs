@@ -2,8 +2,9 @@
 //!
 //! Axum 핸들러에서 사용할 JWT 인증 추출기 및 미들웨어.
 
+#![allow(dead_code)] // 향후 인증 시스템에서 사용 예정
+
 use axum::{
-    async_trait,
     extract::FromRequestParts,
     http::{header::AUTHORIZATION, request::Parts, StatusCode},
     response::{IntoResponse, Response},
@@ -73,7 +74,7 @@ pub struct JwtConfig {
     pub secret: String,
 }
 
-#[async_trait]
+
 impl<S> FromRequestParts<S> for JwtAuth
 where
     S: Send + Sync,
@@ -139,7 +140,7 @@ pub fn require_role(required_role: Role, claims: &Claims) -> Result<(), JwtAuthE
 #[derive(Debug, Clone)]
 pub struct OptionalJwtAuth(pub Option<Claims>);
 
-#[async_trait]
+
 impl<S> FromRequestParts<S> for OptionalJwtAuth
 where
     S: Send + Sync,
@@ -158,7 +159,7 @@ where
 #[derive(Debug, Clone)]
 pub struct AdminAuth(pub Claims);
 
-#[async_trait]
+
 impl<S> FromRequestParts<S> for AdminAuth
 where
     S: Send + Sync,
@@ -176,7 +177,7 @@ where
 #[derive(Debug, Clone)]
 pub struct TraderAuth(pub Claims);
 
-#[async_trait]
+
 impl<S> FromRequestParts<S> for TraderAuth
 where
     S: Send + Sync,

@@ -12,7 +12,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use rand::RngCore;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 use thiserror::Error;
 
 /// 암호화 에러

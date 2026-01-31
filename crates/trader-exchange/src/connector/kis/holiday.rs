@@ -9,6 +9,9 @@
 //! - 국내: `/uapi/domestic-stock/v1/quotations/chk-holiday` (tr_id: CTCA0903R)
 //! - 해외: `/uapi/overseas-stock/v1/quotations/countries-holiday` (tr_id: CTOS5011R)
 
+#![allow(dead_code)] // 휴장일 캐시 메타데이터
+#![allow(unused_comparisons)] // minute >= 0 비교 (문서화 목적)
+
 use super::auth::KisOAuth;
 use crate::ExchangeError;
 use chrono::{Datelike, NaiveDate, Timelike, Utc, Weekday};
@@ -142,18 +145,21 @@ pub struct HolidayChecker {
 
 impl HolidayChecker {
     /// 새로운 휴장일 확인기 생성.
-    pub fn new(oauth: KisOAuth) -> Self {
+    ///
+    /// # Errors
+    /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
+    pub fn new(oauth: KisOAuth) -> Result<Self, ExchangeError> {
         let client = Client::builder()
             .timeout(Duration::from_secs(oauth.config().timeout_secs))
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| ExchangeError::NetworkError(format!("HTTP 클라이언트 생성 실패: {}", e)))?;
 
-        Self {
+        Ok(Self {
             oauth,
             client,
             kr_cache: Arc::new(RwLock::new(None)),
             us_cache: Arc::new(RwLock::new(None)),
-        }
+        })
     }
 
     /// 주어진 날짜가 국내 시장 휴장일인지 확인.

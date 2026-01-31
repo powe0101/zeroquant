@@ -14,11 +14,10 @@
 use crate::error::{DataError, Result};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Deserialize;
 use std::str::FromStr;
 use trader_core::{Kline, Symbol, Timeframe};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// KRX API 기본 URL.
 const KRX_API_URL: &str = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd";
@@ -27,6 +26,7 @@ const KRX_API_URL: &str = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.
 const BLD_STOCK_OHLCV: &str = "dbms/MDC/STAT/standard/MDCSTAT01701";
 
 /// KRX 전종목 시세 조회 bld (일별).
+#[allow(dead_code)] // 향후 전종목 시세 조회 기능에서 사용 예정
 const BLD_MARKET_OHLCV: &str = "dbms/MDC/STAT/standard/MDCSTAT01501";
 
 /// KRX API 응답 구조.
@@ -39,6 +39,7 @@ struct KrxApiResponse {
 
 /// KRX OHLCV 레코드.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // API 응답 전체 필드 매핑 (일부만 사용)
 struct KrxOhlcvRecord {
     /// 거래일자 (YYYY/MM/DD 또는 YYYYMMDD)
     #[serde(rename = "TRD_DD", alias = "ISU_SRT_CD")]

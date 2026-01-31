@@ -27,10 +27,10 @@ use uuid::Uuid;
 
 use crate::routes::strategies::ApiError;
 use crate::routes::credentials::EncryptedCredentials;
-use crate::routes::equity_history::{self, PortfolioSnapshot};
+use crate::repository::{EquityHistoryRepository, PortfolioSnapshot};
 use crate::state::AppState;
 use chrono::Utc;
-use trader_core::{ExecutionHistory, ExecutionRecord};
+use trader_core::ExecutionRecord;
 use trader_exchange::connector::kis::{KisConfig, KisOAuth, KisKrClient, KisUsClient, KisAccountType, KisEnvironment};
 
 // ==================== 응답 타입 ====================
@@ -303,7 +303,8 @@ async fn get_or_create_kis_client(
                 account_number.clone(),
                 account_type,
             );
-            let new_oauth = Arc::new(KisOAuth::new(config));
+            let new_oauth = Arc::new(KisOAuth::new(config)
+                .map_err(|e| format!("KIS OAuth 생성 실패: {}", e))?);
 
             // 캐시에 저장
             let mut oauth_cache = state.kis_oauth_cache.write().await;
@@ -315,8 +316,10 @@ async fn get_or_create_kis_client(
     };
 
     // 4. 클라이언트 생성 (공유된 OAuth 사용)
-    let kr_client = KisKrClient::with_shared_oauth(Arc::clone(&shared_oauth));
-    let us_client = KisUsClient::with_shared_oauth(shared_oauth);
+    let kr_client = KisKrClient::with_shared_oauth(Arc::clone(&shared_oauth))
+        .map_err(|e| format!("KIS KR 클라이언트 생성 실패: {}", e))?;
+    let us_client = KisUsClient::with_shared_oauth(shared_oauth)
+        .map_err(|e| format!("KIS US 클라이언트 생성 실패: {}", e))?;
 
     // 5. 클라이언트 캐시에 저장
     let pair = Arc::new(KisClientPair::new(kr_client, us_client));
@@ -463,7 +466,7 @@ pub async fn get_portfolio_summary(
             // 비동기로 저장 (실패해도 API 응답에 영향 없음)
             let pool = db_pool.clone();
             tokio::spawn(async move {
-                match equity_history::save_portfolio_snapshot(&pool, &snapshot).await {
+                match EquityHistoryRepository::save_snapshot(&pool, &snapshot).await {
                     Ok(_) => debug!("포트폴리오 스냅샷 저장 성공: credential_id={}", credential_id),
                     Err(e) => warn!("포트폴리오 스냅샷 저장 실패: {}", e),
                 }

@@ -27,14 +27,14 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide,
     TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Kline, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
 
 /// 자산 유형
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -192,11 +192,16 @@ pub async fn create_order(
     let order = Order::from_request(order_request, "api_manual");
     let order_id = order.id;
 
-    // OrderManager에 주문 추가
-    let executor = state.executor.read().await;
+    // OrderManager에 주문 추가 - 최소 락 홀드
+    // executor 락을 빠르게 해제하기 위해 Arc 클론 후 즉시 드롭
+    let order_manager = {
+        let executor = state.executor.read().await;
+        std::sync::Arc::clone(executor.order_manager())
+    };  // executor 락 해제됨
+
     {
-        let mut order_manager = executor.order_manager().write().await;
-        if let Err(e) = order_manager.add_order(order.clone()) {
+        let mut order_manager_guard = order_manager.write().await;
+        if let Err(e) = order_manager_guard.add_order(order.clone()) {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError::new("ORDER_ADD_FAILED", e.to_string())),
@@ -243,16 +248,16 @@ pub async fn create_order(
 pub async fn list_orders(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let executor = state.executor.read().await;
-    let orders = executor.get_active_orders().await;
+    // 최소 락 홀드: 주문 목록만 빠르게 복사
+    let orders = {
+        let executor = state.executor.read().await;
+        executor.get_active_orders().await
+    };  // 락 해제됨
 
-    // 심볼 목록 추출
+    // 락 없이 후속 작업 수행
     let symbols: Vec<String> = orders.iter().map(|o| o.symbol.to_string()).collect();
-
-    // display name 배치 조회
     let display_names = state.get_display_names(&symbols, false).await;
 
-    // 응답 생성 및 display_name 설정
     let order_responses: Vec<OrderResponse> = orders
         .iter()
         .map(|o| {
@@ -287,9 +292,14 @@ pub async fn get_order(
         )
     })?;
 
-    let executor = state.executor.read().await;
+    // 최소 락 홀드: 주문 조회 후 즉시 락 해제
+    let order = {
+        let executor = state.executor.read().await;
+        executor.get_order(order_id).await
+    };  // 락 해제됨
 
-    match executor.get_order(order_id).await {
+    // 락 없이 응답 생성
+    match order {
         Some(order) => {
             let mut resp = OrderResponse::from(&order);
             resp.display_name = Some(state.get_display_name(&order.symbol.to_string(), false).await);
@@ -320,21 +330,27 @@ pub async fn cancel_order(
 
     let reason = body.and_then(|b| b.reason.clone());
 
-    let executor = state.executor.read().await;
-
-    // 주문 존재 여부 확인 및 정보 저장 (브로드캐스트용)
-    let order_info = match executor.get_order(order_id).await {
-        Some(order) => order,
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ApiError::new("ORDER_NOT_FOUND", format!("Order not found: {}", id))),
-            ));
+    // 최소 락 홀드: 주문 정보 조회 후 즉시 해제
+    let order_info = {
+        let executor = state.executor.read().await;
+        match executor.get_order(order_id).await {
+            Some(order) => order,
+            None => {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(ApiError::new("ORDER_NOT_FOUND", format!("Order not found: {}", id))),
+                ));
+            }
         }
-    };
+    };  // 락 해제됨
 
-    // 주문 취소
-    match executor.cancel_order(order_id, reason).await {
+    // 주문 취소 (별도 락 획득)
+    let cancel_result = {
+        let executor = state.executor.read().await;
+        executor.cancel_order(order_id, reason).await
+    };  // 락 해제됨
+
+    match cancel_result {
         Ok(()) => {
             // 주문 취소 메트릭 기록
             let side_str = match order_info.side {
@@ -376,9 +392,13 @@ pub async fn cancel_order(
 pub async fn get_order_stats(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let executor = state.executor.read().await;
-    let orders = executor.get_active_orders().await;
+    // 최소 락 홀드: 주문 목록만 빠르게 복사
+    let orders = {
+        let executor = state.executor.read().await;
+        executor.get_active_orders().await
+    };  // 락 해제됨
 
+    // 락 없이 통계 계산
     let total = orders.len();
     let pending = orders.iter().filter(|o| o.status == OrderStatusType::Pending).count();
     let open = orders.iter().filter(|o| o.status == OrderStatusType::Open).count();
@@ -408,7 +428,7 @@ pub fn orders_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_orders).post(create_order))
         .route("/stats", get(get_order_stats))
-        .route("/:id", get(get_order).delete(cancel_order))
+        .route("/{id}", get(get_order).delete(cancel_order))
 }
 
 // ==================== 테스트 ====================
@@ -459,7 +479,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/orders/:id", get(get_order))
+            .route("/orders/{id}", get(get_order))
             .with_state(state);
 
         let order_id = Uuid::new_v4();
@@ -482,7 +502,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/orders/:id", get(get_order))
+            .route("/orders/{id}", get(get_order))
             .with_state(state);
 
         let response = app
@@ -511,7 +531,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/orders/:id", delete(cancel_order))
+            .route("/orders/{id}", delete(cancel_order))
             .with_state(state);
 
         let order_id = Uuid::new_v4();

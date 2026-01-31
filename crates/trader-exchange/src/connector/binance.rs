@@ -3,6 +3,8 @@
 //! Binance Spot용 REST API 및 WebSocket 연결 구현.
 //! 메인넷과 테스트넷 모두 지원.
 
+#![allow(dead_code)] // API 응답 필드 전체 매핑 (일부만 사용)
+
 use crate::traits::{AccountInfo, Balance, Exchange, ExchangeResult};
 use crate::ExchangeError;
 use async_trait::async_trait;
@@ -220,22 +222,27 @@ pub struct BinanceClient {
 
 impl BinanceClient {
     /// 새 Binance 클라이언트 생성.
-    pub fn new(config: BinanceConfig) -> Self {
+    ///
+    /// # Errors
+    /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
+    pub fn new(config: BinanceConfig) -> Result<Self, ExchangeError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| ExchangeError::NetworkError(format!("HTTP 클라이언트 생성 실패: {}", e)))?;
 
-        Self {
+        Ok(Self {
             config,
             client,
             connected: false,
-        }
+        })
     }
 
     /// 환경 변수에서 생성.
+    ///
+    /// 환경 변수가 설정되지 않았거나 클라이언트 생성에 실패하면 `None`을 반환합니다.
     pub fn from_env() -> Option<Self> {
-        BinanceConfig::from_env().map(Self::new)
+        BinanceConfig::from_env().and_then(|config| Self::new(config).ok())
     }
 
     /// 현재 타임스탬프(밀리초) 반환.
@@ -795,7 +802,7 @@ mod tests {
             "vmPUZE6mv9SD5VNHk4HlWFsOr6aKE2zvsw0MuIgwCIPy6utIco14y7Ju91duEh8A".to_string(),
             "NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j".to_string(),
         );
-        let client = BinanceClient::new(config);
+        let client = BinanceClient::new(config).expect("테스트용 클라이언트 생성 실패");
 
         // Test signature
         let query = "symbol=LTCBTC&side=BUY&type=LIMIT&timeInForce=GTC&quantity=1&price=0.1&recvWindow=5000&timestamp=1499827319559";

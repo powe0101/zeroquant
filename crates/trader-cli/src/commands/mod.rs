@@ -5,6 +5,6 @@ pub mod download;
 pub mod health;
 pub mod import;
 
-pub use backtest::{run_backtest, print_available_strategies, BacktestCliConfig};
-pub use download::*;
-pub use import::{import_to_db, ImportDbConfig};
+// 각 서브모듈 직접 사용 권장 (ambiguous re-export 방지)
+pub use backtest::BacktestCliConfig;
+pub use import::ImportDbConfig;

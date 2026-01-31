@@ -5,6 +5,77 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.4.3] - 2026-01-31
+
+### Added
+
+#### 통합 에러 핸들링 시스템
+- **ApiErrorResponse** (`error.rs`): 모든 API 엔드포인트의 에러 응답 통합
+  - 일관된 에러 코드, 메시지, 타임스탬프 제공
+  - 기존 분산된 에러 타입들 통합 (strategies, backtest, simulation, ml)
+  - 에러 상세 정보 및 요청 컨텍스트 포함
+
+#### Repository 패턴 확장
+- **신규 Repository 모듈 5개 추가**:
+  - `repository/portfolio.rs`: 포트폴리오 데이터 접근
+  - `repository/orders.rs`: 주문 이력 관리
+  - `repository/positions.rs`: 포지션 데이터 관리
+  - `repository/equity_history.rs`: 자산 이력 조회
+  - `repository/backtest_results.rs`: 백테스트 결과 저장/조회
+
+#### 프론트엔드 컴포넌트 분리
+- **AddStrategyModal.tsx**: 전략 추가 모달 분리
+- **EditStrategyModal.tsx**: 전략 편집 모달 분리
+- **SymbolPanel.tsx**: 심볼 패널 컴포넌트
+- **format.ts**: 포맷팅 유틸리티
+- **indicators.ts**: 기술적 지표 계산 유틸리티
+
+### Changed
+
+#### 대형 파일 모듈화
+- **analytics.rs (2,678줄) → 7개 모듈로 분리**:
+  ```
+  routes/analytics/
+  ├── mod.rs        (라우터)
+  ├── charts.rs     (차트 데이터)
+  ├── indicators.rs (지표 계산)
+  ├── manager.rs    (매니저)
+  ├── performance.rs(성과 분석)
+  ├── sync.rs       (동기화)
+  └── types.rs      (타입 정의)
+  ```
+
+- **credentials.rs (1,615줄) → 5개 모듈로 분리**:
+  ```
+  routes/credentials/
+  ├── mod.rs           (라우터)
+  ├── active_account.rs(활성 계정)
+  ├── exchange.rs      (거래소 자격증명)
+  ├── telegram.rs      (텔레그램 설정)
+  └── types.rs         (타입 정의)
+  ```
+
+- **Dataset.tsx, Strategies.tsx**: 컴포넌트 분리로 1,400+ 줄 감소
+
+#### 모듈 재배치
+- **trailing_stop.rs**: `trader-strategy` → `trader-risk` 크레이트로 이동
+  - 리스크 관리 로직의 올바른 위치 배치
+
+#### 인프라 개선
+- **Docker → Podman 마이그레이션 지원**
+  - README.md: Podman 설치 및 사용법 추가
+  - docker-compose.yml: Podman 호환 주석 추가
+  - 명령어 매핑 테이블 제공
+
+### Improved
+
+#### 코드 품질
+- 에러 처리 일관성 향상 (unwrap() 사용 감소)
+- 모듈별 관심사 분리로 유지보수성 향상
+- Repository 패턴으로 데이터 접근 계층 표준화
+
+---
+
 ## [0.4.2] - 2026-01-31
 
 ### Fixed

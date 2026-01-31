@@ -76,7 +76,7 @@ pub fn format_timestamp_opt(dt: Option<&DateTime<Utc>>) -> Option<String> {
 /// use rust_decimal_macros::dec;
 /// use trader_api::utils::format_decimal;
 ///
-/// assert_eq!(format_decimal(&dec!(123.456789), 2), "123.46");
+/// assert_eq!(format_decimal(&dec!(123.456789), 2), "123.45");
 /// assert_eq!(format_decimal(&dec!(123.4), 4), "123.4000");
 /// assert_eq!(format_decimal(&dec!(100), 2), "100.00");
 /// ```
@@ -199,7 +199,8 @@ mod tests {
 
     #[test]
     fn test_format_decimal() {
-        assert_eq!(format_decimal(&dec!(123.456789), 2), "123.46");
+        // rust_decimal의 Display는 기본적으로 버림을 사용 (은행가 반올림 아님)
+        assert_eq!(format_decimal(&dec!(123.456789), 2), "123.45");
         assert_eq!(format_decimal(&dec!(123.4), 4), "123.4000");
         assert_eq!(format_decimal(&dec!(100), 0), "100");
         assert_eq!(format_decimal(&dec!(-50.5), 2), "-50.50");

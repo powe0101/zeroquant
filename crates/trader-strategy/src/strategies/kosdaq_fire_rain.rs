@@ -30,8 +30,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use chrono::{DateTime, Utc};
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
-use tracing::{debug, info, warn};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use tracing::{debug, info};
 
 /// 코스닥 피레인 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]

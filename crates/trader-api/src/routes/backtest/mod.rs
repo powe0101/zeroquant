@@ -6,7 +6,7 @@
 //!
 //! - `GET /api/v1/backtest/strategies` - 백테스트 가능한 전략 목록
 //! - `POST /api/v1/backtest/run` - 백테스트 실행
-//! - `GET /api/v1/backtest/results/:id` - 백테스트 결과 조회
+//! - `GET /api/v1/backtest/results/{id}` - 백테스트 결과 조회
 
 mod engine;
 mod loader;
@@ -58,10 +58,13 @@ use loader::{
 ///
 /// 현재 등록된 모든 전략 중 백테스트가 가능한 전략 목록을 반환합니다.
 pub async fn list_backtest_strategies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let engine = state.strategy_engine.read().await;
-    let all_statuses = engine.get_all_statuses().await;
+    // 최소 락 홀드: 데이터만 빠르게 복사하고 즉시 락 해제
+    let all_statuses = {
+        let engine = state.strategy_engine.read().await;
+        engine.get_all_statuses().await
+    };  // 락 해제됨
 
-    // 등록된 전략을 백테스트 가능 전략으로 변환
+    // 락 없이 계산 수행
     let strategies: Vec<BacktestableStrategy> = all_statuses
         .into_iter()
         .map(|(id, status)| {
@@ -176,7 +179,6 @@ pub async fn run_backtest(
         "xaa",
         "stock_rotation",
         // 신규 전략
-        "trailing_stop",
         "all_weather",
         "snow",
         "market_cap_top",
@@ -265,7 +267,7 @@ pub async fn run_backtest(
 
 /// 백테스트 결과 조회
 ///
-/// GET /api/v1/backtest/results/:id
+/// GET /api/v1/backtest/results/{id}
 ///
 /// 저장된 백테스트 결과를 조회합니다.
 pub async fn get_backtest_result(
@@ -651,23 +653,6 @@ fn get_builtin_strategies() -> Vec<BacktestableStrategy> {
             how_it_works: Some("단기 이동평균(10일)이 장기 이동평균(20일)을 상향 돌파하면 매수(골든크로스), 하향 돌파하면 매도(데드크로스)합니다.".to_string()),
         },
         // ===== 신규 전략들 =====
-        BacktestableStrategy {
-            id: "trailing_stop".to_string(),
-            name: "트레일링 스톱".to_string(),
-            description: "고점 대비 하락 시 자동 청산하는 트레일링 스톱 전략".to_string(),
-            supported_symbols: vec!["005930".to_string(), "SPY".to_string(), "BTCUSDT".to_string()],
-            default_params: serde_json::json!({
-                "trailing_stop_pct": 5.0,
-                "max_trailing_stop_pct": 10.0,
-                "profit_rate_adjustment": 2.0
-            }),
-            ui_schema: get_ui_schema_for_strategy("trailing_stop"),
-            category: Some("리스크관리".to_string()),
-            tags: vec!["트레일링".to_string(), "스톱".to_string(), "리스크관리".to_string()],
-            execution_schedule: Some(ExecutionSchedule::Realtime),
-            schedule_detail: Some("가격 변동 시마다 실행".to_string()),
-            how_it_works: Some("초기 트레일링 스톱 5%에서 시작하여 수익률 증가에 따라 최대 10%까지 조정됩니다. 고점 대비 설정된 비율 이상 하락 시 자동 청산합니다.".to_string()),
-        },
         BacktestableStrategy {
             id: "all_weather".to_string(),
             name: "올웨더".to_string(),
@@ -1226,7 +1211,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/results/:id", get(get_backtest_result))
+            .route("/results/{id}", get(get_backtest_result))
             .with_state(state);
 
         let response = app

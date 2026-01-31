@@ -29,7 +29,7 @@
 //! .with_environment(KisEnvironment::Paper);
 //!
 //! // OAuth 관리자 생성
-//! let oauth = KisOAuth::new(config);
+//! let oauth = KisOAuth::new(config)?;
 //!
 //! // 접근 토큰 획득
 //! let token = oauth.get_token().await?;

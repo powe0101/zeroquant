@@ -7,10 +7,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{middleware, routing::get, Router};
+use axum::{http::StatusCode, middleware, routing::get, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
 use sqlx::postgres::PgPoolOptions;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn, error};
 
@@ -163,8 +164,22 @@ async fn start_market_data_source(
     );
 
     // UnifiedMarketStream 생성 (빌더 패턴)
-    let oauth_kr = KisOAuth::new(config.clone());
-    let oauth_us = KisOAuth::new(config.clone());
+    let oauth_kr = match KisOAuth::new(config.clone()) {
+        Ok(oauth) => oauth,
+        Err(e) => {
+            error!(error = %e, "Failed to create KR OAuth");
+            start_simulator(subscriptions);
+            return true;
+        }
+    };
+    let oauth_us = match KisOAuth::new(config.clone()) {
+        Ok(oauth) => oauth,
+        Err(e) => {
+            error!(error = %e, "Failed to create US OAuth");
+            start_simulator(subscriptions);
+            return true;
+        }
+    };
     let mut stream = UnifiedMarketStream::new()
         .with_kr_stream(oauth_kr)
         .with_us_stream(oauth_us);
@@ -214,11 +229,35 @@ fn create_kis_clients() -> (Option<KisKrClient>, Option<KisUsClient>) {
             );
 
             // OAuth 관리자는 클라이언트 간 공유
-            let oauth_kr = KisOAuth::new(config.clone());
-            let oauth_us = KisOAuth::new(config);
+            let oauth_kr = match KisOAuth::new(config.clone()) {
+                Ok(oauth) => oauth,
+                Err(e) => {
+                    error!(error = %e, "Failed to create KR OAuth");
+                    return (None, None);
+                }
+            };
+            let oauth_us = match KisOAuth::new(config) {
+                Ok(oauth) => oauth,
+                Err(e) => {
+                    error!(error = %e, "Failed to create US OAuth");
+                    return (None, None);
+                }
+            };
 
-            let kr_client = KisKrClient::new(oauth_kr);
-            let us_client = KisUsClient::new(oauth_us);
+            let kr_client = match KisKrClient::new(oauth_kr) {
+                Ok(client) => client,
+                Err(e) => {
+                    error!(error = %e, "Failed to create KR client");
+                    return (None, None);
+                }
+            };
+            let us_client = match KisUsClient::new(oauth_us) {
+                Ok(client) => client,
+                Err(e) => {
+                    error!(error = %e, "Failed to create US client");
+                    return (None, None);
+                }
+            };
 
             info!("KIS clients created (KR + US)");
             (Some(kr_client), Some(us_client))
@@ -278,19 +317,12 @@ async fn create_app_state(config: &ServerConfig) -> AppState {
         warn!("DATABASE_URL not set, database features will be disabled");
     }
 
-    // Redis 연결 설정 (REDIS_URL 환경변수에서)
+    // Redis 캐시 연결 설정 (REDIS_URL 환경변수에서)
+    // trader-data의 RedisCache를 사용하여 API 응답 캐싱 활성화
     if let Ok(redis_url) = std::env::var("REDIS_URL") {
-        match redis::Client::open(redis_url.as_str()) {
-            Ok(client) => {
-                info!("Redis client configured");
-                state = state.with_redis(client);
-            }
-            Err(e) => {
-                error!("Failed to create Redis client: {}", e);
-            }
-        }
+        state = state.with_redis_url(&redis_url).await;
     } else {
-        warn!("REDIS_URL not set, Redis features will be disabled");
+        warn!("REDIS_URL not set, Redis caching will be disabled");
     }
 
     // 암호화 관리자 설정 (ENCRYPTION_MASTER_KEY 환경변수에서)
@@ -441,6 +473,8 @@ fn create_router(
         .layer(middleware::from_fn(metrics_layer))
         // 기타 미들웨어
         .layer(TraceLayer::new_for_http())
+        // 전역 타임아웃 (30초) - 408 상태 코드 반환
+        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)))
         .layer(cors_layer())
 }
 
@@ -497,7 +531,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(version = %state.version, "Application state initialized");
     info!(
         has_db = state.db_pool.is_some(),
-        has_redis = state.redis.is_some(),
+        has_cache = state.has_cache(),
         has_encryptor = state.encryptor.is_some(),
         has_kis = state.has_kis_client(),
         has_websocket = state.has_subscriptions(),

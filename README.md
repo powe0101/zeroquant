@@ -247,14 +247,14 @@ zeroquant/
 | Database | PostgreSQL (TimescaleDB), Redis |
 | Frontend | SolidJS, TypeScript, Vite |
 | ML | ONNX Runtime, XGBoost, LightGBM, scikit-learn |
-| Infrastructure | Docker, TimescaleDB, Redis |
+| Infrastructure | Podman, TimescaleDB, Redis |
 
 ## 빠른 시작
 
 ### 요구사항
 - Rust 1.83+ (ONNX Runtime 호환)
 - Node.js 18+
-- Docker & Docker Compose
+- **Podman** (권장) 또는 Docker & Docker Compose
 - PostgreSQL 15+ (TimescaleDB) / Redis 7+
 
 ### 설치
@@ -268,11 +268,23 @@ cd zeroquant
 cp .env.example .env
 ```
 
+### Podman 설정 (Windows)
+
+```bash
+# Podman 설치
+winget install RedHat.Podman
+
+# Podman Machine 초기화 및 시작
+podman machine init --cpus=2 --memory=2048 --disk-size=20
+podman machine start
+```
+
 ### 실행 (인프라 + 로컬 개발)
 
 ```bash
-# 1. 인프라 시작 (DB, Redis)
-docker-compose up -d
+# 1. 인프라 시작 (DB, Redis) - Podman 또는 Docker 모두 지원
+podman compose up -d    # Podman 사용 시
+# docker-compose up -d  # Docker 사용 시
 
 # 2. 백엔드 실행 (로컬)
 export DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
@@ -283,15 +295,25 @@ cargo run --bin trader-api
 cd frontend && npm install && npm run dev
 ```
 
+### 명령어 매핑 (Docker ↔ Podman)
+
+| Docker | Podman |
+|--------|--------|
+| `docker-compose up -d` | `podman compose up -d` |
+| `docker-compose down` | `podman compose down` |
+| `docker-compose logs -f` | `podman compose logs -f` |
+| `docker exec -it` | `podman exec -it` |
+| `docker ps` | `podman ps` |
+
 ### ML 모델 훈련
 
 ```bash
-# Docker로 ML 훈련 실행
-docker-compose --profile ml run --rm trader-ml \
+# Podman으로 ML 훈련 실행
+podman compose --profile ml run --rm trader-ml \
   python scripts/train_ml_model.py --symbol SPY --model xgboost
 
 # 사용 가능한 심볼 목록
-docker-compose --profile ml run --rm trader-ml \
+podman compose --profile ml run --rm trader-ml \
   python scripts/train_ml_model.py --list-symbols
 ```
 

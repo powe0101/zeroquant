@@ -31,7 +31,7 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::traits::Strategy;
 use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};

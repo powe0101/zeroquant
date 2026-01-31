@@ -9,7 +9,6 @@
 //! - **Volatility Breakout**: 추세장을 위한 Larry Williams 모멘텀 전략.
 //! - **Magic Split**: 레벨 기반 수익 실현과 함께하는 체계적 물타기.
 //! - **SMA Crossover**: 이동평균 교차 전략.
-//! - **Trailing Stop**: 트레일링 스톱 시스템.
 //! - **Candle Pattern**: 35가지 캔들스틱 패턴 인식.
 //! - **Infinity Bot**: 50라운드 피라미드 물타기.
 //! - **Market Interest Day**: 거래량 급증 종목 단기 트레이딩.
@@ -64,7 +63,6 @@ pub mod sma;
 pub mod snow;
 pub mod stock_gugan;
 pub mod stock_rotation;
-pub mod trailing_stop;
 pub mod us_3x_leverage;
 pub mod volatility_breakout;
 pub mod xaa;
@@ -93,7 +91,6 @@ pub use sma::*;
 pub use snow::*;
 pub use stock_gugan::*;
 pub use stock_rotation::*;
-pub use trailing_stop::*;
 pub use us_3x_leverage::*;
 pub use volatility_breakout::*;
 pub use xaa::*;

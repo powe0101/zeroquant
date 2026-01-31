@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// 캔들 데이터
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -448,7 +448,7 @@ impl MarketInterestDayStrategy {
             let entry_price = self.state.entry_price.unwrap_or(candle.close);
             let profit = (candle.close - entry_price) * self.state.quantity;
 
-            let quantity = self.state.quantity;
+            let _quantity = self.state.quantity;
 
             // 상태 리셋
             self.state.has_position = false;

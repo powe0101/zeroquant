@@ -2,6 +2,8 @@
 //!
 //! Argon2 기반 비밀번호 해싱 및 검증.
 
+#![allow(dead_code)] // 향후 인증 시스템에서 사용 예정
+
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,

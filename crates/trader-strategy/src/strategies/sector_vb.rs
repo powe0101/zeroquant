@@ -26,15 +26,14 @@
 use crate::strategies::common::deserialize_symbols;
 use crate::Strategy;
 use async_trait::async_trait;
-use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use chrono::{DateTime, Utc, Datelike, Timelike};
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
-use tracing::{debug, info, warn};
+use chrono::{DateTime, Utc, Timelike};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use tracing::{debug, info};
 
 /// 섹터 변동성 돌파 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]

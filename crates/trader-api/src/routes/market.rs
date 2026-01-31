@@ -4,7 +4,7 @@
 //!
 //! # 엔드포인트
 //!
-//! - `GET /api/v1/market/:market/status` - 시장 상태 조회
+//! - `GET /api/v1/market/{market}/status` - 시장 상태 조회
 //! - `GET /api/v1/market/klines` - 캔들스틱 데이터 조회 (실시간 거래소 데이터)
 //! - `GET /api/v1/market/ticker` - 현재가 조회
 
@@ -76,7 +76,7 @@ impl MarketSession {
 
 /// 시장 상태 조회.
 ///
-/// GET /api/v1/market/:market/status
+/// GET /api/v1/market/{market}/status
 ///
 /// 한국 시장 (KR):
 /// - 정규장: 09:00-15:30 KST (월-금)
@@ -373,8 +373,10 @@ async fn load_kis_clients_from_db(
         account_number.clone(),
         account_type,
     );
-    let kr_oauth = KisOAuth::new(kr_config);
-    let kr_client = Arc::new(KisKrClient::new(kr_oauth));
+    let kr_oauth = KisOAuth::new(kr_config)
+        .map_err(|e| format!("KIS KR OAuth 생성 실패: {}", e))?;
+    let kr_client = Arc::new(KisKrClient::new(kr_oauth)
+        .map_err(|e| format!("KIS KR 클라이언트 생성 실패: {}", e))?);
 
     // 해외 클라이언트용 KisConfig 생성 (동일한 자격증명 사용)
     let us_config = KisConfig::new(
@@ -383,8 +385,10 @@ async fn load_kis_clients_from_db(
         account_number,
         account_type,
     );
-    let us_oauth = KisOAuth::new(us_config);
-    let us_client = Arc::new(KisUsClient::new(us_oauth));
+    let us_oauth = KisOAuth::new(us_config)
+        .map_err(|e| format!("KIS US OAuth 생성 실패: {}", e))?;
+    let us_client = Arc::new(KisUsClient::new(us_oauth)
+        .map_err(|e| format!("KIS US 클라이언트 생성 실패: {}", e))?);
 
     Ok((kr_client, us_client))
 }
@@ -669,7 +673,7 @@ pub fn market_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/klines", get(get_klines))
         .route("/ticker", get(get_ticker))
-        .route("/:market/status", get(get_market_status))
+        .route("/{market}/status", get(get_market_status))
 }
 
 // ==================== 테스트 ====================
@@ -689,7 +693,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/market/:market/status", get(get_market_status))
+            .route("/market/{market}/status", get(get_market_status))
             .with_state(state);
 
         let response = app
@@ -718,7 +722,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/market/:market/status", get(get_market_status))
+            .route("/market/{market}/status", get(get_market_status))
             .with_state(state);
 
         let response = app
@@ -747,7 +751,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/market/:market/status", get(get_market_status))
+            .route("/market/{market}/status", get(get_market_status))
             .with_state(state);
 
         let response = app

@@ -35,7 +35,7 @@ use crate::strategies::common::rebalance::{
     TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
 
 /// 자산 클래스.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -313,7 +313,7 @@ impl DualMomentumStrategy {
 
     /// 목표 배분 계산.
     fn calculate_target_allocations(&self) -> Vec<TargetAllocation> {
-        let config = match self.config.as_ref() {
+        let _config = match self.config.as_ref() {
             Some(c) => c,
             None => return Vec::new(),
         };

@@ -25,7 +25,7 @@ use rust_decimal::Decimal;
 use sqlx::postgres::PgPool;
 use sqlx::FromRow;
 use trader_core::{Kline, Symbol, Timeframe};
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument};
 
 /// OHLCV 캔들 데이터베이스 레코드.
 #[derive(Debug, Clone, FromRow)]

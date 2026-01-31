@@ -18,7 +18,7 @@ use axum::{
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use trader_core::Timeframe;
 use trader_data::cache::CachedHistoricalDataProvider;
@@ -918,6 +918,6 @@ pub fn dataset_router() -> Router<Arc<AppState>> {
         .route("/", get(list_datasets))
         .route("/fetch", post(fetch_dataset))
         .route("/search", get(search_symbols))
-        .route("/:symbol", get(get_candles))
-        .route("/:symbol", delete(delete_dataset))
+        .route("/{symbol}", get(get_candles))
+        .route("/{symbol}", delete(delete_dataset))
 }

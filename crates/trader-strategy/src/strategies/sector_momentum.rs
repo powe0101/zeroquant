@@ -43,7 +43,7 @@ use crate::strategies::common::rebalance::{
     TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
 
 /// 시장 타입.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

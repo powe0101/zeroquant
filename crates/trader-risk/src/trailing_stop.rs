@@ -103,6 +103,14 @@ pub struct EnhancedTrailingStop {
     pub current_profit_pct: Decimal,
     /// 가격 업데이트 횟수
     pub update_count: u64,
+    /// 트레일링 스톱 활성화 가격 (선택) - 이 가격 도달 시에만 트레일링 시작
+    pub activation_price: Option<Decimal>,
+    /// 부분 익절 임계값 (%) - 이 수익률 도달 시 부분 익절 신호
+    pub profit_lock_threshold: Option<Decimal>,
+    /// 익절 시 매도 비율 (%)
+    pub profit_lock_sell_pct: Decimal,
+    /// 부분 익절 실행 여부
+    pub profit_locked: bool,
 }
 
 impl EnhancedTrailingStop {
@@ -129,7 +137,27 @@ impl EnhancedTrailingStop {
             activated: false,
             current_profit_pct: Decimal::ZERO,
             update_count: 0,
+            activation_price: None,
+            profit_lock_threshold: None,
+            profit_lock_sell_pct: dec!(50),
+            profit_locked: false,
         }
+    }
+
+    /// 활성화 가격 설정 (빌더 패턴)
+    /// 이 가격에 도달해야 트레일링 스톱이 활성화됩니다.
+    pub fn with_activation_price(mut self, price: Decimal) -> Self {
+        self.activation_price = Some(price);
+        self.activated = false; // 활성화 가격이 설정되면 비활성 상태로 시작
+        self
+    }
+
+    /// 부분 익절 설정 (빌더 패턴)
+    /// 지정된 수익률 도달 시 부분 익절 신호를 발생시킵니다.
+    pub fn with_profit_lock(mut self, threshold_pct: Decimal, sell_pct: Decimal) -> Self {
+        self.profit_lock_threshold = Some(threshold_pct);
+        self.profit_lock_sell_pct = sell_pct;
+        self
     }
 
     /// 모드에 따른 초기 트리거 가격 계산
@@ -209,10 +237,52 @@ impl EnhancedTrailingStop {
             };
         }
 
+        // 활성화 가격 체크 (설정된 경우)
+        if !self.activated {
+            if let Some(activation) = self.activation_price {
+                match self.position_side {
+                    Side::Buy => {
+                        if current_price < activation {
+                            return false; // 아직 활성화 안됨
+                        }
+                    }
+                    Side::Sell => {
+                        if current_price > activation {
+                            return false; // 아직 활성화 안됨
+                        }
+                    }
+                }
+            }
+        }
+
         match self.position_side {
             Side::Buy => self.update_long(current_price),
             Side::Sell => self.update_short(current_price),
         }
+    }
+
+    /// 부분 익절 조건 체크
+    ///
+    /// 부분 익절 조건이 충족되면 `Some((threshold_pct, sell_pct))` 반환
+    /// 이미 익절이 실행된 경우 `None` 반환
+    pub fn check_profit_lock(&mut self) -> Option<(Decimal, Decimal)> {
+        if self.profit_locked {
+            return None;
+        }
+
+        if let Some(threshold) = self.profit_lock_threshold {
+            if self.current_profit_pct >= threshold {
+                self.profit_locked = true;
+                return Some((threshold, self.profit_lock_sell_pct));
+            }
+        }
+
+        None
+    }
+
+    /// 부분 익절 상태 리셋 (재사용 시)
+    pub fn reset_profit_lock(&mut self) {
+        self.profit_locked = false;
     }
 
     /// 롱 포지션 업데이트
@@ -373,6 +443,9 @@ impl EnhancedTrailingStop {
             current_trail_pct: self.get_current_trail_pct(),
             activated: self.activated,
             update_count: self.update_count,
+            activation_price: self.activation_price,
+            profit_lock_threshold: self.profit_lock_threshold,
+            profit_locked: self.profit_locked,
         }
     }
 
@@ -406,6 +479,12 @@ pub struct TrailingStopStats {
     pub activated: bool,
     /// 업데이트 횟수
     pub update_count: u64,
+    /// 활성화 가격
+    pub activation_price: Option<Decimal>,
+    /// 부분 익절 임계값
+    pub profit_lock_threshold: Option<Decimal>,
+    /// 부분 익절 실행 여부
+    pub profit_locked: bool,
 }
 
 /// 단계별 트레일링 스톱 빌더
@@ -719,5 +798,107 @@ mod tests {
 
         let distance = stop.get_distance_pct(dec!(100));
         assert_eq!(distance, dec!(2.0)); // 2% 거리
+    }
+
+    #[test]
+    fn test_activation_price_long() {
+        let mode = TrailingStopMode::FixedPercentage { trail_pct: dec!(2.0) };
+        let mut stop = EnhancedTrailingStop::new(
+            mode,
+            dec!(100),
+            dec!(100),
+            Side::Buy,
+        )
+        .with_activation_price(dec!(105)); // 105에서 활성화
+
+        // 초기에는 활성화되지 않음
+        assert!(!stop.activated);
+
+        // 102로 상승해도 활성화 안됨
+        let updated = stop.update(dec!(102));
+        assert!(!updated);
+        assert!(!stop.activated);
+
+        // 106으로 상승하면 활성화
+        let updated = stop.update(dec!(106));
+        assert!(updated);
+        assert!(stop.activated);
+        // 트리거: 106 - 2.12 = 103.88
+        assert!(stop.trigger_price > dec!(103));
+    }
+
+    #[test]
+    fn test_activation_price_short() {
+        let mode = TrailingStopMode::FixedPercentage { trail_pct: dec!(2.0) };
+        let mut stop = EnhancedTrailingStop::new(
+            mode,
+            dec!(100),
+            dec!(100),
+            Side::Sell,
+        )
+        .with_activation_price(dec!(95)); // 95 이하에서 활성화
+
+        // 98로 하락해도 활성화 안됨
+        let updated = stop.update(dec!(98));
+        assert!(!updated);
+        assert!(!stop.activated);
+
+        // 94로 하락하면 활성화
+        let updated = stop.update(dec!(94));
+        assert!(updated);
+        assert!(stop.activated);
+    }
+
+    #[test]
+    fn test_profit_lock() {
+        let mode = TrailingStopMode::FixedPercentage { trail_pct: dec!(2.0) };
+        let mut stop = EnhancedTrailingStop::new(
+            mode,
+            dec!(100),
+            dec!(100),
+            Side::Buy,
+        )
+        .with_profit_lock(dec!(10), dec!(50)); // 10% 수익 시 50% 매도
+
+        // 초기에는 익절 조건 미충족
+        assert!(stop.check_profit_lock().is_none());
+
+        // 5% 수익 - 아직 미충족
+        stop.update(dec!(105));
+        assert!(stop.check_profit_lock().is_none());
+
+        // 12% 수익 - 조건 충족
+        stop.update(dec!(112));
+        let result = stop.check_profit_lock();
+        assert!(result.is_some());
+        let (threshold, sell_pct) = result.unwrap();
+        assert_eq!(threshold, dec!(10));
+        assert_eq!(sell_pct, dec!(50));
+
+        // 이미 익절했으므로 다시 호출해도 None
+        assert!(stop.check_profit_lock().is_none());
+        assert!(stop.profit_locked);
+
+        // 리셋 후 다시 체크 가능
+        stop.reset_profit_lock();
+        assert!(!stop.profit_locked);
+    }
+
+    #[test]
+    fn test_stats_with_new_fields() {
+        let mode = TrailingStopMode::FixedPercentage { trail_pct: dec!(2.0) };
+        let stop = EnhancedTrailingStop::new(
+            mode,
+            dec!(100),
+            dec!(100),
+            Side::Buy,
+        )
+        .with_activation_price(dec!(105))
+        .with_profit_lock(dec!(10), dec!(50));
+
+        let stats = stop.get_stats();
+        assert_eq!(stats.activation_price, Some(dec!(105)));
+        assert_eq!(stats.profit_lock_threshold, Some(dec!(10)));
+        assert!(!stats.profit_locked);
     }
 }

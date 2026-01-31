@@ -73,7 +73,7 @@ mod tests {
     #[tokio::test]
     async fn test_metrics_middleware_with_params() {
         let app = Router::new()
-            .route("/orders/:id", get(test_handler))
+            .route("/orders/{id}", get(test_handler))
             .layer(middleware::from_fn(metrics_layer));
 
         let request = Request::builder()

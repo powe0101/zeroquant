@@ -17,6 +17,7 @@
 //! - [`middleware`]: HTTP 미들웨어
 
 pub mod auth;
+pub mod error;
 pub mod metrics;
 pub mod middleware;
 pub mod repository;
@@ -26,6 +27,7 @@ pub mod utils;
 pub mod websocket;
 
 pub use auth::{Claims, Role, Permission, JwtAuth, JwtAuthError, hash_password, verify_password};
+pub use error::{ApiErrorResponse, ApiResult};
 pub use routes::*;
 pub use state::AppState;
 pub use websocket::{

@@ -1,5 +1,7 @@
 //! 시뮬레이션된 시장 및 사용자 데이터 스트림.
 
+#![allow(dead_code)] // 스트림 생명주기 관리 메서드
+
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;

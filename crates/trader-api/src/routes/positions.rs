@@ -6,7 +6,7 @@
 //!
 //! - `GET /api/v1/positions` - 열린 포지션 목록 조회
 //! - `GET /api/v1/positions/summary` - 포지션 요약 통계
-//! - `GET /api/v1/positions/:symbol` - 특정 심볼 포지션 조회
+//! - `GET /api/v1/positions/{symbol}` - 특정 심볼 포지션 조회
 
 use axum::{
     extract::{Path, State},
@@ -189,7 +189,7 @@ pub async fn get_positions_summary(
 
 /// 특정 심볼 포지션 조회.
 ///
-/// GET /api/v1/positions/:symbol
+/// GET /api/v1/positions/{symbol}
 pub async fn get_position(
     State(state): State<Arc<AppState>>,
     Path(symbol): Path<String>,
@@ -217,7 +217,7 @@ pub fn positions_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_positions))
         .route("/summary", get(get_positions_summary))
-        .route("/:symbol", get(get_position))
+        .route("/{symbol}", get(get_position))
 }
 
 // ==================== 테스트 ====================
@@ -268,7 +268,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/positions/:symbol", get(get_position))
+            .route("/positions/{symbol}", get(get_position))
             .with_state(state);
 
         let response = app

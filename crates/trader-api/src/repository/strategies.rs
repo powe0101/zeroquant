@@ -56,10 +56,14 @@ pub struct StrategyRepository;
 
 impl StrategyRepository {
     /// Save a new strategy to the database.
+    ///
+    /// Uses a transaction to ensure atomicity of the INSERT operation.
     pub async fn create(pool: &PgPool, input: CreateStrategyInput) -> Result<StrategyRecord, sqlx::Error> {
         let symbols_json = serde_json::to_value(&input.symbols).unwrap_or(Value::Array(vec![]));
         let risk_limits = input.risk_config.unwrap_or_else(|| serde_json::json!({}));
         let risk_profile = input.risk_profile.unwrap_or_else(|| "default".to_string());
+
+        let mut tx = pool.begin().await?;
 
         let record = sqlx::query_as::<_, StrategyRecord>(
             r#"
@@ -79,8 +83,10 @@ impl StrategyRepository {
         .bind(&risk_limits)
         .bind(&input.allocated_capital)
         .bind(&risk_profile)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(record)
     }
@@ -109,11 +115,15 @@ impl StrategyRepository {
     }
 
     /// Update strategy configuration.
+    ///
+    /// Uses a transaction to ensure atomicity of the UPDATE operation.
     pub async fn update_config(
         pool: &PgPool,
         id: &str,
         config: Value,
     ) -> Result<StrategyRecord, sqlx::Error> {
+        let mut tx = pool.begin().await?;
+
         let record = sqlx::query_as::<_, StrategyRecord>(
             r#"
             UPDATE strategies
@@ -124,8 +134,10 @@ impl StrategyRepository {
         )
         .bind(id)
         .bind(config)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(record)
     }
@@ -159,11 +171,17 @@ impl StrategyRepository {
     }
 
     /// Delete a strategy by ID.
+    ///
+    /// Uses a transaction to ensure atomicity of the DELETE operation.
     pub async fn delete(pool: &PgPool, id: &str) -> Result<bool, sqlx::Error> {
+        let mut tx = pool.begin().await?;
+
         let result = sqlx::query("DELETE FROM strategies WHERE id = $1")
             .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
+
+        tx.commit().await?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -274,7 +292,7 @@ impl StrategyRepository {
             MarketCapTopStrategy, MarketInterestDayStrategy, PensionBotStrategy,
             RsiStrategy, SectorMomentumStrategy, SectorVbStrategy, SimplePowerStrategy,
             SmallCapQuantStrategy, SmaStrategy, SnowStrategy, StockGuganStrategy,
-            StockRotationStrategy, TrailingStopStrategy, Us3xLeverageStrategy,
+            StockRotationStrategy, Us3xLeverageStrategy,
             VolatilityBreakoutStrategy, XaaStrategy,
         };
         use trader_strategy::Strategy;
@@ -309,7 +327,6 @@ impl StrategyRepository {
                 "market_cap_top" => Some(Box::new(MarketCapTopStrategy::new())),
 
                 // 기타 전략들
-                "trailing_stop" => Some(Box::new(TrailingStopStrategy::new())),
                 "candle_pattern" => Some(Box::new(CandlePatternStrategy::new())),
                 "infinity_bot" => Some(Box::new(InfinityBotStrategy::new())),
                 "market_interest_day" => Some(Box::new(MarketInterestDayStrategy::new())),

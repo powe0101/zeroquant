@@ -6,17 +6,17 @@
 //!
 //! - `GET /api/v1/strategies` - 전략 목록 조회
 //! - `POST /api/v1/strategies` - 전략 생성
-//! - `GET /api/v1/strategies/:id` - 특정 전략 상세 조회
-//! - `DELETE /api/v1/strategies/:id` - 전략 삭제
-//! - `POST /api/v1/strategies/:id/start` - 전략 시작
-//! - `POST /api/v1/strategies/:id/stop` - 전략 중지
-//! - `PUT /api/v1/strategies/:id/config` - 전략 설정 변경
+//! - `GET /api/v1/strategies/{id}` - 특정 전략 상세 조회
+//! - `DELETE /api/v1/strategies/{id}` - 전략 삭제
+//! - `POST /api/v1/strategies/{id}/start` - 전략 시작
+//! - `POST /api/v1/strategies/{id}/stop` - 전략 중지
+//! - `PUT /api/v1/strategies/{id}/config` - 전략 설정 변경
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::Utc;
@@ -37,7 +37,7 @@ use trader_strategy::{
         MarketCapTopStrategy, MarketInterestDayStrategy, PensionBotStrategy,
         RsiStrategy, SectorMomentumStrategy, SectorVbStrategy, SimplePowerStrategy,
         SmallCapQuantStrategy, SmaStrategy, SnowStrategy, StockGuganStrategy,
-        StockRotationStrategy, TrailingStopStrategy, Us3xLeverageStrategy,
+        StockRotationStrategy, Us3xLeverageStrategy,
         VolatilityBreakoutStrategy, XaaStrategy,
     },
     EngineError, EngineStats, Strategy, StrategyStatus,
@@ -261,7 +261,6 @@ fn create_strategy_instance(strategy_type: &str) -> Result<Box<dyn Strategy>, St
         "sma" | "sma_crossover" | "ma_crossover" => Ok(Box::new(SmaStrategy::new())),
         "candle_pattern" => Ok(Box::new(CandlePatternStrategy::new())),
         "infinity_bot" => Ok(Box::new(InfinityBotStrategy::new())),
-        "trailing_stop" => Ok(Box::new(TrailingStopStrategy::new())),
         "market_interest_day" => Ok(Box::new(MarketInterestDayStrategy::new())),
         // 자산배분 전략
         "simple_power" => Ok(Box::new(SimplePowerStrategy::new())),
@@ -298,7 +297,6 @@ fn get_strategy_default_name(strategy_type: &str) -> &'static str {
         "sma" | "sma_crossover" | "ma_crossover" => "이동평균 크로스오버",
         "candle_pattern" => "캔들 패턴",
         "infinity_bot" => "무한매수",
-        "trailing_stop" => "트레일링 스톱",
         "market_interest_day" => "단타 시장관심",
         // 자산배분 전략
         "simple_power" => "Simple Power",
@@ -330,7 +328,6 @@ fn get_strategy_default_timeframe(strategy_type: &str) -> &'static str {
         "grid" | "grid_trading" => "1m",
         "magic_split" | "split" => "1m",
         "infinity_bot" => "1m",
-        "trailing_stop" => "1m",
         "stock_gugan" | "gugan" => "1m",
         // 분봉 전략: 15m
         "rsi" | "rsi_mean_reversion" => "15m",
@@ -373,7 +370,6 @@ fn get_strategy_default_symbols(strategy_type: &str) -> Vec<String> {
         "sma" | "sma_crossover" | "ma_crossover" => vec![],
         "candle_pattern" => vec![],
         "infinity_bot" => vec![],
-        "trailing_stop" => vec![],
         "market_interest_day" => vec![],
         "stock_gugan" | "gugan" => vec![],
         // 자산배분 전략: 권장 심볼 목록
@@ -529,7 +525,7 @@ pub async fn create_strategy(
 
 /// 전략 삭제.
 ///
-/// DELETE /api/v1/strategies/:id
+/// DELETE /api/v1/strategies/{id}
 pub async fn delete_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -650,7 +646,7 @@ pub async fn list_strategies(
 
 /// 특정 전략 상세 조회.
 ///
-/// GET /api/v1/strategies/:id
+/// GET /api/v1/strategies/{id}
 pub async fn get_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -685,7 +681,7 @@ pub async fn get_strategy(
 
 /// 전략 시작.
 ///
-/// POST /api/v1/strategies/:id/start
+/// POST /api/v1/strategies/{id}/start
 pub async fn start_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -724,7 +720,7 @@ pub async fn start_strategy(
 
 /// 전략 중지.
 ///
-/// POST /api/v1/strategies/:id/stop
+/// POST /api/v1/strategies/{id}/stop
 pub async fn stop_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -763,7 +759,7 @@ pub async fn stop_strategy(
 
 /// 전략 설정 변경.
 ///
-/// PUT /api/v1/strategies/:id/config
+/// PUT /api/v1/strategies/{id}/config
 pub async fn update_config(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -811,7 +807,7 @@ pub async fn update_config(
 
 /// 전략 리스크 설정 변경.
 ///
-/// PUT /api/v1/strategies/:id/risk
+/// PUT /api/v1/strategies/{id}/risk
 pub async fn update_risk_settings(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -876,7 +872,7 @@ pub async fn update_risk_settings(
 
 /// 전략 복사 (파생 전략 생성).
 ///
-/// POST /api/v1/strategies/:id/clone
+/// POST /api/v1/strategies/{id}/clone
 pub async fn clone_strategy(
     State(state): State<Arc<AppState>>,
     Path(source_id): Path<String>,
@@ -1016,12 +1012,12 @@ pub fn strategies_router() -> Router<Arc<AppState>> {
         .route("/", get(list_strategies).post(create_strategy))
         .route("/stats", get(get_engine_stats))
         // 개별 전략 조작
-        .route("/:id", get(get_strategy).delete(delete_strategy))
-        .route("/:id/start", post(start_strategy))
-        .route("/:id/stop", post(stop_strategy))
-        .route("/:id/config", put(update_config))
-        .route("/:id/risk", put(update_risk_settings))
-        .route("/:id/clone", post(clone_strategy))
+        .route("/{id}", get(get_strategy).delete(delete_strategy))
+        .route("/{id}/start", post(start_strategy))
+        .route("/{id}/stop", post(stop_strategy))
+        .route("/{id}/config", put(update_config))
+        .route("/{id}/risk", put(update_risk_settings))
+        .route("/{id}/clone", post(clone_strategy))
 }
 
 // ==================== 테스트 ====================
@@ -1072,7 +1068,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/strategies/:id", get(get_strategy))
+            .route("/strategies/{id}", get(get_strategy))
             .with_state(state);
 
         let response = app
@@ -1101,7 +1097,7 @@ mod tests {
 
         let state = Arc::new(create_test_state());
         let app = Router::new()
-            .route("/strategies/:id/start", post(start_strategy))
+            .route("/strategies/{id}/start", post(start_strategy))
             .with_state(state);
 
         let response = app

@@ -675,7 +675,7 @@ impl CandlePatternStrategy {
             if pnl_pct >= config.take_profit_pct {
                 self.state.position_direction = None;
                 self.state.entry_price = None;
-                let qty = self.state.current_quantity;
+                let _qty = self.state.current_quantity;
                 self.state.current_quantity = Decimal::ZERO;
 
                 let signal = Signal::new(
@@ -697,7 +697,7 @@ impl CandlePatternStrategy {
             if pnl_pct <= -config.stop_loss_pct {
                 self.state.position_direction = None;
                 self.state.entry_price = None;
-                let qty = self.state.current_quantity;
+                let _qty = self.state.current_quantity;
                 self.state.current_quantity = Decimal::ZERO;
 
                 let signal = Signal::new(

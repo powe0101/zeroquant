@@ -2,6 +2,8 @@
 //!
 //! Access Token 및 Refresh Token 생성/검증 로직.
 
+#![allow(dead_code)] // 향후 인증 시스템에서 사용 예정
+
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};

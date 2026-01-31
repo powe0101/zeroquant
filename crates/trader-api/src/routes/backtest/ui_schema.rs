@@ -3,6 +3,8 @@
 //! JSON 파일에서 전략별 SDUI 스키마를 동적으로 로드합니다.
 //! 이를 통해 Rust 재빌드 없이 UI 스키마를 수정할 수 있습니다.
 
+#![allow(dead_code)] // SDUI 스키마 유틸리티는 프론트엔드 통합 시 사용 예정
+
 use super::types::{
     UiCondition, UiConditionOperator, UiField, UiFieldGroup, UiFieldType, UiLayout, UiSchema,
     UiSelectOption, UiValidation,

@@ -1,13 +1,19 @@
 # =============================================================================
-# Docker Compose - Infrastructure Only
+# Podman/Docker Compose - Infrastructure Only
 # =============================================================================
 #
-# 이 구성은 인프라(DB, Redis)만 Docker로 관리하고,
+# 이 구성은 인프라(DB, Redis)만 컨테이너로 관리하고,
 # 애플리케이션(API, Frontend)은 로컬에서 실행합니다.
 #
-# 사용법:
+# Podman과 Docker 모두 100% 호환됩니다.
+#
+# 사용법 (Podman 권장):
+#   podman compose up -d              # 인프라 시작
+#   podman compose --profile ml up    # ML 포함 시작
+#   podman compose down               # 중지
+#
+# Docker 사용 시:
 #   docker-compose up -d              # 인프라 시작
-#   docker-compose --profile ml up    # ML 포함 시작
 #   docker-compose down               # 중지
 #
 # 로컬 개발:
@@ -20,8 +26,8 @@
 #   cd frontend && npm run dev
 #
 # DB/Redis CLI:
-#   psql: docker exec -it trader-timescaledb psql -U trader -d trader
-#   redis: docker exec -it trader-redis redis-cli
+#   psql: podman exec -it trader-timescaledb psql -U trader -d trader
+#   redis: podman exec -it trader-redis redis-cli
 #
 # =============================================================================
 
