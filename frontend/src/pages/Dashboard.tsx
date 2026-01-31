@@ -21,6 +21,7 @@ import { getPortfolioSummary, getHoldings, getMarketStatus, getStrategies, getAc
 import { PortfolioEquityChart } from '../components/charts'
 import type { WsOrderUpdate, WsPositionUpdate, Strategy } from '../types'
 import type { HoldingInfo, ActiveAccount } from '../api/client'
+import { SymbolDisplay } from '../components/SymbolDisplay'
 
 function formatCurrency(value: number | string, currency: 'KRW' | 'USD' = 'KRW'): string {
   const numValue = typeof value === 'string' ? parseFloat(value) : value
@@ -120,7 +121,8 @@ export function Dashboard() {
     const allHoldings = [...(h.krHoldings || []), ...(h.usHoldings || [])]
     return allHoldings.map((holding: HoldingInfo, index: number) => ({
       id: `${holding.market}-${index}`,
-      symbol: holding.displayName || holding.name || holding.symbol,
+      symbol: holding.symbol,
+      symbolName: holding.displayName || holding.name || null,
       side: 'Long' as const,
       quantity: parseFloat(holding.quantity) || 0,
       entryPrice: parseFloat(holding.avgPrice) || 0,
@@ -217,7 +219,13 @@ export function Dashboard() {
                       {(order) => (
                         <div class="p-2 rounded-lg hover:bg-[var(--color-surface-light)] transition-colors">
                           <div class="flex items-center justify-between">
-                            <span class="text-sm font-medium text-[var(--color-text)]">{order.symbol}</span>
+                            <SymbolDisplay
+                              ticker={order.symbol}
+                              mode="inline"
+                              size="sm"
+                              autoFetch={true}
+                              class="text-sm font-medium"
+                            />
                             <span class={`text-xs px-1.5 py-0.5 rounded ${
                               order.status === 'filled' ? 'bg-green-500/20 text-green-400' :
                               order.status === 'cancelled' ? 'bg-red-500/20 text-red-400' :
@@ -243,7 +251,13 @@ export function Dashboard() {
                       {(position) => (
                         <div class="p-2 rounded-lg hover:bg-[var(--color-surface-light)] transition-colors">
                           <div class="flex items-center justify-between">
-                            <span class="text-sm font-medium text-[var(--color-text)]">{position.symbol}</span>
+                            <SymbolDisplay
+                              ticker={position.symbol}
+                              mode="inline"
+                              size="sm"
+                              autoFetch={true}
+                              class="text-sm font-medium"
+                            />
                             <span class={`text-xs ${parseFloat(position.unrealized_pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                               {parseFloat(position.return_pct) >= 0 ? '+' : ''}{position.return_pct}%
                             </span>
@@ -491,9 +505,14 @@ export function Dashboard() {
                             >
                               {position.market}
                             </span>
-                            <span class="font-medium text-[var(--color-text)]">
-                              {position.symbol}
-                            </span>
+                            <SymbolDisplay
+                              ticker={position.symbol}
+                              symbolName={position.symbolName}
+                              mode="inline"
+                              size="sm"
+                              autoFetch={!position.symbolName}
+                              class="font-medium"
+                            />
                           </div>
                         </td>
                         <td class="p-4 text-right text-[var(--color-text)]">
@@ -575,8 +594,19 @@ export function Dashboard() {
                         </div>
                         <div>
                           <div class="font-medium text-[var(--color-text)]">{strategy.name}</div>
-                          <div class="text-sm text-[var(--color-text-muted)]">
-                            {strategy.symbols?.join(', ') || '심볼 없음'}
+                          <div class="text-sm text-[var(--color-text-muted)] flex flex-wrap gap-1">
+                            <Show when={strategy.symbols && strategy.symbols.length > 0} fallback={<span>심볼 없음</span>}>
+                              <For each={strategy.symbols}>
+                                {(symbol) => (
+                                  <SymbolDisplay
+                                    ticker={symbol}
+                                    mode="inline"
+                                    size="sm"
+                                    autoFetch={true}
+                                  />
+                                )}
+                              </For>
+                            </Show>
                           </div>
                         </div>
                       </div>

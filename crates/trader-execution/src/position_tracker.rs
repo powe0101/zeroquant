@@ -222,7 +222,10 @@ impl PositionTracker {
                 self.reduce_position_internal(pos_id, fill.quantity, fill.price)?;
             }
 
-            Ok(self.positions.get(&pos_id).unwrap().clone())
+            self.positions
+                .get(&pos_id)
+                .cloned()
+                .ok_or(PositionTrackerError::PositionNotFound(pos_id))
         } else {
             // 포지션 없음 - 새로 오픈
             self.open_position(
@@ -251,7 +254,10 @@ impl PositionTracker {
             .ok_or_else(|| PositionTrackerError::SymbolPositionNotFound(symbol.to_string()))?;
 
         self.increase_position_internal(pos_id, quantity, price)?;
-        Ok(self.positions.get(&pos_id).unwrap().clone())
+        self.positions
+            .get(&pos_id)
+            .cloned()
+            .ok_or(PositionTrackerError::PositionNotFound(pos_id))
     }
 
     /// 포지션을 감소시킨다.
@@ -268,14 +274,18 @@ impl PositionTracker {
             .ok_or_else(|| PositionTrackerError::SymbolPositionNotFound(symbol.to_string()))?;
 
         let pnl = self.reduce_position_internal(pos_id, quantity, price)?;
-        let position = self.positions.get(&pos_id).cloned().unwrap_or_else(|| {
-            // 포지션이 종료됨, 종료된 포지션에서 가져오기
-            self.closed_positions
-                .iter()
-                .find(|p| p.id == pos_id)
-                .cloned()
-                .unwrap()
-        });
+        // 열린 포지션에서 먼저 찾고, 없으면 종료된 포지션에서 찾기
+        let position = self
+            .positions
+            .get(&pos_id)
+            .cloned()
+            .or_else(|| {
+                self.closed_positions
+                    .iter()
+                    .find(|p| p.id == pos_id)
+                    .cloned()
+            })
+            .ok_or(PositionTrackerError::PositionNotFound(pos_id))?;
         Ok((position, pnl))
     }
 
@@ -355,7 +365,10 @@ impl PositionTracker {
             let symbol_str = position.symbol.to_string();
 
             // 종료된 포지션으로 이동
-            let closed_position = self.positions.remove(&position_id).unwrap();
+            let closed_position = self
+                .positions
+                .remove(&position_id)
+                .ok_or(PositionTrackerError::PositionNotFound(position_id))?;
             self.closed_positions.push(closed_position);
             self.positions_by_symbol.remove(&symbol_str);
 

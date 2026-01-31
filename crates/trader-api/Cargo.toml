@@ -24,6 +24,7 @@ trader-notification = { path = "../trader-notification", optional = true }
 
 # Async runtime
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 futures = { workspace = true }
 
 # Web framework

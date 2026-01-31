@@ -53,14 +53,15 @@ docker system df -v
 }
 ```
 
-### 성능 지표 확인
+### 로그 확인
 
 ```bash
-# Prometheus 메트릭 확인
-curl -s http://localhost:3000/metrics | grep http_requests
+# API 서버 로그 확인 (로컬 실행 시 터미널에 직접 출력)
+# 에러만 필터링
+cargo run --bin trader-api 2>&1 | grep -i error
 
-# 주요 지표 확인
-curl -s http://localhost:3000/metrics | grep -E "^(http_requests|websocket_connections|orders_total)"
+# 특정 전략 로그
+cargo run --bin trader-api 2>&1 | grep "strategy_id="
 ```
 
 ---
@@ -70,48 +71,44 @@ curl -s http://localhost:3000/metrics | grep -E "^(http_requests|websocket_conne
 ### 서비스 시작
 
 ```bash
-# 기본 서비스 시작
-docker compose up -d
+# 인프라 서비스 시작 (TimescaleDB, Redis)
+docker compose up -d timescaledb redis
 
-# 특정 서비스만 시작
-docker compose up -d trader-api
+# API 서버 시작 (별도 터미널)
+export DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
+export REDIS_URL=redis://localhost:6379
+cargo run --bin trader-api --features ml --release
 
-# 모니터링 포함 시작
-docker compose --profile monitoring up -d
-
-# 로그와 함께 시작 (포그라운드)
-docker compose up
+# 프론트엔드 시작 (별도 터미널)
+cd frontend && npm run dev
 ```
 
 ### 서비스 중지
 
 ```bash
-# 모든 서비스 중지 (데이터 유지)
+# API 서버 중지: Ctrl+C로 graceful shutdown
+
+# 인프라 서비스 중지 (데이터 유지)
 docker compose down
 
 # 특정 서비스만 중지
-docker compose stop trader-api
-
-# 강제 중지 (응답 없을 때)
-docker compose kill trader-api
+docker compose stop timescaledb
+docker compose stop redis
 ```
 
 ### 서비스 재시작
 
 ```bash
-# 단일 서비스 재시작
-docker compose restart trader-api
+# API 서버 재시작: Ctrl+C 후 다시 실행
+cargo run --bin trader-api --features ml --release
 
-# 모든 서비스 재시작
-docker compose restart
-
-# 무중단 재시작 (이미지 재빌드 포함)
-docker compose up -d --build --force-recreate trader-api
+# 인프라 서비스 재시작
+docker compose restart timescaledb redis
 ```
 
 ### Graceful Shutdown
 
-Trader API는 SIGTERM 신호를 받으면 graceful shutdown을 수행합니다:
+Trader API는 SIGTERM/SIGINT 신호를 받으면 graceful shutdown을 수행합니다:
 
 1. 새로운 요청 거부
 2. 진행 중인 요청 완료 대기
@@ -119,25 +116,21 @@ Trader API는 SIGTERM 신호를 받으면 graceful shutdown을 수행합니다:
 4. 리소스 정리
 
 ```bash
-# Graceful shutdown (30초 대기)
-docker compose stop -t 30 trader-api
-
-# 상태 확인
-docker compose logs --tail=20 trader-api
+# 로컬 실행 시: Ctrl+C로 graceful shutdown
+# 최대 30초 대기 후 종료
 ```
 
 ### 설정 변경 후 적용
 
 ```bash
-# 환경변수 변경 시
-docker compose up -d --force-recreate trader-api
+# 환경변수 변경 시: API 서버 재시작
+# Ctrl+C 후 새 환경변수로 다시 실행
 
-# docker-compose.yml 변경 시
-docker compose up -d
+# 코드 변경 시: 재빌드 후 실행
+cargo build --bin trader-api --features ml --release
+./target/release/trader-api
 
-# 이미지 재빌드가 필요한 경우
-docker compose build trader-api
-docker compose up -d trader-api
+# API 키/알림 설정: 웹 UI에서 변경 (재시작 불필요)
 ```
 
 ---

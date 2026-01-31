@@ -1,10 +1,13 @@
 //! 심볼 정보 저장소.
 //!
 //! 티커-회사명 매핑 및 검색 기능을 제공합니다.
+//! DB에 없는 종목은 KRX 또는 Yahoo Finance에서 자동으로 조회하여 저장합니다.
 
 use chrono::{DateTime, Utc};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 /// 심볼 정보 레코드.

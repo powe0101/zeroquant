@@ -296,11 +296,15 @@ impl OrderRepository {
     /// 거래소 주문 ID 설정.
     ///
     /// 주문이 거래소에 제출된 후 거래소가 발급한 ID를 저장합니다.
+    /// 상태 변경과 ID 설정을 트랜잭션으로 묶어 원자성을 보장합니다.
     pub async fn set_exchange_order_id(
         pool: &PgPool,
         order_id: Uuid,
         exchange_order_id: &str,
     ) -> Result<Order, sqlx::Error> {
+        // 트랜잭션으로 상태 변경과 ID 설정의 원자성 보장
+        let mut tx = pool.begin().await?;
+
         let record = sqlx::query_as::<_, Order>(
             r#"
             UPDATE orders
@@ -311,8 +315,10 @@ impl OrderRepository {
         )
         .bind(order_id)
         .bind(exchange_order_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(record)
     }

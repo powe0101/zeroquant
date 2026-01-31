@@ -6,6 +6,8 @@
 pub mod backtest_results;
 pub mod equity_history;
 pub mod execution_cache;
+pub mod journal;
+pub mod klines;
 pub mod orders;
 pub mod portfolio;
 pub mod positions;
@@ -23,8 +25,22 @@ pub use equity_history::{
 pub use execution_cache::{
     CachedExecution, CacheMeta, ExecutionCacheRepository, ExecutionProvider, NewExecution,
 };
+pub use klines::{CacheMetadata, KlineRecord, KlinesRepository, NewKline};
 pub use orders::{Order, OrderInput, OrderRepository, OrderStatus};
 pub use portfolio::{PortfolioRepository, Position, PositionUpdate};
-pub use positions::{PositionInput, PositionRecord, PositionRepository};
+pub use positions::{
+    HoldingPosition, PositionInput, PositionRecord, PositionRepository,
+    SyncResult as PositionSyncResult,
+};
 pub use strategies::StrategyRepository;
 pub use symbol_info::{NewSymbolInfo, SymbolInfo, SymbolInfoRepository, SymbolSearchResult};
+
+pub use journal::{
+    CurrentPosition, DailySummary, ExecutionFilter, JournalRepository, PnLSummary,
+    PositionSnapshotInput, PositionSnapshotRecord, SymbolPnL, SyncResult as JournalSyncResult,
+    TradeExecutionInput, TradeExecutionRecord,
+    // 기간별 손익 타입
+    WeeklyPnL, MonthlyPnL, YearlyPnL, CumulativePnL,
+    // 인사이트 타입
+    TradingInsights, StrategyPerformance,
+};

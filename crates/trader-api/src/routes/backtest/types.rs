@@ -2,11 +2,69 @@
 //!
 //! 요청/응답 타입 및 SDUI 스키마 타입을 정의합니다.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
+use rust_decimal::prelude::FromStr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use validator::Validate;
+use validator::{Validate, ValidationError};
+
+// ==================== 커스텀 검증 함수 ====================
+
+/// 초기 자본금 검증 (100 ~ 10억)
+fn validate_initial_capital(value: &Decimal) -> Result<(), ValidationError> {
+    let min = Decimal::from(100);
+    let max = Decimal::from(1_000_000_000);
+
+    if *value < min {
+        return Err(ValidationError::new("initial_capital_too_small")
+            .with_message("초기 자본금은 최소 100 이상이어야 합니다".into()));
+    }
+    if *value > max {
+        return Err(ValidationError::new("initial_capital_too_large")
+            .with_message("초기 자본금은 10억을 초과할 수 없습니다".into()));
+    }
+    Ok(())
+}
+
+/// 수수료율 검증 (0 ~ 0.1 = 10%)
+/// 참고: Option<Decimal> 필드에 사용 시 validator가 Some일 때만 호출하므로 &Decimal을 받음
+fn validate_commission_rate(value: &Decimal) -> Result<(), ValidationError> {
+    let max = Decimal::from_str("0.1").unwrap_or(Decimal::ONE);
+    if *value < Decimal::ZERO {
+        return Err(ValidationError::new("commission_rate_negative")
+            .with_message("수수료율은 0 이상이어야 합니다".into()));
+    }
+    if *value > max {
+        return Err(ValidationError::new("commission_rate_too_high")
+            .with_message("수수료율은 10%를 초과할 수 없습니다".into()));
+    }
+    Ok(())
+}
+
+/// 슬리피지율 검증 (0 ~ 0.05 = 5%)
+/// 참고: Option<Decimal> 필드에 사용 시 validator가 Some일 때만 호출하므로 &Decimal을 받음
+fn validate_slippage_rate(value: &Decimal) -> Result<(), ValidationError> {
+    let max = Decimal::from_str("0.05").unwrap_or(Decimal::ONE);
+    if *value < Decimal::ZERO {
+        return Err(ValidationError::new("slippage_rate_negative")
+            .with_message("슬리피지율은 0 이상이어야 합니다".into()));
+    }
+    if *value > max {
+        return Err(ValidationError::new("slippage_rate_too_high")
+            .with_message("슬리피지율은 5%를 초과할 수 없습니다".into()));
+    }
+    Ok(())
+}
+
+/// 날짜 형식 검증 (YYYY-MM-DD)
+fn validate_date_format(value: &str) -> Result<(), ValidationError> {
+    if NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() {
+        return Err(ValidationError::new("invalid_date_format")
+            .with_message("날짜 형식은 YYYY-MM-DD여야 합니다".into()));
+    }
+    Ok(())
+}
 
 // ==================== SDUI (Server Driven UI) 스키마 ====================
 
@@ -323,18 +381,21 @@ pub struct BacktestRunRequest {
     #[validate(length(min = 1, max = 20, message = "심볼은 1-20자여야 합니다"))]
     pub symbol: String,
     /// 시작 날짜 (YYYY-MM-DD)
-    #[validate(length(equal = 10, message = "시작 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
+    #[validate(custom(function = "validate_date_format"))]
     pub start_date: String,
     /// 종료 날짜 (YYYY-MM-DD)
-    #[validate(length(equal = 10, message = "종료 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
+    #[validate(custom(function = "validate_date_format"))]
     pub end_date: String,
-    /// 초기 자본금
+    /// 초기 자본금 (100 ~ 10억)
+    #[validate(custom(function = "validate_initial_capital"))]
     pub initial_capital: Decimal,
-    /// 수수료율 (선택, 기본: 0.001 = 0.1%)
+    /// 수수료율 (선택, 기본: 0.001 = 0.1%, 최대: 10%)
     #[serde(default)]
+    #[validate(custom(function = "validate_commission_rate"))]
     pub commission_rate: Option<Decimal>,
-    /// 슬리피지율 (선택, 기본: 0.0005 = 0.05%)
+    /// 슬리피지율 (선택, 기본: 0.0005 = 0.05%, 최대: 5%)
     #[serde(default)]
+    #[validate(custom(function = "validate_slippage_rate"))]
     pub slippage_rate: Option<Decimal>,
     /// 전략 파라미터 (선택)
     #[serde(default)]
@@ -351,18 +412,21 @@ pub struct BacktestMultiRunRequest {
     #[validate(length(min = 1, max = 50, message = "심볼은 1-50개 사이여야 합니다"))]
     pub symbols: Vec<String>,
     /// 시작 날짜 (YYYY-MM-DD)
-    #[validate(length(equal = 10, message = "시작 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
+    #[validate(custom(function = "validate_date_format"))]
     pub start_date: String,
     /// 종료 날짜 (YYYY-MM-DD)
-    #[validate(length(equal = 10, message = "종료 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
+    #[validate(custom(function = "validate_date_format"))]
     pub end_date: String,
-    /// 초기 자본금
+    /// 초기 자본금 (100 ~ 10억)
+    #[validate(custom(function = "validate_initial_capital"))]
     pub initial_capital: Decimal,
-    /// 수수료율 (선택, 기본: 0.001 = 0.1%)
+    /// 수수료율 (선택, 기본: 0.001 = 0.1%, 최대: 10%)
     #[serde(default)]
+    #[validate(custom(function = "validate_commission_rate"))]
     pub commission_rate: Option<Decimal>,
-    /// 슬리피지율 (선택, 기본: 0.0005 = 0.05%)
+    /// 슬리피지율 (선택, 기본: 0.0005 = 0.05%, 최대: 5%)
     #[serde(default)]
+    #[validate(custom(function = "validate_slippage_rate"))]
     pub slippage_rate: Option<Decimal>,
     /// 전략 파라미터 (선택)
     #[serde(default)]
@@ -548,23 +612,28 @@ pub struct BatchBacktestItem {
 pub struct BatchBacktestRequest {
     /// 백테스트할 전략 목록 (최대 10개)
     #[validate(length(min = 1, max = 10, message = "전략은 1-10개 사이여야 합니다"))]
+    #[validate(nested)]
     pub strategies: Vec<BatchBacktestItem>,
     /// 시작 날짜 (YYYY-MM-DD)
-    #[validate(length(equal = 10))]
+    #[validate(custom(function = "validate_date_format"))]
     pub start_date: String,
     /// 종료 날짜 (YYYY-MM-DD)
-    #[validate(length(equal = 10))]
+    #[validate(custom(function = "validate_date_format"))]
     pub end_date: String,
-    /// 초기 자본금 (모든 전략에 동일하게 적용)
+    /// 초기 자본금 (모든 전략에 동일하게 적용, 100 ~ 10억)
+    #[validate(custom(function = "validate_initial_capital"))]
     pub initial_capital: Decimal,
-    /// 수수료율 (선택, 기본: 0.001)
+    /// 수수료율 (선택, 기본: 0.001, 최대: 10%)
     #[serde(default)]
+    #[validate(custom(function = "validate_commission_rate"))]
     pub commission_rate: Option<Decimal>,
-    /// 슬리피지율 (선택, 기본: 0.0005)
+    /// 슬리피지율 (선택, 기본: 0.0005, 최대: 5%)
     #[serde(default)]
+    #[validate(custom(function = "validate_slippage_rate"))]
     pub slippage_rate: Option<Decimal>,
-    /// 병렬 실행 수 (선택, 기본: 4)
+    /// 병렬 실행 수 (선택, 기본: 4, 최대: 10)
     #[serde(default)]
+    #[validate(range(min = 1, max = 10))]
     pub parallelism: Option<usize>,
 }
 

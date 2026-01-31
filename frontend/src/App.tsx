@@ -8,6 +8,7 @@ import { Backtest } from './pages/Backtest'
 import { Simulation } from './pages/Simulation'
 import { Dataset } from './pages/Dataset'
 import { MLTraining } from './pages/MLTraining'
+import { TradingJournal } from './pages/TradingJournal'
 import { Settings } from './pages/Settings'
 
 const queryClient = new QueryClient({
@@ -30,6 +31,7 @@ function App() {
           <Route path="/simulation" component={Simulation} />
           <Route path="/dataset" component={Dataset} />
           <Route path="/ml-training" component={MLTraining} />
+          <Route path="/journal" component={TradingJournal} />
           <Route path="/settings" component={Settings} />
         </Router>
       </ToastProvider>

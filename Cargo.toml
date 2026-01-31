@@ -24,6 +24,7 @@ repository = "https://github.com/user/trader"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.24"
+tokio-util = "0.7"
 futures = "0.3"
 
 # Web framework

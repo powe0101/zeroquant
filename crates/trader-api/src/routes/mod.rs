@@ -17,6 +17,7 @@
 //! - `/api/v1/market` - 시장 상태
 //! - `/api/v1/credentials` - 자격증명 관리 (API 키, 텔레그램 설정)
 //! - `/api/v1/ml` - ML 훈련 관리
+//! - `/api/v1/journal` - 매매일지 (체결 내역, 포지션 현황, 손익 분석)
 
 pub mod analytics;
 pub mod backtest;
@@ -25,6 +26,7 @@ pub mod credentials;
 pub mod dataset;
 pub mod equity_history;
 pub mod health;
+pub mod journal;
 pub mod market;
 pub mod ml;
 #[cfg(feature = "notifications")]
@@ -42,6 +44,7 @@ pub use backtest_results::{backtest_results_router, BacktestResultResponse, List
 pub use credentials::{credentials_router, ExchangeCredentialResponse, TelegramSettingsResponse, SupportedExchangesResponse, EncryptedCredentials};
 pub use dataset::{dataset_router, DatasetListResponse, DatasetSummary, FetchDatasetRequest};
 pub use health::{health_router, HealthResponse, ComponentHealth, ComponentStatus};
+pub use journal::{journal_router, JournalPositionsResponse, ExecutionsListResponse, PnLSummaryResponse, SyncResponse};
 pub use market::{market_router, MarketStatusResponse};
 pub use ml::{ml_router, TrainingJob, TrainedModel, ModelType, TrainingStatus};
 #[cfg(feature = "notifications")]
@@ -81,7 +84,8 @@ pub fn create_api_router() -> Router<Arc<AppState>> {
         .nest("/api/v1/market", market_router())
         .nest("/api/v1/credentials", credentials_router())
         .nest("/api/v1/ml", ml_router())
-        .nest("/api/v1/dataset", dataset_router());
+        .nest("/api/v1/dataset", dataset_router())
+        .nest("/api/v1/journal", journal_router());
 
     // Feature: notifications - 텔레그램/이메일 알림
     #[cfg(feature = "notifications")]

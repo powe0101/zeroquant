@@ -1117,6 +1117,363 @@ export const searchSymbols = async (query: string, limit: number = 10): Promise<
   return response.data?.results || [];
 };
 
+// ==================== 매매일지 (Journal) ====================
+
+/** 매매일지 포지션 */
+export interface JournalPosition {
+  id: string;
+  exchange: string;
+  symbol: string;
+  symbol_name: string | null;
+  side: string;
+  quantity: string;
+  entry_price: string;
+  current_price: string | null;
+  cost_basis: string;
+  market_value: string | null;
+  unrealized_pnl: string | null;
+  unrealized_pnl_pct: string | null;
+  realized_pnl: string | null;
+  weight_pct: string | null;
+  first_trade_at: string | null;
+  last_trade_at: string | null;
+  trade_count: number | null;
+  strategy_id: string | null;
+  snapshot_time: string;
+}
+
+/** 포지션 요약 */
+export interface PositionsSummary {
+  total_positions: number;
+  total_cost_basis: string;
+  total_market_value: string;
+  total_unrealized_pnl: string;
+  total_unrealized_pnl_pct: string;
+}
+
+/** 포지션 목록 응답 */
+export interface JournalPositionsResponse {
+  positions: JournalPosition[];
+  total: number;
+  summary: PositionsSummary;
+}
+
+/** 체결 내역 */
+export interface JournalExecution {
+  id: string;
+  exchange: string;
+  symbol: string;
+  symbol_name: string | null;
+  side: string;
+  order_type: string;
+  quantity: string;
+  price: string;
+  notional_value: string;
+  fee: string | null;
+  fee_currency: string | null;
+  position_effect: string | null;
+  realized_pnl: string | null;
+  strategy_id: string | null;
+  strategy_name: string | null;
+  executed_at: string;
+  memo: string | null;
+  tags: string[] | null;
+}
+
+/** 체결 내역 목록 응답 */
+export interface JournalExecutionsResponse {
+  executions: JournalExecution[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** 체결 내역 조회 필터 */
+export interface ExecutionFilter {
+  symbol?: string;
+  side?: string;
+  strategy_id?: string;
+  start_date?: string;
+  end_date?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** PnL 요약 응답 */
+export interface JournalPnLSummary {
+  total_realized_pnl: string;
+  total_fees: string;
+  net_pnl: string;
+  total_trades: number;
+  buy_trades: number;
+  sell_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: string;
+  total_volume: string;
+  first_trade_at: string | null;
+  last_trade_at: string | null;
+}
+
+/** 일별 손익 항목 */
+export interface DailyPnLItem {
+  date: string;
+  total_trades: number;
+  buy_count: number;
+  sell_count: number;
+  total_volume: string;
+  total_fees: string;
+  realized_pnl: string;
+  symbol_count: number;
+}
+
+/** 일별 손익 응답 */
+export interface DailyPnLResponse {
+  daily: DailyPnLItem[];
+  total_days: number;
+}
+
+/** 종목별 손익 항목 */
+export interface SymbolPnLItem {
+  symbol: string;
+  symbol_name: string | null;
+  total_trades: number;
+  total_buy_qty: string;
+  total_sell_qty: string;
+  total_buy_value: string;
+  total_sell_value: string;
+  total_fees: string;
+  realized_pnl: string;
+  first_trade_at: string | null;
+  last_trade_at: string | null;
+}
+
+/** 종목별 손익 응답 */
+export interface SymbolPnLResponse {
+  symbols: SymbolPnLItem[];
+  total: number;
+}
+
+/** 동기화 응답 */
+export interface JournalSyncResponse {
+  success: boolean;
+  inserted: number;
+  skipped: number;
+  message: string;
+}
+
+/** 매매일지 포지션 조회 */
+export const getJournalPositions = async (): Promise<JournalPositionsResponse> => {
+  const response = await api.get('/journal/positions');
+  return response.data;
+};
+
+/** 매매일지 체결 내역 조회 */
+export const getJournalExecutions = async (filter?: ExecutionFilter): Promise<JournalExecutionsResponse> => {
+  const response = await api.get('/journal/executions', { params: filter });
+  return response.data;
+};
+
+/** PnL 요약 조회 */
+export const getJournalPnLSummary = async (): Promise<JournalPnLSummary> => {
+  const response = await api.get('/journal/pnl');
+  return response.data;
+};
+
+/** 일별 손익 조회 */
+export const getJournalDailyPnL = async (startDate?: string, endDate?: string): Promise<DailyPnLResponse> => {
+  const params: Record<string, string> = {};
+  if (startDate) params.start_date = startDate;
+  if (endDate) params.end_date = endDate;
+  const response = await api.get('/journal/pnl/daily', { params });
+  return response.data;
+};
+
+/** 종목별 손익 조회 */
+export const getJournalSymbolPnL = async (): Promise<SymbolPnLResponse> => {
+  const response = await api.get('/journal/pnl/symbol');
+  return response.data;
+};
+
+/** 체결 내역 메모/태그 수정 */
+export const updateJournalExecution = async (
+  id: string,
+  data: { memo?: string; tags?: string[] }
+): Promise<JournalExecution> => {
+  const response = await api.patch(`/journal/executions/${id}`, data);
+  return response.data;
+};
+
+/** 거래소 체결 내역 동기화 */
+export const syncJournalExecutions = async (exchange?: string, startDate?: string): Promise<JournalSyncResponse> => {
+  const response = await api.post('/journal/sync', { exchange, start_date: startDate });
+  return response.data;
+};
+
+// ==================== 기간별 손익 API ====================
+
+/** 주별 손익 항목 */
+export interface WeeklyPnLItem {
+  week_start: string;
+  total_trades: number;
+  buy_count: number;
+  sell_count: number;
+  total_volume: string;
+  total_fees: string;
+  realized_pnl: string;
+  symbol_count: number;
+  trading_days: number;
+}
+
+/** 주별 손익 응답 */
+export interface WeeklyPnLResponse {
+  weekly: WeeklyPnLItem[];
+  total_weeks: number;
+}
+
+/** 월별 손익 항목 */
+export interface MonthlyPnLItem {
+  year: number;
+  month: number;
+  total_trades: number;
+  buy_count: number;
+  sell_count: number;
+  total_volume: string;
+  total_fees: string;
+  realized_pnl: string;
+  symbol_count: number;
+  trading_days: number;
+}
+
+/** 월별 손익 응답 */
+export interface MonthlyPnLResponse {
+  monthly: MonthlyPnLItem[];
+  total_months: number;
+}
+
+/** 연도별 손익 항목 */
+export interface YearlyPnLItem {
+  year: number;
+  total_trades: number;
+  buy_count: number;
+  sell_count: number;
+  total_volume: string;
+  total_fees: string;
+  realized_pnl: string;
+  symbol_count: number;
+  trading_days: number;
+  trading_months: number;
+}
+
+/** 연도별 손익 응답 */
+export interface YearlyPnLResponse {
+  yearly: YearlyPnLItem[];
+  total_years: number;
+}
+
+/** 누적 손익 포인트 */
+export interface CumulativePnLPoint {
+  date: string;
+  cumulative_pnl: string;
+  cumulative_fees: string;
+  cumulative_trades: number;
+  daily_pnl: string;
+}
+
+/** 누적 손익 응답 */
+export interface CumulativePnLResponse {
+  curve: CumulativePnLPoint[];
+  total_points: number;
+}
+
+/** 투자 인사이트 응답 */
+export interface TradingInsightsResponse {
+  total_trades: number;
+  buy_trades: number;
+  sell_trades: number;
+  unique_symbols: number;
+  total_realized_pnl: string;
+  total_fees: string;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate_pct: string;
+  profit_factor: string | null;
+  avg_win: string;
+  avg_loss: string;
+  largest_win: string;
+  largest_loss: string;
+  trading_period_days: number;
+  active_trading_days: number;
+  first_trade_at: string | null;
+  last_trade_at: string | null;
+}
+
+/** 전략별 성과 항목 */
+export interface StrategyPerformanceItem {
+  strategy_id: string;
+  strategy_name: string;
+  total_trades: number;
+  buy_trades: number;
+  sell_trades: number;
+  unique_symbols: number;
+  total_volume: string;
+  total_fees: string;
+  realized_pnl: string;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate_pct: string;
+  profit_factor: string | null;
+  avg_win: string;
+  avg_loss: string;
+  largest_win: string;
+  largest_loss: string;
+  active_trading_days: number;
+  first_trade_at: string | null;
+  last_trade_at: string | null;
+}
+
+/** 전략별 성과 응답 */
+export interface StrategyPerformanceResponse {
+  strategies: StrategyPerformanceItem[];
+  total: number;
+}
+
+/** 주별 손익 조회 */
+export const getJournalWeeklyPnL = async (): Promise<WeeklyPnLResponse> => {
+  const response = await api.get('/journal/pnl/weekly');
+  return response.data;
+};
+
+/** 월별 손익 조회 */
+export const getJournalMonthlyPnL = async (): Promise<MonthlyPnLResponse> => {
+  const response = await api.get('/journal/pnl/monthly');
+  return response.data;
+};
+
+/** 연도별 손익 조회 */
+export const getJournalYearlyPnL = async (): Promise<YearlyPnLResponse> => {
+  const response = await api.get('/journal/pnl/yearly');
+  return response.data;
+};
+
+/** 누적 손익 곡선 조회 */
+export const getJournalCumulativePnL = async (): Promise<CumulativePnLResponse> => {
+  const response = await api.get('/journal/pnl/cumulative');
+  return response.data;
+};
+
+/** 투자 인사이트 조회 */
+export const getJournalInsights = async (): Promise<TradingInsightsResponse> => {
+  const response = await api.get('/journal/insights');
+  return response.data;
+};
+
+/** 전략별 성과 조회 */
+export const getJournalStrategyPerformance = async (): Promise<StrategyPerformanceResponse> => {
+  const response = await api.get('/journal/strategies');
+  return response.data;
+};
+
 // ==================== 인증 ====================
 
 export const login = async (username: string, password: string) => {

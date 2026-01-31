@@ -5,6 +5,90 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.5.0] - 2026-01-31
+
+### Added
+
+#### 📒 매매일지 (Trading Journal) - 신규 기능
+- **체결 내역 관리** (`routes/journal.rs`, `repository/journal.rs`)
+  - 거래소 API에서 체결 내역 자동 동기화
+  - 기간별 조회 (일별/주별/월별/전체)
+  - 종목별/전략별 필터링
+- **손익 분석 (PnL Analysis)**
+  - 실현/미실현 손익 계산
+  - 누적 손익 차트 (`PnLBarChart.tsx`)
+  - 종목별 손익 분석 (`SymbolPnLTable.tsx`)
+- **포지션 추적**
+  - 보유 현황 대시보드 (`PositionsTable.tsx`)
+  - 물타기 자동 계산 (평균 매입가 갱신)
+  - 포지션 이력 조회
+- **전략 인사이트** (`StrategyInsightsPanel.tsx`)
+  - 전략별 성과 분석
+  - 매매 패턴 분석 (빈도, 성공률, 평균 보유 기간)
+- **DB 마이그레이션 6개 추가**
+  - `015_trading_journal.sql`: 매매일지 기본 테이블
+  - `016_positions_credential_id.sql`: 포지션-계정 연결
+  - `017_journal_views.sql`: 분석용 뷰
+  - `018_journal_period_views.sql`: 기간별 분석 뷰
+  - `019_fix_cumulative_pnl_types.sql`: 타입 수정
+  - `020_symbol_fundamental.sql`: 종목 기본정보
+
+#### Repository 패턴 확장
+- **JournalRepository** (`repository/journal.rs`, 993줄)
+  - 체결 내역 CRUD
+  - 손익 집계 쿼리
+  - 기간별 통계 조회
+- **KlinesRepository** (`repository/klines.rs`, 481줄)
+  - OHLCV 데이터 접근 계층
+  - 시계열 쿼리 최적화
+
+#### 프론트엔드 컴포넌트
+- **TradingJournal.tsx** (344줄): 매매일지 메인 페이지
+- **SymbolDisplay.tsx** (203줄): 종목 표시 컴포넌트
+- **PnLBarChart.tsx** (167줄): 손익 막대 차트
+- **ExecutionsTable.tsx** (208줄): 체결 내역 테이블
+- **PnLAnalysisPanel.tsx** (216줄): 손익 분석 패널
+- **StrategyInsightsPanel.tsx** (242줄): 전략 인사이트 패널
+
+#### 문서화
+- **development_rules.md** (561줄): 개발 규칙 문서 신규 작성
+  - Context7 API 검증 절차
+  - unwrap() 안전 패턴
+  - Repository 패턴 가이드
+  - 전략 추가 체크리스트
+- **prd.md**: PRD 문서 위치 이동 및 업데이트
+- **docs/*.md**: 운영/배포/모니터링 문서 현행화
+
+### Changed
+
+#### 전략 개선
+- **bollinger.rs**: 밴드 계산 로직 개선
+- **grid.rs**: 그리드 간격 계산 최적화
+- **rsi.rs**: RSI 신호 생성 로직 개선
+- **volatility_breakout.rs**: 돌파 조건 정밀화
+
+#### 백엔드 개선
+- `routes/portfolio.rs`: 포트폴리오 조회 API 확장
+- `repository/positions.rs`: 포지션 Repository 확장 (239줄 추가)
+- `repository/orders.rs`: 주문 Repository 개선
+- `main.rs`: Journal 라우트 등록
+
+#### 프론트엔드 개선
+- `App.tsx`: Trading Journal 라우트 추가
+- `Layout.tsx`: 매매일지 메뉴 추가
+- `client.ts`: Journal API 클라이언트 추가 (357줄 추가)
+- `format.ts`: 포맷팅 유틸리티 확장 (80줄 추가)
+
+#### KIS 거래소 연동
+- `kis/auth.rs`: 인증 로직 개선 (40줄 변경)
+
+### Database
+
+- 마이그레이션 14개 → 20개 (6개 추가)
+- 매매일지 관련 테이블 및 뷰 추가
+
+---
+
 ## [0.4.4] - 2026-01-31
 
 ### Added
@@ -451,12 +535,12 @@
 
 ## 로드맵
 
-### [0.4.0] - 예정
-- 매매일지 (Trading Journal) 기능 완성
-- 다중 자산 백테스트 지원 (다중 심볼 전략)
-- WebSocket 이벤트 브로드캐스트 완성
-
-### [0.5.0] - 예정
+### [0.6.0] - 예정
 - 추가 거래소 통합 (Coinbase, 키움증권)
+- WebSocket 이벤트 브로드캐스트 완성
 - 성능 최적화 및 부하 테스트
-- Grafana 대시보드 사전 설정
+
+### [0.7.0] - 예정
+- 실시간 알림 대시보드
+- 포트폴리오 리밸런싱 자동화
+- 다중 계좌 지원

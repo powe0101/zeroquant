@@ -10,7 +10,6 @@ import {
   listBacktestResults,
   saveBacktestResult,
   deleteBacktestResult,
-  searchSymbols,
   MULTI_ASSET_STRATEGIES,
   type BacktestRequest,
   type BacktestMultiRequest,
@@ -18,6 +17,7 @@ import {
   type BacktestMultiResult,
 } from '../api/client'
 import type { Strategy } from '../types'
+import { SymbolDisplay } from '../components/SymbolDisplay'
 
 function formatCurrency(value: string | number): string {
   const num = typeof value === 'string' ? parseFloat(value) : value
@@ -223,7 +223,6 @@ interface BacktestResultCardProps {
   strategies: Strategy[] | undefined
   index: number
   onDelete: (index: number) => void | Promise<void>
-  symbolDisplayName?: string  // 심볼 표시 이름 (예: "삼성전자 (005930)")
 }
 
 function BacktestResultCard(props: BacktestResultCardProps) {
@@ -319,7 +318,18 @@ function BacktestResultCard(props: BacktestResultCardProps) {
                 {props.strategies?.find((s: Strategy) => s.id === props.result.strategy_id)?.name || props.result.strategy_id}
               </h4>
               <div class="flex items-center gap-3 mt-1 text-sm text-[var(--color-text-muted)]">
-                <span>{props.symbolDisplayName || props.result.symbol}</span>
+                <div class="flex flex-wrap gap-1">
+                  <For each={props.result.symbol.split(',').map(s => s.trim()).filter(s => s)}>
+                    {(symbol) => (
+                      <SymbolDisplay
+                        ticker={symbol}
+                        mode="inline"
+                        size="sm"
+                        autoFetch={true}
+                      />
+                    )}
+                  </For>
+                </div>
                 <span class="flex items-center gap-1">
                   <Calendar class="w-4 h-4" />
                   {props.result.start_date} ~ {props.result.end_date}
@@ -614,7 +624,14 @@ function BacktestResultCard(props: BacktestResultCardProps) {
                     <For each={props.result.trades.slice(0, 20)}>
                       {(trade) => (
                         <tr class="border-b border-[var(--color-surface-light)]">
-                          <td class="py-2">{trade.symbol}</td>
+                          <td class="py-2">
+                            <SymbolDisplay
+                              ticker={trade.symbol}
+                              mode="inline"
+                              size="sm"
+                              autoFetch={true}
+                            />
+                          </td>
                           <td class={`py-2 ${trade.side === 'Buy' ? 'text-green-500' : 'text-red-500'}`}>
                             {trade.side === 'Buy' ? '매수' : '매도'}
                           </td>
@@ -710,52 +727,6 @@ export function Backtest() {
   const [slippageRate, setSlippageRate] = createSignal('0.05') // 기본 0.05%
   const [isRunning, setIsRunning] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
-
-  // 심볼 이름 캐시 (ticker -> name)
-  const [symbolNameCache, setSymbolNameCache] = createSignal<Map<string, string>>(new Map())
-
-  // 심볼 이름 조회 및 캐싱
-  const fetchSymbolName = async (ticker: string): Promise<string> => {
-    // 캐시에 있으면 반환
-    const cached = symbolNameCache().get(ticker)
-    if (cached) return cached
-
-    // API로 조회
-    try {
-      const results = await searchSymbols(ticker, 1)
-      if (results.length > 0 && results[0].ticker === ticker) {
-        const name = results[0].name
-        // 캐시에 저장
-        setSymbolNameCache(prev => {
-          const newMap = new Map(prev)
-          newMap.set(ticker, name)
-          return newMap
-        })
-        return name
-      }
-    } catch (err) {
-      console.warn(`심볼 이름 조회 실패: ${ticker}`, err)
-    }
-    return '' // 이름을 찾지 못하면 빈 문자열
-  }
-
-  // 심볼 표시 이름 반환 (캐시된 값 사용)
-  const getSymbolDisplayName = (ticker: string): string => {
-    const name = symbolNameCache().get(ticker)
-    return name ? `${name} (${ticker})` : ticker
-  }
-
-  // 결과가 로드될 때 심볼 이름 미리 캐싱
-  createEffect(() => {
-    const currentResults = results()
-    for (const result of currentResults) {
-      // 다중 심볼인 경우 첫 번째만 조회
-      const symbol = result.symbol.split(',')[0].trim()
-      if (!symbolNameCache().has(symbol)) {
-        fetchSymbolName(symbol) // 비동기로 캐싱 (화면 갱신 트리거)
-      }
-    }
-  })
 
   const handleRunBacktest = async (e: Event) => {
     e.preventDefault()
@@ -954,7 +925,18 @@ export function Backtest() {
                 when={getSelectedStrategyInfo()?.symbols && getSelectedStrategyInfo()!.symbols.length > 0}
                 fallback={<span class="text-[var(--color-text-muted)]/50">전략을 선택하세요</span>}
               >
-                {getSelectedStrategyInfo()?.symbols.join(', ')}
+                <div class="flex flex-wrap gap-1">
+                  <For each={getSelectedStrategyInfo()?.symbols}>
+                    {(symbol) => (
+                      <SymbolDisplay
+                        ticker={symbol}
+                        mode="inline"
+                        size="sm"
+                        autoFetch={true}
+                      />
+                    )}
+                  </For>
+                </div>
               </Show>
             </div>
           </div>
@@ -1077,7 +1059,6 @@ export function Backtest() {
                   result={result}
                   strategies={strategies()}
                   index={index()}
-                  symbolDisplayName={getSymbolDisplayName(result.symbol.split(',')[0].trim())}
                   onDelete={async (idx) => {
                     const target = results()[idx] as StoredBacktestResult
                     // DB에 저장된 결과라면 API 호출하여 삭제

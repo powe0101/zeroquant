@@ -502,17 +502,16 @@ cargo test --workspace --test '*'
 ```
 
 ### Current Test Status
-- **Total Tests:** 237
-- **Passed:** 237
-- **Failed:** 0
+- **Unit Tests:** 258 (258 passed)
+- **Integration Tests:** 28 (28 passed)
+- **Total:** 286 tests passing
 
 ---
 
 ## Changelog
 
-### v0.1.0 (2026-01-28)
-- Initial Phase 8 implementation
-- REST API for strategies, orders, positions
-- JWT authentication with role-based access control
-- WebSocket real-time data streaming
-- 237 unit tests passing
+### v0.4.4 (2026-01-31)
+- OpenAPI/Swagger 문서화 추가
+- StrategyType enum 추가
+- Repository 패턴 확장 (9개 repository)
+- 286 tests passing (258 unit + 28 integration)

@@ -17,6 +17,7 @@ import {
   TrendingUp,
   BarChart3,
 } from 'lucide-solid'
+import { SymbolDisplay } from '../components/SymbolDisplay'
 import {
   startTraining,
   getTrainingJobs,
@@ -257,7 +258,12 @@ export function MLTraining() {
               <For each={selectedSymbols()}>
                 {(symbol) => (
                   <span class="inline-flex items-center gap-1 px-3 py-1 bg-purple-500/20 text-purple-400 rounded-full text-sm">
-                    {symbol}
+                    <SymbolDisplay
+                      ticker={symbol}
+                      mode="inline"
+                      size="sm"
+                      autoFetch={true}
+                    />
                     <button onClick={() => removeSymbol(symbol)} class="hover:text-purple-300">
                       <XCircle class="w-4 h-4" />
                     </button>
@@ -420,8 +426,24 @@ export function MLTraining() {
                       <StatusIcon status={job.status} />
                       <div>
                         <p class="font-medium text-[var(--color-text)]">{job.name}</p>
-                        <p class="text-sm text-[var(--color-text-muted)]">
-                          {MODEL_TYPE_NAMES[job.modelType]} · {job.symbols.join(', ')} · {job.period}
+                        <p class="text-sm text-[var(--color-text-muted)] flex items-center gap-1 flex-wrap">
+                          <span>{MODEL_TYPE_NAMES[job.modelType]} ·</span>
+                          <For each={job.symbols}>
+                            {(symbol, idx) => (
+                              <>
+                                <SymbolDisplay
+                                  ticker={symbol}
+                                  mode="inline"
+                                  size="sm"
+                                  autoFetch={true}
+                                />
+                                <Show when={idx() < job.symbols.length - 1}>
+                                  <span class="text-[var(--color-text-muted)]">,</span>
+                                </Show>
+                              </>
+                            )}
+                          </For>
+                          <span>· {job.period}</span>
                         </p>
                       </div>
                     </div>
@@ -529,8 +551,23 @@ export function MLTraining() {
                   <div class="flex items-center justify-between">
                     <div>
                       <p class="font-medium text-[var(--color-text)]">{model.name}</p>
-                      <p class="text-sm text-[var(--color-text-muted)]">
-                        {MODEL_TYPE_NAMES[model.modelType]} · {model.symbols.join(', ')}
+                      <p class="text-sm text-[var(--color-text-muted)] flex items-center gap-1 flex-wrap">
+                        <span>{MODEL_TYPE_NAMES[model.modelType]} ·</span>
+                        <For each={model.symbols}>
+                          {(symbol, idx) => (
+                            <>
+                              <SymbolDisplay
+                                ticker={symbol}
+                                mode="inline"
+                                size="sm"
+                                autoFetch={true}
+                              />
+                              <Show when={idx() < model.symbols.length - 1}>
+                                <span class="text-[var(--color-text-muted)]">,</span>
+                              </Show>
+                            </>
+                          )}
+                        </For>
                       </p>
                       <p class="text-xs text-[var(--color-text-muted)] mt-1">
                         생성: {new Date(model.createdAt).toLocaleDateString('ko-KR')}

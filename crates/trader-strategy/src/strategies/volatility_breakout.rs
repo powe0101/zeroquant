@@ -301,7 +301,9 @@ impl VolatilityBreakoutStrategy {
 
         match self.avg_volume {
             Some(avg) if avg > Decimal::ZERO => {
-                let threshold = avg * Decimal::from_f64_retain(config.volume_multiplier).unwrap();
+                // f64 변환 실패 시 기본값 1.5 사용
+                let threshold = avg * Decimal::from_f64_retain(config.volume_multiplier)
+                    .unwrap_or(dec!(1.5));
                 current_volume >= threshold
             }
             _ => true, // 아직 평균 없음, 거래 허용
@@ -461,8 +463,11 @@ impl VolatilityBreakoutStrategy {
 
         // 롱 돌파
         if current_price >= upper_breakout {
-            let stop_mult = Decimal::from_f64_retain(config.stop_loss_multiplier).unwrap();
-            let tp_mult = Decimal::from_f64_retain(config.take_profit_multiplier).unwrap();
+            // f64 변환 실패 시 기본값 사용 (손절: 1.0, 익절: 2.0)
+            let stop_mult = Decimal::from_f64_retain(config.stop_loss_multiplier)
+                .unwrap_or(dec!(1.0));
+            let tp_mult = Decimal::from_f64_retain(config.take_profit_multiplier)
+                .unwrap_or(dec!(2.0));
 
             let stop_loss = current_price - range * stop_mult;
             let take_profit = current_price + range * tp_mult;
@@ -495,8 +500,11 @@ impl VolatilityBreakoutStrategy {
 
         // 숏 돌파
         if config.trade_both_directions && current_price <= lower_breakout && self.position.is_none() {
-            let stop_mult = Decimal::from_f64_retain(config.stop_loss_multiplier).unwrap();
-            let tp_mult = Decimal::from_f64_retain(config.take_profit_multiplier).unwrap();
+            // f64 변환 실패 시 기본값 사용 (손절: 1.0, 익절: 2.0)
+            let stop_mult = Decimal::from_f64_retain(config.stop_loss_multiplier)
+                .unwrap_or(dec!(1.0));
+            let tp_mult = Decimal::from_f64_retain(config.take_profit_multiplier)
+                .unwrap_or(dec!(2.0));
 
             let stop_loss = current_price + range * stop_mult;
             let take_profit = current_price - range * tp_mult;

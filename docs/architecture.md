@@ -74,10 +74,8 @@
 ### 인프라
 | 기술 | 용도 |
 |------|------|
-| Docker | 컨테이너화 |
+| Podman / Docker | 컨테이너화 |
 | Docker Compose | 멀티 컨테이너 오케스트레이션 |
-| Prometheus | 메트릭 수집 |
-| Grafana | 모니터링 대시보드 |
 | tracing | 구조화된 로깅 |
 
 ---
@@ -109,7 +107,7 @@ d:\Trader\
 │   │   └── main.rs            # 서버 엔트리포인트
 │   │
 │   ├── trader-strategy/       # 전략 엔진 (15,842줄)
-│   │   ├── strategies/        # 18개 전략 구현
+│   │   ├── strategies/        # 25개 전략 구현
 │   │   │   ├── rsi.rs         # RSI 평균회귀
 │   │   │   ├── grid.rs        # 그리드 트레이딩
 │   │   │   ├── haa.rs         # HAA 자산배분
@@ -160,7 +158,7 @@ d:\Trader\
 │       ├── telegram.rs        # 텔레그램 봇
 │       └── discord.rs         # Discord 웹훅
 │
-├── migrations/                # DB 마이그레이션 (10개)
+├── migrations/                # DB 마이그레이션 (14개)
 │   ├── 001_initial_schema.sql
 │   ├── 002_encrypted_credentials.sql
 │   └── ...
@@ -381,33 +379,36 @@ Order Execution (if valid)
 
 ---
 
-## Docker 서비스
+## 실행 환경
 
-| 서비스 | 포트 | 프로필 | 설명 |
-|--------|------|--------|------|
-| timescaledb | 5432 | 기본 | TimescaleDB (PostgreSQL 15) |
-| redis | 6379 | 기본 | Redis 7 |
-| trader-api | 3000 | 기본 | Rust API 서버 |
-| prometheus | 9090 | monitoring | 메트릭 수집 |
-| grafana | 3001 | monitoring | 모니터링 대시보드 |
-| redis-commander | 8081 | dev | Redis GUI |
-| pgadmin | 5050 | dev | PostgreSQL GUI |
-| frontend-dev | 5173 | dev | Vite 개발 서버 |
+### Docker 구성 (인프라만)
 
-### 실행 방법
+| 서비스 | 포트 | 설명 |
+|--------|------|------|
+| timescaledb | 5432 | TimescaleDB (PostgreSQL 15) |
+| redis | 6379 | Redis 7 |
+
+### 로컬 실행
+
+API 서버와 프론트엔드는 로컬에서 직접 실행합니다:
 
 ```bash
-# 기본 서비스 실행
-docker compose up -d
+# 인프라 시작
+docker-compose up -d timescaledb redis
 
-# 개발 환경 포함
-docker compose --profile dev up -d
+# API 서버 (별도 터미널)
+export DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
+export REDIS_URL=redis://localhost:6379
+cargo run --bin trader-api --features ml --release
 
-# 모니터링 포함
-docker compose --profile monitoring up -d
+# 프론트엔드 (별도 터미널)
+cd frontend && npm run dev
+```
 
-# 전체 실행
-docker compose --profile dev --profile monitoring up -d
+### ML 훈련 (선택적)
+
+```bash
+docker-compose --profile ml run --rm trader-ml python scripts/train_ml_model.py
 ```
 
 ---
@@ -471,7 +472,7 @@ docker compose --profile dev --profile monitoring up -d
 - [API 문서](./api.md)
 - [전략 비교](./STRATEGY_COMPARISON.md)
 - [TODO 목록](./todo.md)
-- [PRD v2.0](C:\Users\HP\.claude\plans\synthetic-conjuring-peach.md)
+- [PRD v5.0](./prd.md)
 
 ---
 

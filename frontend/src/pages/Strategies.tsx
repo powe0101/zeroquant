@@ -1,12 +1,13 @@
-import { createSignal, createResource, For, Show, createEffect } from 'solid-js'
+import { createSignal, createResource, For, Show } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 import { Play, Pause, Settings, TrendingUp, TrendingDown, AlertCircle, RefreshCw, X, BarChart3, Activity, Trash2, Copy } from 'lucide-solid'
-import { getStrategies, startStrategy, stopStrategy, getBacktestStrategies, deleteStrategy, cloneStrategy, searchSymbols } from '../api/client'
+import { getStrategies, startStrategy, stopStrategy, getBacktestStrategies, deleteStrategy, cloneStrategy } from '../api/client'
 import type { Strategy } from '../types'
 import { useToast } from '../components/Toast'
 import { formatCurrency, getDefaultTimeframe } from '../utils/format'
 import { AddStrategyModal } from '../components/AddStrategyModal'
 import { EditStrategyModal } from '../components/EditStrategyModal'
+import { SymbolDisplay } from '../components/SymbolDisplay'
 
 export function Strategies() {
   const toast = useToast()
@@ -33,39 +34,6 @@ export function Strategies() {
   const [editingStrategyId, setEditingStrategyId] = createSignal<string | null>(null)
   const [editingStrategyType, setEditingStrategyType] = createSignal<string | null>(null)
 
-  // ==================== 심볼 이름 캐시 ====================
-  const [symbolNameCache, setSymbolNameCache] = createSignal<Map<string, string>>(new Map())
-
-  // 심볼 이름 조회 및 캐싱
-  const fetchSymbolName = async (ticker: string): Promise<string> => {
-    // 캐시에 있으면 반환
-    const cached = symbolNameCache().get(ticker)
-    if (cached !== undefined) return cached
-
-    // 알파벳으로 시작하는 US 심볼은 이름 조회 생략 (SPY, TQQQ 등)
-    if (/^[A-Z]+$/.test(ticker)) {
-      setSymbolNameCache(prev => new Map(prev).set(ticker, ''))
-      return ''
-    }
-
-    try {
-      // API로 조회
-      const results = await searchSymbols(ticker, 1)
-      const name = results.length > 0 ? results[0].name : ''
-      setSymbolNameCache(prev => new Map(prev).set(ticker, name))
-      return name
-    } catch {
-      setSymbolNameCache(prev => new Map(prev).set(ticker, ''))
-      return ''
-    }
-  }
-
-  // 심볼 표시 이름 반환 (캐시된 값 사용)
-  const getSymbolDisplayName = (ticker: string): string => {
-    const name = symbolNameCache().get(ticker)
-    return name ? `${ticker} (${name})` : ticker
-  }
-
   // 전략 템플릿 목록 가져오기
   const [strategyTemplates] = createResource(async () => {
     const response = await getBacktestStrategies()
@@ -74,25 +42,6 @@ export function Strategies() {
 
   // 전략 목록 가져오기
   const [strategies, { refetch }] = createResource(getStrategies)
-
-  // 전략 로드 시 심볼 이름 프리페치
-  createEffect(() => {
-    const strategyList = strategies()
-    if (!strategyList) return
-
-    // 모든 심볼 수집
-    const allSymbols = new Set<string>()
-    strategyList.forEach(s => {
-      s.symbols?.forEach(sym => allSymbols.add(sym))
-    })
-
-    // 캐시에 없는 심볼만 조회
-    allSymbols.forEach(symbol => {
-      if (!symbolNameCache().has(symbol)) {
-        fetchSymbolName(symbol)
-      }
-    })
-  })
 
   // ==================== 전략 편집 기능 ====================
 
@@ -384,7 +333,7 @@ export function Strategies() {
                 </div>
 
                 {/* Symbols & Timeframe */}
-                <div class="flex flex-wrap items-center gap-1 mb-4">
+                <div class="flex flex-wrap items-center gap-2 mb-4">
                   {/* 타임프레임 배지 */}
                   <span class="px-2 py-0.5 text-xs bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded font-medium">
                     {strategy.timeframe || getDefaultTimeframe(strategy.strategyType)}
@@ -392,9 +341,14 @@ export function Strategies() {
                   {/* 심볼 목록 */}
                   <For each={strategy.symbols}>
                     {(symbol) => (
-                      <span class="px-2 py-0.5 text-xs bg-[var(--color-surface-light)] text-[var(--color-text-muted)] rounded">
-                        {getSymbolDisplayName(symbol)}
-                      </span>
+                      <div class="px-2 py-1 text-xs bg-[var(--color-surface-light)] rounded">
+                        <SymbolDisplay
+                          ticker={symbol}
+                          mode="full"
+                          size="sm"
+                          autoFetch={true}
+                        />
+                      </div>
                     )}
                   </For>
                 </div>

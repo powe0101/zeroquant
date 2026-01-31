@@ -30,6 +30,7 @@ import {
   type SimulationTrade,
 } from '../api/client'
 import type { Strategy } from '../types'
+import { SymbolDisplay } from '../components/SymbolDisplay'
 
 function formatCurrency(value: number | string): string {
   const numValue = typeof value === 'string' ? parseFloat(value) : value
@@ -755,9 +756,14 @@ export function Simulation() {
                     <div class="flex items-center justify-between p-3 bg-[var(--color-surface-light)] rounded-lg">
                       <div>
                         <div class="flex items-center gap-2">
-                          <span class="font-semibold text-[var(--color-text)]">
-                            {position.displayName || position.symbol}
-                          </span>
+                          <SymbolDisplay
+                            ticker={position.symbol}
+                            symbolName={position.displayName}
+                            mode="inline"
+                            size="md"
+                            autoFetch={true}
+                            class="font-semibold"
+                          />
                           <span
                             class={`px-2 py-0.5 text-xs rounded ${
                               position.side === 'Long'
@@ -830,7 +836,13 @@ export function Simulation() {
                         >
                           {trade.side === 'Buy' ? '매수' : '매도'}
                         </span>
-                        <span class="text-[var(--color-text)]">{trade.displayName || trade.symbol}</span>
+                        <SymbolDisplay
+                          ticker={trade.symbol}
+                          symbolName={trade.displayName}
+                          mode="inline"
+                          size="sm"
+                          autoFetch={true}
+                        />
                       </div>
                       <div class="text-right">
                         <div class="text-sm text-[var(--color-text)]">

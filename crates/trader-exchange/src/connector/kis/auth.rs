@@ -387,6 +387,9 @@ impl KisOAuth {
     }
 
     /// 인증된 요청을 위한 공통 헤더 생성.
+    ///
+    /// # Errors
+    /// 헤더 값 파싱에 실패하면 `ExchangeError::ParseError`를 반환합니다.
     pub async fn build_headers(
         &self,
         tr_id: &str,
@@ -396,35 +399,62 @@ impl KisOAuth {
 
         let mut headers = reqwest::header::HeaderMap::new();
 
+        // 상수 문자열은 컴파일 타임에 검증되므로 unwrap() 안전
         headers.insert(
             "Content-Type",
             "application/json; charset=utf-8".parse().unwrap(),
         );
+
+        // 동적 값들은 map_err로 에러 전파
         headers.insert(
             "authorization",
-            token.auth_header().parse().unwrap(),
+            token
+                .auth_header()
+                .parse()
+                .map_err(|_| ExchangeError::ParseError(
+                    "authorization 헤더에 유효하지 않은 문자 포함".to_string()
+                ))?,
         );
         headers.insert(
             "appkey",
-            self.config.app_key.parse().unwrap(),
+            self.config
+                .app_key
+                .parse()
+                .map_err(|_| ExchangeError::ParseError(
+                    "app_key에 유효하지 않은 문자 포함".to_string()
+                ))?,
         );
         headers.insert(
             "appsecret",
-            self.config.app_secret.parse().unwrap(),
+            self.config
+                .app_secret
+                .parse()
+                .map_err(|_| ExchangeError::ParseError(
+                    "app_secret에 유효하지 않은 문자 포함".to_string()
+                ))?,
         );
         headers.insert(
             "tr_id",
-            tr_id.parse().unwrap(),
+            tr_id
+                .parse()
+                .map_err(|_| ExchangeError::ParseError(
+                    format!("tr_id에 유효하지 않은 문자 포함: {}", tr_id)
+                ))?,
         );
 
         if let Some(hash) = hashkey {
             headers.insert(
                 "hashkey",
-                hash.parse().unwrap(),
+                hash
+                    .parse()
+                    .map_err(|_| ExchangeError::ParseError(
+                        "hashkey에 유효하지 않은 문자 포함".to_string()
+                    ))?,
             );
         }
 
         // 개인인증이 활성화된 경우 헤더 추가
+        // 상수 문자열 "P"는 컴파일 타임에 검증되므로 unwrap() 안전
         if self.config.personalized {
             headers.insert(
                 "custtype",

@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use crate::routes::strategies::ApiError;
 use crate::routes::credentials::EncryptedCredentials;
-use crate::repository::{EquityHistoryRepository, PortfolioSnapshot};
+use crate::repository::{EquityHistoryRepository, PortfolioSnapshot, PositionRepository, HoldingPosition};
 use crate::state::AppState;
 use chrono::Utc;
 use trader_core::ExecutionRecord;
@@ -202,7 +202,7 @@ fn make_oauth_cache_key(app_key: &str, environment: KisEnvironment) -> String {
 ///
 /// **중요**: 동일한 `app_key`를 사용하는 모든 클라이언트(실계좌/모의투자, 국내/해외)가
 /// `KisOAuth`를 공유하여 토큰을 재사용합니다. 이를 통해 rate limit 문제를 해결합니다.
-async fn get_or_create_kis_client(
+pub async fn get_or_create_kis_client(
     state: &AppState,
     credential_id: Uuid,
 ) -> Result<(Arc<KisKrClient>, Arc<KisUsClient>), String> {
@@ -660,6 +660,58 @@ pub async fn get_holdings(
     }
 
     let total_count = kr_holdings.len() + us_holdings.len();
+
+    // 거래소 데이터를 positions 테이블에 동기화
+    if let (Some(db_pool), Some(credential_id)) = (&state.db_pool, params.credential_id) {
+        // 동기화할 holdings 데이터 준비
+        let mut sync_holdings = Vec::new();
+
+        for h in &kr_holdings {
+            sync_holdings.push(HoldingPosition {
+                credential_id,
+                exchange: "kis".to_string(),
+                symbol: h.symbol.clone(),
+                symbol_name: h.name.clone(),
+                quantity: h.quantity,
+                avg_price: h.avg_price,
+                current_price: h.current_price,
+                profit_loss: h.profit_loss,
+                profit_loss_rate: h.profit_loss_rate,
+                market: h.market.clone(),
+            });
+        }
+
+        for h in &us_holdings {
+            sync_holdings.push(HoldingPosition {
+                credential_id,
+                exchange: "kis".to_string(),
+                symbol: h.symbol.clone(),
+                symbol_name: h.name.clone(),
+                quantity: h.quantity,
+                avg_price: h.avg_price,
+                current_price: h.current_price,
+                profit_loss: h.profit_loss,
+                profit_loss_rate: h.profit_loss_rate,
+                market: h.market.clone(),
+            });
+        }
+
+        // 비동기로 동기화 (API 응답 지연 방지)
+        let pool = db_pool.clone();
+        tokio::spawn(async move {
+            match PositionRepository::sync_holdings(&pool, credential_id, "kis", sync_holdings).await {
+                Ok(result) => {
+                    debug!(
+                        "포지션 동기화 완료: credential_id={}, synced={}, closed={}",
+                        credential_id, result.synced, result.closed
+                    );
+                }
+                Err(e) => {
+                    warn!("포지션 동기화 실패: credential_id={}, error={}", credential_id, e);
+                }
+            }
+        });
+    }
 
     Ok(Json(HoldingsResponse {
         kr_holdings,

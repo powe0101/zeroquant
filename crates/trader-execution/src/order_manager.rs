@@ -249,9 +249,12 @@ impl OrderManager {
 
         let now = Utc::now();
 
-        // 주문 업데이트
+        // 주문 업데이트 (위에서 존재 확인 후 가져오므로 논리적으로 안전)
         {
-            let order = self.orders.get_mut(&order_id).unwrap();
+            let order = self
+                .orders
+                .get_mut(&order_id)
+                .ok_or(OrderManagerError::OrderNotFound(order_id))?;
             order.status = status.status;
             order.filled_quantity = status.filled_quantity;
             order.average_fill_price = status.average_price;
@@ -341,9 +344,12 @@ impl OrderManager {
         // 업데이트 후 이벤트에 필요한 데이터 수집
         let (new_filled, avg_price, is_fully_filled, was_partially_filled, order_quantity);
 
-        // 주문 업데이트
+        // 주문 업데이트 (위에서 contains_key 확인 후 가져오므로 논리적으로 안전)
         {
-            let order = self.orders.get_mut(&fill.order_id).unwrap();
+            let order = self
+                .orders
+                .get_mut(&fill.order_id)
+                .ok_or(OrderManagerError::OrderNotFound(fill.order_id))?;
 
             // 주문 체결 수량 및 평균 가격 업데이트
             let old_filled = order.filled_quantity;

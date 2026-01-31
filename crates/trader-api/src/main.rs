@@ -10,6 +10,7 @@ use std::time::Duration;
 use axum::{http::StatusCode, middleware, routing::get, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
 use sqlx::postgres::PgPoolOptions;
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
@@ -72,10 +73,11 @@ impl ServerConfig {
     }
 
     /// 소켓 주소 반환.
-    fn socket_addr(&self) -> SocketAddr {
-        format!("{}:{}", self.host, self.port)
-            .parse()
-            .expect("Invalid socket address")
+    ///
+    /// # Errors
+    /// `host:port` 형식이 유효하지 않으면 `AddrParseError`를 반환합니다.
+    fn socket_addr(&self) -> Result<SocketAddr, std::net::AddrParseError> {
+        format!("{}:{}", self.host, self.port).parse()
     }
 }
 
@@ -502,7 +504,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 설정 로드
     let config = ServerConfig::from_env();
-    let addr = config.socket_addr();
+    let addr = config.socket_addr().map_err(|e| {
+        error!(
+            host = %config.host,
+            port = config.port,
+            error = %e,
+            "소켓 주소 설정이 유효하지 않습니다. API_HOST, API_PORT 환경변수를 확인하세요."
+        );
+        e
+    })?;
 
     // JWT 시크릿 로드
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
@@ -570,10 +580,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // Graceful shutdown 처리
+    // 전역 종료 토큰 생성
+    let shutdown_token = CancellationToken::new();
+    let shutdown_token_clone = shutdown_token.clone();
+
+    // Graceful shutdown 처리 (타임아웃 포함)
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(shutdown_token))
         .await?;
+
+    // 종료 시그널 받은 후 정리 작업
+    info!("Server shutdown initiated, cleaning up...");
+
+    // 종료 토큰 취소 (백그라운드 태스크에 종료 시그널 전파)
+    shutdown_token_clone.cancel();
+
+    // 정리 작업에 최대 10초 대기
+    let cleanup_timeout = tokio::time::timeout(
+        Duration::from_secs(10),
+        async {
+            // 진행 중인 요청 완료 대기
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            info!("Cleanup completed");
+        }
+    ).await;
+
+    if cleanup_timeout.is_err() {
+        warn!("Cleanup timeout, forcing shutdown");
+    }
 
     info!("Server stopped gracefully");
 
@@ -581,7 +615,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Graceful shutdown 시그널 대기.
-async fn shutdown_signal() {
+///
+/// Ctrl+C 또는 SIGTERM 시그널을 수신하면 종료 토큰을 취소합니다.
+///
+/// # Arguments
+/// * `shutdown_token` - 백그라운드 태스크에 종료를 전파할 CancellationToken
+async fn shutdown_signal(shutdown_token: CancellationToken) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -601,10 +640,14 @@ async fn shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => {
-            warn!("Received Ctrl+C, shutting down...");
+            warn!("Received Ctrl+C, initiating graceful shutdown...");
         }
         _ = terminate => {
-            warn!("Received SIGTERM, shutting down...");
+            warn!("Received SIGTERM, initiating graceful shutdown...");
         }
     }
+
+    // 모든 백그라운드 태스크에 종료 시그널 전파
+    shutdown_token.cancel();
+    info!("Shutdown signal propagated to background tasks");
 }

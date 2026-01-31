@@ -37,10 +37,9 @@
 | 서비스 | 포트 | 용도 |
 |--------|------|------|
 | Trader API | 3000 | REST API / WebSocket |
-| PostgreSQL | 5432 | 데이터베이스 |
+| PostgreSQL | 5432 | 데이터베이스 (TimescaleDB) |
 | Redis | 6379 | 캐시 |
-| Prometheus | 9090 | 메트릭 수집 |
-| Grafana | 3001 | 대시보드 |
+| Frontend | 5173 | Vite 개발 서버 |
 
 ---
 
@@ -71,12 +70,12 @@ JWT_SECRET=your-super-secret-jwt-key-change-in-production
 # 필수: 암호화 키 (32바이트, Base64 인코딩)
 ENCRYPTION_KEY=your-32-byte-encryption-key-here-base64
 
-# 필수: 거래소 API 키 (Binance)
-BINANCE_API_KEY=your_binance_api_key
-BINANCE_API_SECRET=your_binance_api_secret
-
-# 선택: Grafana 관리자 비밀번호
-GRAFANA_PASSWORD=secure_grafana_password
+# 거래소 API 키 및 알림 설정은 환경변수가 아닌 웹 UI를 통해 설정합니다.
+# UI에서 입력한 키는 AES-256-GCM으로 암호화되어 데이터베이스에 저장됩니다.
+# Settings 페이지에서:
+#   - 거래소 API 키 (Binance, KIS)
+#   - 텔레그램 봇 토큰
+#   - Discord 웹훅 URL
 
 # 선택: CORS 허용 도메인 (프로덕션)
 CORS_ORIGINS=https://your-dashboard.com
@@ -102,17 +101,16 @@ openssl rand -base64 32
 ### 개발 환경
 
 ```bash
-# 기본 서비스 시작 (TimescaleDB, Redis, Trader API)
-docker compose up -d
+# 인프라 서비스만 시작 (TimescaleDB, Redis)
+docker compose up -d timescaledb redis
 
-# 개발 도구 포함 시작 (pgAdmin, Redis Commander)
-docker compose --profile dev up -d
+# API 서버 실행 (별도 터미널)
+export DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
+export REDIS_URL=redis://localhost:6379
+cargo run --bin trader-api --features ml --release
 
-# 모니터링 포함 시작 (Prometheus, Grafana)
-docker compose --profile monitoring up -d
-
-# 모든 프로필 시작
-docker compose --profile dev --profile monitoring up -d
+# 프론트엔드 실행 (별도 터미널)
+cd frontend && npm run dev
 ```
 
 ### 서비스 상태 확인
@@ -184,23 +182,22 @@ CORS_ORIGINS=https://your-dashboard.com
 # 데이터베이스 (강력한 비밀번호)
 DATABASE_URL=postgresql://trader:<strong-password>@timescaledb:5432/trader
 
-# Grafana (기본 비밀번호 변경)
-GRAFANA_PASSWORD=<strong-password>
-
-# Binance (실거래 API 키)
-BINANCE_TESTNET=false
-BINANCE_API_KEY=<production-api-key>
-BINANCE_API_SECRET=<production-api-secret>
+# 거래소 API 키, 텔레그램, Discord 설정은 웹 UI에서 관리
+# 프로덕션 환경에서 UI의 Settings 페이지에서 설정하세요
+# 모든 민감 정보는 AES-256-GCM으로 암호화되어 저장됩니다
 ```
 
 ### 3. 프로덕션 실행
 
 ```bash
-# 환경 파일 지정하여 실행
-docker compose --env-file .env.production up -d
+# 인프라만 Docker로 실행
+docker compose --env-file .env.production up -d timescaledb redis
 
-# 모니터링 포함
-docker compose --env-file .env.production --profile monitoring up -d
+# API 서버는 systemd 서비스로 관리 (권장)
+sudo systemctl start trader-api
+
+# 또는 직접 실행
+./target/release/trader-api
 ```
 
 ### 4. 리버스 프록시 설정 (Nginx 예시)
@@ -268,10 +265,9 @@ server {
 
 ### 모니터링
 
-- [ ] Prometheus 알림 규칙 설정
-- [ ] Grafana 대시보드 확인
-- [ ] 로그 수집 설정 (선택)
-- [ ] 외부 알림 연동 (Slack, PagerDuty 등)
+- [ ] 로그 수집 설정 (tracing 기반)
+- [ ] 텔레그램 알림 연동
+- [ ] 외부 알림 연동 (Slack, Discord 등)
 
 ### 네트워크
 

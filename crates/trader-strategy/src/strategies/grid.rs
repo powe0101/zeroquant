@@ -205,7 +205,10 @@ impl GridStrategy {
 
     /// 현재 가격을 기준으로 그리드 레벨 초기화.
     fn initialize_grid(&mut self, center: Decimal) {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            debug!("Cannot initialize grid: config not set");
+            return;
+        };
         self.grid_levels.clear();
         self.center_price = Some(center);
 
@@ -274,7 +277,10 @@ impl GridStrategy {
 
     /// ATR 기반 동적 간격 계산.
     fn calculate_dynamic_spacing(&self, current_price: Decimal) -> Decimal {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            // config가 없으면 기본 1% 간격 사용
+            return current_price * dec!(0.01);
+        };
 
         if let Some(atr) = self.current_atr {
             let atr_multiplier =
@@ -288,7 +294,9 @@ impl GridStrategy {
 
     /// ATR (Average True Range) 계산.
     fn calculate_atr(&mut self) {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
         let period = config.atr_period;
 
         if self.high_history.len() < period || self.low_history.len() < period {
@@ -312,7 +320,10 @@ impl GridStrategy {
 
     /// 단순 이동평균을 사용하여 추세 방향 계산.
     fn calculate_trend(&mut self) {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            self.trend = TrendDirection::Sideways;
+            return;
+        };
 
         if self.close_history.len() < config.ma_period {
             self.trend = TrendDirection::Sideways;
@@ -338,8 +349,11 @@ impl GridStrategy {
 
     /// 현재 가격을 기반으로 신호 생성.
     fn generate_grid_signals(&mut self, current_price: Decimal) -> Vec<Signal> {
-        let config = self.config.as_ref().unwrap();
-        let symbol = self.symbol.as_ref().unwrap().clone();
+        let (Some(config), Some(symbol)) = (self.config.as_ref(), self.symbol.as_ref()) else {
+            debug!("Cannot generate signals: config or symbol not set");
+            return Vec::new();
+        };
+        let symbol = symbol.clone();
         let amount_per_level = config.amount_per_level;
         let max_position = config.max_position_size;
         let trend_filter = config.trend_filter;
@@ -411,7 +425,9 @@ impl GridStrategy {
 
     /// 가격이 멀어질 때 실행된 레벨 재설정.
     fn reset_executed_levels(&mut self, current_price: Decimal) {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
         let reset_pct = Decimal::from_f64_retain(config.reset_threshold_pct / 100.0).unwrap_or(dec!(0.05));
 
         for level in &mut self.grid_levels {
@@ -438,7 +454,9 @@ impl GridStrategy {
 
     /// 지표를 위한 가격 히스토리 업데이트.
     fn update_price_history(&mut self, high: Decimal, low: Decimal, close: Decimal) {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
         let max_len = config.atr_period.max(config.ma_period) + 1;
 
         self.high_history.push_front(high);
@@ -463,7 +481,9 @@ impl GridStrategy {
 
     /// 그리드 재초기화 필요 여부 확인 (기준 가격이 너무 멀어진 경우).
     fn should_reinitialize_grid(&self) -> bool {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            return false;
+        };
 
         if let (Some(center), Some(current)) = (self.center_price, self.current_price) {
             let deviation = ((current - center) / center).abs();
@@ -565,7 +585,9 @@ impl Strategy for GridStrategy {
 
         // self를 가변 참조하기 전에 필요한 설정값 복사
         let (symbol_str, center_price_opt) = {
-            let config = self.config.as_ref().unwrap();
+            let Some(config) = self.config.as_ref() else {
+                return Ok(vec![]);
+            };
             (config.symbol.clone(), config.center_price)
         };
 

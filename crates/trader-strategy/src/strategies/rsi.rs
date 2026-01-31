@@ -202,7 +202,10 @@ impl RsiStrategy {
 
     /// Wilder's 스무딩 방식으로 RSI 계산.
     fn calculate_rsi(&mut self) {
-        let config = self.config.as_ref().unwrap();
+        // config가 없으면 RSI 계산 불가
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
         let period = config.period;
 
         if self.close_history.len() < period + 1 {
@@ -266,9 +269,13 @@ impl RsiStrategy {
             self.avg_loss = Some(sum_loss / period_dec);
         }
 
-        // RSI 계산
-        let avg_gain = self.avg_gain.unwrap();
-        let avg_loss = self.avg_loss.unwrap();
+        // RSI 계산 - avg_gain/avg_loss는 위에서 반드시 설정됨
+        let Some(avg_gain) = self.avg_gain else {
+            return;
+        };
+        let Some(avg_loss) = self.avg_loss else {
+            return;
+        };
 
         let rsi = if avg_loss.is_zero() {
             100.0
@@ -293,7 +300,10 @@ impl RsiStrategy {
 
     /// RSI가 과매도/과매수 구간에서 확인되었는지 체크.
     fn is_confirmed(&self, threshold: f64, below: bool) -> bool {
-        let config = self.config.as_ref().unwrap();
+        // config가 없으면 확인 불가능으로 처리
+        let Some(config) = self.config.as_ref() else {
+            return false;
+        };
 
         if config.confirmation_candles == 0 {
             return true;
@@ -319,8 +329,13 @@ impl RsiStrategy {
 
     /// RSI를 기반으로 트레이딩 신호 생성.
     fn generate_signals(&mut self) -> Vec<Signal> {
-        let config = self.config.as_ref().unwrap();
-        let symbol = self.symbol.as_ref().unwrap();
+        // config 또는 symbol이 없으면 빈 신호 반환
+        let Some(config) = self.config.as_ref() else {
+            return Vec::new();
+        };
+        let Some(symbol) = self.symbol.as_ref() else {
+            return Vec::new();
+        };
         let mut signals = Vec::new();
 
         let rsi = match self.current_rsi {
@@ -577,7 +592,10 @@ impl Strategy for RsiStrategy {
             return Ok(vec![]);
         }
 
-        let config = self.config.as_ref().unwrap();
+        // config가 없으면 초기화되지 않은 상태
+        let Some(config) = self.config.as_ref() else {
+            return Ok(vec![]);
+        };
 
         // 심볼 확인
         if data.symbol.to_string() != config.symbol {
@@ -621,7 +639,11 @@ impl Strategy for RsiStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let config = self.config.as_ref().unwrap();
+        // config가 없으면 주문 처리 불가
+        let Some(config) = self.config.as_ref() else {
+            warn!("Order filled but strategy not configured");
+            return Ok(());
+        };
         let fill_price = order.average_fill_price
             .or(order.price)
             .unwrap_or(Decimal::ZERO);

@@ -173,7 +173,9 @@ impl BollingerStrategy {
 
     /// 볼린저 밴드 계산.
     fn calculate_bollinger_bands(&mut self) {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
 
         if self.prices.len() < config.period {
             return;
@@ -205,7 +207,10 @@ impl BollingerStrategy {
 
     /// RSI (Relative Strength Index) 계산.
     fn calculate_rsi(&mut self, close: Decimal) {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            self.prev_close = Some(close);
+            return;
+        };
 
         if let Some(prev) = self.prev_close {
             let change = close - prev;
@@ -279,7 +284,9 @@ impl BollingerStrategy {
 
     /// RSI가 신호를 확인하는지 체크.
     fn rsi_confirms(&self, side: Side) -> bool {
-        let config = self.config.as_ref().unwrap();
+        let Some(config) = self.config.as_ref() else {
+            return false;
+        };
 
         if !config.use_rsi_confirmation {
             return true;
@@ -299,8 +306,9 @@ impl BollingerStrategy {
 
     /// 현재 상태를 기반으로 진입/청산 신호 생성.
     fn generate_signals(&mut self, current_price: Decimal) -> Vec<Signal> {
-        let config = self.config.as_ref().unwrap();
-        let symbol = self.symbol.as_ref().unwrap().clone();
+        let (Some(config), Some(symbol)) = (self.config.as_ref(), self.symbol.clone()) else {
+            return Vec::new();
+        };
         let mut signals = Vec::new();
 
         // 유효한 밴드가 있는지 확인
@@ -389,8 +397,12 @@ impl BollingerStrategy {
 
         // 매수 신호: 가격이 하단 밴드 이하
         if current_price <= lower && self.rsi_confirms(Side::Buy) {
-            let stop_loss = current_price * (Decimal::ONE - Decimal::from_f64_retain(config.stop_loss_pct / 100.0).unwrap());
-            let take_profit = current_price * (Decimal::ONE + Decimal::from_f64_retain(config.take_profit_pct / 100.0).unwrap());
+            let stop_loss_pct = Decimal::from_f64_retain(config.stop_loss_pct / 100.0)
+                .unwrap_or(dec!(0.02));
+            let take_profit_pct = Decimal::from_f64_retain(config.take_profit_pct / 100.0)
+                .unwrap_or(dec!(0.04));
+            let stop_loss = current_price * (Decimal::ONE - stop_loss_pct);
+            let take_profit = current_price * (Decimal::ONE + take_profit_pct);
 
             signals.push(
                 Signal::entry("bollinger_bands", symbol.clone(), Side::Buy)
@@ -417,8 +429,12 @@ impl BollingerStrategy {
 
         // 매도 신호: 가격이 상단 밴드 이상
         if current_price >= upper && self.rsi_confirms(Side::Sell) {
-            let stop_loss = current_price * (Decimal::ONE + Decimal::from_f64_retain(config.stop_loss_pct / 100.0).unwrap());
-            let take_profit = current_price * (Decimal::ONE - Decimal::from_f64_retain(config.take_profit_pct / 100.0).unwrap());
+            let stop_loss_pct = Decimal::from_f64_retain(config.stop_loss_pct / 100.0)
+                .unwrap_or(dec!(0.02));
+            let take_profit_pct = Decimal::from_f64_retain(config.take_profit_pct / 100.0)
+                .unwrap_or(dec!(0.04));
+            let stop_loss = current_price * (Decimal::ONE + stop_loss_pct);
+            let take_profit = current_price * (Decimal::ONE - take_profit_pct);
 
             signals.push(
                 Signal::entry("bollinger_bands", symbol.clone(), Side::Sell)
@@ -498,9 +514,11 @@ impl Strategy for BollingerStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = self.config.as_ref().unwrap().symbol.clone();
+        let Some(config) = self.config.as_ref() else {
+            return Ok(vec![]);
+        };
 
-        if data.symbol.to_string() != symbol_str {
+        if data.symbol.to_string() != config.symbol {
             return Ok(vec![]);
         }
 
@@ -514,7 +532,7 @@ impl Strategy for BollingerStrategy {
 
         // 가격 히스토리 업데이트
         self.prices.push_front(close);
-        let max_len = self.config.as_ref().unwrap().period + 1;
+        let max_len = config.period + 1;
         while self.prices.len() > max_len {
             self.prices.pop_back();
         }

@@ -226,8 +226,8 @@ zeroquant/
 │   ├── trader-data/         # 데이터 수집/저장 (OHLCV)
 │   ├── trader-analytics/    # ML 추론, 성과 분석, 패턴 인식
 │   ├── trader-api/          # REST/WebSocket API
-│   │   ├── repository/      # 데이터 접근 계층 (8개 Repository)
-│   │   └── routes/          # 모듈화된 라우트 (analytics/, credentials/, backtest/)
+│   │   ├── repository/      # 데이터 접근 계층 (10개 Repository)
+│   │   └── routes/          # 모듈화된 라우트 (analytics/, credentials/, backtest/, journal)
 │   ├── trader-cli/          # CLI 도구
 │   └── trader-notification/ # 알림 (Telegram)
 ├── frontend/                # SolidJS + TypeScript + Vite
@@ -238,9 +238,10 @@ zeroquant/
 │   │   ├── Backtest.tsx     # 백테스트 실행
 │   │   ├── Simulation.tsx   # 시뮬레이션
 │   │   ├── MLTraining.tsx   # ML 모델 훈련
+│   │   ├── TradingJournal.tsx # 매매일지
 │   │   └── Settings.tsx     # 설정 (API 키, 알림)
-│   └── src/components/      # 재사용 컴포넌트 (8개)
-├── migrations/              # DB 마이그레이션 (14개)
+│   └── src/components/      # 재사용 컴포넌트 (15개+)
+├── migrations/              # DB 마이그레이션 (20개)
 ├── scripts/                 # ML 훈련 파이프라인
 └── docs/                    # 프로젝트 문서
 ```
@@ -359,6 +360,7 @@ ENCRYPTION_KEY=your-32-byte-key-base64
 | [배포 가이드](docs/deployment.md) | 프로덕션 배포 방법 |
 | [운영 가이드](docs/operations.md) | 일상 운영 및 관리 |
 | [트러블슈팅](docs/troubleshooting.md) | 문제 해결 가이드 |
+| [개발 규칙](docs/development_rules.md) | 코드 작성 규칙 및 가이드라인 |
 | [전략 비교](docs/STRATEGY_COMPARISON.md) | 전략별 상세 파라미터 |
 | [개선 로드맵](docs/improvement_todo.md) | 코드베이스 개선 계획 |
 | [Claude 가이드](CLAUDE.md) | AI 세션 컨텍스트 |
