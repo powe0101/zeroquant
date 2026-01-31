@@ -24,7 +24,9 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use utoipa::ToSchema;
 use uuid::Uuid;
+use validator::Validate;
 
 use crate::repository::{StrategyRepository, strategies::CreateStrategyInput};
 use crate::state::AppState;
@@ -46,7 +48,7 @@ use trader_strategy::{
 // ==================== 응답 타입 ====================
 
 /// 전략 목록 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StrategiesListResponse {
     /// 전략 목록
     pub strategies: Vec<StrategyListItem>,
@@ -57,7 +59,7 @@ pub struct StrategiesListResponse {
 }
 
 /// 전략 목록 항목.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StrategyListItem {
     /// 전략 ID
     pub id: String,
@@ -91,6 +93,7 @@ pub struct StrategyListItem {
 }
 
 /// 전략 상세 응답.
+// Note: ToSchema not derived due to StrategyStatus dependency from trader-strategy crate
 #[derive(Debug, Serialize)]
 pub struct StrategyDetailResponse {
     /// 전략 ID
@@ -170,11 +173,13 @@ pub struct CloneStrategyResponse {
 }
 
 /// 전략 생성 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct CreateStrategyRequest {
     /// 전략 타입 (예: "grid_trading", "rsi", "bollinger" 등)
+    #[validate(length(min = 1, max = 50, message = "전략 타입은 1-50자여야 합니다"))]
     pub strategy_type: String,
     /// 전략 이름 (사용자 지정, 옵션)
+    #[validate(length(max = 100, message = "전략 이름은 100자 이하여야 합니다"))]
     pub name: Option<String>,
     /// 전략 파라미터
     pub parameters: Value,
@@ -183,9 +188,11 @@ pub struct CreateStrategyRequest {
     pub risk_config: Option<Value>,
     /// 할당 자본 (옵션, NULL이면 전체 계좌 잔고 사용)
     #[serde(default)]
+    #[validate(range(min = 0.0, message = "할당 자본은 0 이상이어야 합니다"))]
     pub allocated_capital: Option<f64>,
     /// 리스크 프로필 (conservative, default, aggressive, custom)
     #[serde(default)]
+    #[validate(custom(function = "validate_risk_profile"))]
     pub risk_profile: Option<String>,
 }
 
@@ -230,7 +237,25 @@ impl From<EngineStats> for EngineStatsResponse {
 }
 
 /// API 에러 응답.
-#[derive(Debug, Serialize, Deserialize)]
+// ==================== 유효성 검사 함수 ====================
+
+/// 리스크 프로필 유효성 검사.
+fn validate_risk_profile(profile: &str) -> Result<(), validator::ValidationError> {
+    const VALID_PROFILES: &[&str] = &["conservative", "default", "aggressive", "custom"];
+    if VALID_PROFILES.contains(&profile) {
+        Ok(())
+    } else {
+        let mut error = validator::ValidationError::new("invalid_risk_profile");
+        error.message = Some(std::borrow::Cow::from(
+            "리스크 프로필은 conservative, default, aggressive, custom 중 하나여야 합니다"
+        ));
+        Err(error)
+    }
+}
+
+// ==================== API 에러 ====================
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ApiError {
     /// 에러 코드
     pub code: String,
@@ -243,6 +268,27 @@ impl ApiError {
         Self {
             code: code.into(),
             message: message.into(),
+        }
+    }
+
+    /// 유효성 검사 오류로부터 ApiError 생성.
+    pub fn validation_error(errors: &validator::ValidationErrors) -> Self {
+        let messages: Vec<String> = errors
+            .field_errors()
+            .iter()
+            .flat_map(|(field, errors)| {
+                errors.iter().map(move |e| {
+                    e.message
+                        .as_ref()
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| format!("{}: 유효하지 않은 값", field))
+                })
+            })
+            .collect();
+
+        Self {
+            code: "VALIDATION_ERROR".to_string(),
+            message: messages.join("; "),
         }
     }
 }
@@ -422,6 +468,14 @@ pub async fn create_strategy(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateStrategyRequest>,
 ) -> Result<Json<CreateStrategyResponse>, (StatusCode, Json<ApiError>)> {
+    // 입력 유효성 검사
+    if let Err(errors) = request.validate() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::validation_error(&errors)),
+        ));
+    }
+
     // 전략 인스턴스 생성
     let strategy = create_strategy_instance(&request.strategy_type).map_err(|e| {
         (
@@ -573,6 +627,14 @@ pub async fn delete_strategy(
 /// 전략 목록 조회.
 ///
 /// GET /api/v1/strategies
+#[utoipa::path(
+    get,
+    path = "/api/v1/strategies",
+    tag = "strategies",
+    responses(
+        (status = 200, description = "전략 목록 조회 성공", body = StrategiesListResponse)
+    )
+)]
 pub async fn list_strategies(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
@@ -647,6 +709,7 @@ pub async fn list_strategies(
 /// 특정 전략 상세 조회.
 ///
 /// GET /api/v1/strategies/{id}
+// TODO: Add utoipa::path when StrategyStatus implements ToSchema
 pub async fn get_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

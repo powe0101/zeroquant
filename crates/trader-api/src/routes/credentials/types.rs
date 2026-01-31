@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -20,7 +21,10 @@ use uuid::Uuid;
 /// 거래소 자격증명 등록 요청.
 ///
 /// 프론트엔드에서 fields 객체로 api_key, api_secret 등을 전달합니다.
-#[derive(Debug, Deserialize)]
+///
+/// # 보안
+/// - `Debug` 구현은 민감 필드를 마스킹합니다.
+#[derive(Deserialize)]
 pub struct CreateExchangeCredentialRequest {
     /// 거래소 ID (binance, kis, coinbase 등)
     pub exchange_id: String,
@@ -36,8 +40,23 @@ pub struct CreateExchangeCredentialRequest {
     pub settings: Option<serde_json::Value>,
 }
 
+impl fmt::Debug for CreateExchangeCredentialRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CreateExchangeCredentialRequest")
+            .field("exchange_id", &self.exchange_id)
+            .field("display_name", &self.display_name)
+            .field("fields", &format!("[{} redacted fields]", self.fields.len()))
+            .field("is_testnet", &self.is_testnet)
+            .field("settings", &self.settings)
+            .finish()
+    }
+}
+
 /// 거래소 자격증명 수정 요청.
-#[derive(Debug, Deserialize)]
+///
+/// # 보안
+/// - `Debug` 구현은 민감 필드를 마스킹합니다.
+#[derive(Deserialize)]
 pub struct UpdateExchangeCredentialRequest {
     /// 거래소 표시 이름
     pub exchange_name: Option<String>,
@@ -53,6 +72,22 @@ pub struct UpdateExchangeCredentialRequest {
     pub is_active: Option<bool>,
     /// 추가 설정
     pub settings: Option<serde_json::Value>,
+}
+
+impl fmt::Debug for UpdateExchangeCredentialRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UpdateExchangeCredentialRequest")
+            .field("exchange_name", &self.exchange_name)
+            .field("api_key", &self.api_key.as_ref().map(|_| "***REDACTED***"))
+            .field("api_secret", &self.api_secret.as_ref().map(|_| "***REDACTED***"))
+            .field("passphrase", &self.passphrase.as_ref().map(|_| "***REDACTED***"))
+            .field("additional_fields", &self.additional_fields.as_ref().map(|m| {
+                format!("[{} fields]", m.len())
+            }))
+            .field("is_active", &self.is_active)
+            .field("settings", &self.settings)
+            .finish()
+    }
 }
 
 /// 거래소 자격증명 응답 (마스킹됨).
@@ -129,7 +164,10 @@ pub struct SupportedExchangesResponse {
 // =============================================================================
 
 /// 텔레그램 설정 등록/수정 요청.
-#[derive(Debug, Deserialize)]
+///
+/// # 보안
+/// - `Debug` 구현은 민감 필드를 마스킹합니다.
+#[derive(Deserialize)]
 pub struct SaveTelegramSettingsRequest {
     /// Bot Token
     pub bot_token: String,
@@ -138,6 +176,16 @@ pub struct SaveTelegramSettingsRequest {
     /// 알림 유형별 활성화 설정
     #[serde(default)]
     pub notification_settings: Option<TelegramNotificationSettings>,
+}
+
+impl fmt::Debug for SaveTelegramSettingsRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SaveTelegramSettingsRequest")
+            .field("bot_token", &"***REDACTED***")
+            .field("chat_id", &mask_api_key(&self.chat_id))
+            .field("notification_settings", &self.notification_settings)
+            .finish()
+    }
 }
 
 /// 텔레그램 알림 설정.
@@ -235,7 +283,11 @@ pub(crate) struct TelegramSettingsRow {
 ///
 /// DB에 저장된 암호화된 자격증명을 복호화한 후의 구조체입니다.
 /// 거래소 API 클라이언트 생성에 사용됩니다.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # 보안
+/// - `Debug` 구현은 민감 정보를 마스킹합니다.
+/// - 로그에 출력해도 실제 값이 노출되지 않습니다.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EncryptedCredentials {
     pub api_key: String,
     pub api_secret: String,
@@ -243,6 +295,19 @@ pub struct EncryptedCredentials {
     pub passphrase: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub additional: Option<HashMap<String, String>>,
+}
+
+impl fmt::Debug for EncryptedCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncryptedCredentials")
+            .field("api_key", &"***REDACTED***")
+            .field("api_secret", &"***REDACTED***")
+            .field("passphrase", &self.passphrase.as_ref().map(|_| "***REDACTED***"))
+            .field("additional", &self.additional.as_ref().map(|m| {
+                m.keys().map(|k| format!("{}=***", k)).collect::<Vec<_>>()
+            }))
+            .finish()
+    }
 }
 
 /// 활성 계정 응답.
@@ -261,12 +326,24 @@ pub struct SetActiveAccountRequest {
 }
 
 /// 새 자격증명 테스트 요청 (저장 전).
-#[derive(Debug, Deserialize)]
+///
+/// # 보안
+/// - `Debug` 구현은 민감 필드를 마스킹합니다.
+#[derive(Deserialize)]
 pub struct TestNewCredentialRequest {
     /// 거래소 ID
     pub exchange_id: String,
     /// 필드 값 (api_key, api_secret 등)
     pub fields: HashMap<String, String>,
+}
+
+impl fmt::Debug for TestNewCredentialRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TestNewCredentialRequest")
+            .field("exchange_id", &self.exchange_id)
+            .field("fields", &format!("[{} redacted fields]", self.fields.len()))
+            .finish()
+    }
 }
 
 // =============================================================================

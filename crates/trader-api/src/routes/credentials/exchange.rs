@@ -43,7 +43,7 @@ pub async fn get_supported_exchanges() -> impl IntoResponse {
                 CredentialField {
                     name: "api_key".to_string(),
                     label: "API Key".to_string(),
-                    field_type: "text".to_string(),
+                    field_type: "password".to_string(), // 민감 정보 마스킹
                     placeholder: Some("Enter your Binance API Key".to_string()),
                     help_text: Some("API 관리에서 생성한 API Key".to_string()),
                 },
@@ -68,7 +68,7 @@ pub async fn get_supported_exchanges() -> impl IntoResponse {
                 CredentialField {
                     name: "api_key".to_string(),
                     label: "App Key".to_string(),
-                    field_type: "text".to_string(),
+                    field_type: "password".to_string(), // 민감 정보 마스킹
                     placeholder: Some("발급받은 App Key".to_string()),
                     help_text: Some("KIS Developers에서 발급받은 App Key".to_string()),
                 },
@@ -101,7 +101,7 @@ pub async fn get_supported_exchanges() -> impl IntoResponse {
                 CredentialField {
                     name: "api_key".to_string(),
                     label: "API Key".to_string(),
-                    field_type: "text".to_string(),
+                    field_type: "password".to_string(), // 민감 정보 마스킹
                     placeholder: Some("Coinbase API Key".to_string()),
                     help_text: None,
                 },

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use validator::Validate;
 
 // ==================== SDUI (Server Driven UI) 스키마 ====================
 
@@ -313,15 +314,19 @@ pub struct BacktestStrategiesResponse {
 }
 
 /// 백테스트 실행 요청
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct BacktestRunRequest {
     /// 전략 ID
+    #[validate(length(min = 1, max = 100, message = "전략 ID는 1-100자여야 합니다"))]
     pub strategy_id: String,
     /// 거래 심볼 (예: "BTC/USDT")
+    #[validate(length(min = 1, max = 20, message = "심볼은 1-20자여야 합니다"))]
     pub symbol: String,
     /// 시작 날짜 (YYYY-MM-DD)
+    #[validate(length(equal = 10, message = "시작 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
     pub start_date: String,
     /// 종료 날짜 (YYYY-MM-DD)
+    #[validate(length(equal = 10, message = "종료 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
     pub end_date: String,
     /// 초기 자본금
     pub initial_capital: Decimal,
@@ -337,15 +342,19 @@ pub struct BacktestRunRequest {
 }
 
 /// 다중 자산 백테스트 실행 요청
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Validate)]
 pub struct BacktestMultiRunRequest {
     /// 전략 ID
+    #[validate(length(min = 1, max = 100, message = "전략 ID는 1-100자여야 합니다"))]
     pub strategy_id: String,
     /// 거래 심볼 목록 (예: ["TQQQ", "SCHD", "PFIX", "TMF"])
+    #[validate(length(min = 1, max = 50, message = "심볼은 1-50개 사이여야 합니다"))]
     pub symbols: Vec<String>,
     /// 시작 날짜 (YYYY-MM-DD)
+    #[validate(length(equal = 10, message = "시작 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
     pub start_date: String,
     /// 종료 날짜 (YYYY-MM-DD)
+    #[validate(length(equal = 10, message = "종료 날짜는 YYYY-MM-DD 형식이어야 합니다"))]
     pub end_date: String,
     /// 초기 자본금
     pub initial_capital: Decimal,
@@ -513,4 +522,82 @@ impl BacktestApiError {
             message: message.into(),
         }
     }
+}
+
+// ==================== 배치 백테스트 (병렬 실행) ====================
+
+/// 배치 백테스트 요청 항목.
+///
+/// 단일 전략의 백테스트 설정을 정의합니다.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct BatchBacktestItem {
+    /// 전략 ID
+    #[validate(length(min = 1, max = 100))]
+    pub strategy_id: String,
+    /// 심볼 (단일 자산) 또는 심볼 목록 (다중 자산)
+    pub symbols: Vec<String>,
+    /// 전략 파라미터 (선택)
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+}
+
+/// 배치 백테스트 요청.
+///
+/// 여러 전략을 병렬로 실행합니다.
+#[derive(Debug, Deserialize, Validate)]
+pub struct BatchBacktestRequest {
+    /// 백테스트할 전략 목록 (최대 10개)
+    #[validate(length(min = 1, max = 10, message = "전략은 1-10개 사이여야 합니다"))]
+    pub strategies: Vec<BatchBacktestItem>,
+    /// 시작 날짜 (YYYY-MM-DD)
+    #[validate(length(equal = 10))]
+    pub start_date: String,
+    /// 종료 날짜 (YYYY-MM-DD)
+    #[validate(length(equal = 10))]
+    pub end_date: String,
+    /// 초기 자본금 (모든 전략에 동일하게 적용)
+    pub initial_capital: Decimal,
+    /// 수수료율 (선택, 기본: 0.001)
+    #[serde(default)]
+    pub commission_rate: Option<Decimal>,
+    /// 슬리피지율 (선택, 기본: 0.0005)
+    #[serde(default)]
+    pub slippage_rate: Option<Decimal>,
+    /// 병렬 실행 수 (선택, 기본: 4)
+    #[serde(default)]
+    pub parallelism: Option<usize>,
+}
+
+/// 배치 백테스트 결과 항목.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchBacktestResultItem {
+    /// 전략 ID
+    pub strategy_id: String,
+    /// 성공 여부
+    pub success: bool,
+    /// 에러 메시지 (실패 시)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// 성과 지표 (성공 시)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<BacktestMetricsResponse>,
+    /// 실행 시간 (밀리초)
+    pub execution_time_ms: u64,
+}
+
+/// 배치 백테스트 응답.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchBacktestResponse {
+    /// 요청 ID
+    pub request_id: String,
+    /// 총 전략 수
+    pub total_strategies: usize,
+    /// 성공 수
+    pub successful: usize,
+    /// 실패 수
+    pub failed: usize,
+    /// 총 실행 시간 (밀리초)
+    pub total_execution_time_ms: u64,
+    /// 각 전략별 결과
+    pub results: Vec<BatchBacktestResultItem>,
 }

@@ -19,6 +19,7 @@ use trader_core::{
     Kline, MarketType, OrderBook, OrderBookLevel, OrderRequest, OrderStatus, OrderType, Position,
     Side, Symbol, Ticker, Timeframe, TradeTick,
 };
+use std::fmt;
 use tracing::{debug, error, info};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -28,7 +29,10 @@ type HmacSha256 = Hmac<Sha256>;
 // ============================================================================
 
 /// Binance 클라이언트 설정.
-#[derive(Debug, Clone)]
+///
+/// # 보안
+/// - `Debug` 구현은 민감 정보(`api_key`, `api_secret`)를 마스킹합니다.
+#[derive(Clone)]
 pub struct BinanceConfig {
     /// API 키
     pub api_key: String,
@@ -40,6 +44,24 @@ pub struct BinanceConfig {
     pub timeout_secs: u64,
     /// 수신 윈도우 (밀리초)
     pub recv_window: u64,
+}
+
+impl fmt::Debug for BinanceConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let masked_key = if self.api_key.len() > 8 {
+            format!("{}...{}", &self.api_key[..4], &self.api_key[self.api_key.len()-4..])
+        } else {
+            "***REDACTED***".to_string()
+        };
+
+        f.debug_struct("BinanceConfig")
+            .field("api_key", &masked_key)
+            .field("api_secret", &"***REDACTED***")
+            .field("testnet", &self.testnet)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("recv_window", &self.recv_window)
+            .finish()
+    }
 }
 
 impl BinanceConfig {

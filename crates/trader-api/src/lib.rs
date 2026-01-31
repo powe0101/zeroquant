@@ -15,14 +15,17 @@
 //! - [`websocket`]: 실시간 WebSocket 서버
 //! - [`metrics`]: Prometheus 메트릭 수집
 //! - [`middleware`]: HTTP 미들웨어
+//! - [`openapi`]: OpenAPI 문서 및 Swagger UI
 
 pub mod auth;
 pub mod error;
 pub mod metrics;
 pub mod middleware;
+pub mod openapi;
 pub mod repository;
 pub mod routes;
 pub mod state;
+pub mod types;
 pub mod utils;
 pub mod websocket;
 
@@ -37,6 +40,7 @@ pub use websocket::{
 };
 pub use metrics::setup_metrics_recorder;
 pub use middleware::metrics_layer;
+pub use types::StrategyType;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use state::create_test_state;

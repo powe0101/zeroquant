@@ -7,6 +7,7 @@
 //! - 실전투자 ISA
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// KIS API 환경 유형.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,7 +89,10 @@ impl Default for KisEnvironment {
 }
 
 /// KIS API 설정.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # 보안
+/// - `Debug` 구현은 민감 정보(`app_key`, `app_secret`)를 마스킹합니다.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct KisConfig {
     /// 앱키
     pub app_key: String,
@@ -108,6 +112,34 @@ pub struct KisConfig {
     pub timeout_secs: u64,
     /// 개인인증 활성화 (일부 엔드포인트에 필요)
     pub personalized: bool,
+}
+
+impl fmt::Debug for KisConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 앱키/시크릿 마스킹
+        let masked_key = if self.app_key.len() > 8 {
+            format!("{}...{}", &self.app_key[..4], &self.app_key[self.app_key.len()-4..])
+        } else {
+            "***REDACTED***".to_string()
+        };
+        let masked_account = if self.account_no.len() > 6 {
+            format!("{}****", &self.account_no[..4])
+        } else {
+            "***REDACTED***".to_string()
+        };
+
+        f.debug_struct("KisConfig")
+            .field("app_key", &masked_key)
+            .field("app_secret", &"***REDACTED***")
+            .field("account_no", &masked_account)
+            .field("account_product_code", &self.account_product_code)
+            .field("account_type", &self.account_type)
+            .field("environment", &self.environment)
+            .field("hts_id", &self.hts_id)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("personalized", &self.personalized)
+            .finish()
+    }
 }
 
 impl KisConfig {

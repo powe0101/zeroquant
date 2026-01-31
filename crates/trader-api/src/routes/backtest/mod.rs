@@ -20,6 +20,8 @@ pub use types::{
     BacktestableStrategy, EquityCurvePoint, ExecutionSchedule, SymbolCategory, TradeHistoryItem,
     UiCondition, UiConditionOperator, UiField, UiFieldGroup, UiFieldType, UiLayout, UiSchema,
     UiSelectOption, UiValidation,
+    // 배치 백테스트
+    BatchBacktestRequest, BatchBacktestResponse, BatchBacktestItem, BatchBacktestResultItem,
 };
 
 // Re-export UI schema functions
@@ -487,7 +489,275 @@ pub fn backtest_router() -> Router<Arc<AppState>> {
         .route("/run", post(run_backtest))
         // 다중 자산 백테스트 실행
         .route("/run-multi", post(run_multi_backtest))
+        // 배치 백테스트 (병렬 실행)
+        .route("/run-batch", post(run_batch_backtest))
         // 백테스트 결과 조회는 backtest_results_router에서 처리
+}
+
+/// 배치 백테스트 실행 (병렬).
+///
+/// POST /api/v1/backtest/run-batch
+///
+/// 여러 전략을 병렬로 백테스트합니다.
+/// 최대 10개 전략을 동시에 실행할 수 있습니다.
+pub async fn run_batch_backtest(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<BatchBacktestRequest>,
+) -> Result<Json<BatchBacktestResponse>, (StatusCode, Json<BacktestApiError>)> {
+    use std::time::Instant;
+    use futures::stream::{self, StreamExt};
+    use validator::Validate;
+
+    // 입력 유효성 검사
+    if let Err(errors) = request.validate() {
+        let message = errors
+            .field_errors()
+            .iter()
+            .flat_map(|(field, errors)| {
+                errors.iter().map(move |e| {
+                    e.message
+                        .as_ref()
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| format!("{}: 유효하지 않은 값", field))
+                })
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(BacktestApiError::new("VALIDATION_ERROR", message)),
+        ));
+    }
+
+    let start_time = Instant::now();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let parallelism = request.parallelism.unwrap_or(4).min(10);
+
+    info!(
+        request_id = %request_id,
+        strategies = request.strategies.len(),
+        parallelism = parallelism,
+        "Starting batch backtest"
+    );
+
+    // 날짜 파싱
+    let start_date = NaiveDate::parse_from_str(&request.start_date, "%Y-%m-%d")
+        .map_err(|e| (
+            StatusCode::BAD_REQUEST,
+            Json(BacktestApiError::new("INVALID_DATE", format!("시작 날짜 파싱 실패: {}", e))),
+        ))?;
+    let end_date = NaiveDate::parse_from_str(&request.end_date, "%Y-%m-%d")
+        .map_err(|e| (
+            StatusCode::BAD_REQUEST,
+            Json(BacktestApiError::new("INVALID_DATE", format!("종료 날짜 파싱 실패: {}", e))),
+        ))?;
+
+    // 수수료/슬리피지 기본값
+    let commission_rate = request.commission_rate.unwrap_or(Decimal::new(1, 3));
+    let slippage_rate = request.slippage_rate.unwrap_or(Decimal::new(5, 4));
+
+    // 각 전략에 대한 백테스트 Future 생성
+    let backtest_futures: Vec<_> = request
+        .strategies
+        .into_iter()
+        .map(|item| {
+            let state = Arc::clone(&state);
+            let initial_capital = request.initial_capital;
+            let strategy_id = item.strategy_id.clone();
+
+            async move {
+                let task_start = Instant::now();
+
+                // 심볼에 따라 단일/다중 자산 백테스트 선택
+                let result = if item.symbols.len() == 1 {
+                    // 단일 심볼 백테스트
+                    let symbol = item.symbols[0].clone();
+                    run_single_strategy_internal(
+                        &state,
+                        &strategy_id,
+                        &symbol,
+                        start_date,
+                        end_date,
+                        initial_capital,
+                        commission_rate,
+                        slippage_rate,
+                        &item.parameters,
+                    ).await
+                } else {
+                    // 다중 심볼 백테스트
+                    run_multi_strategy_internal(
+                        &state,
+                        &strategy_id,
+                        &item.symbols,
+                        start_date,
+                        end_date,
+                        initial_capital,
+                        commission_rate,
+                        slippage_rate,
+                        &item.parameters,
+                    ).await
+                };
+
+                let execution_time_ms = task_start.elapsed().as_millis() as u64;
+
+                match result {
+                    Ok(metrics) => BatchBacktestResultItem {
+                        strategy_id,
+                        success: true,
+                        error: None,
+                        metrics: Some(metrics),
+                        execution_time_ms,
+                    },
+                    Err(e) => BatchBacktestResultItem {
+                        strategy_id,
+                        success: false,
+                        error: Some(e),
+                        metrics: None,
+                        execution_time_ms,
+                    },
+                }
+            }
+        })
+        .collect();
+
+    // 병렬 실행 (parallelism 제한 적용: buffer_unordered 사용)
+    let total_strategies = backtest_futures.len();
+    let results: Vec<BatchBacktestResultItem> = stream::iter(backtest_futures)
+        .buffer_unordered(parallelism)
+        .collect()
+        .await;
+
+    let total_execution_time_ms = start_time.elapsed().as_millis() as u64;
+    let successful = results.iter().filter(|r| r.success).count();
+    let failed = results.iter().filter(|r| !r.success).count();
+
+    info!(
+        request_id = %request_id,
+        successful = successful,
+        failed = failed,
+        total_time_ms = total_execution_time_ms,
+        "Batch backtest completed"
+    );
+
+    Ok(Json(BatchBacktestResponse {
+        request_id,
+        total_strategies,
+        successful,
+        failed,
+        total_execution_time_ms,
+        results,
+    }))
+}
+
+/// 단일 전략 내부 실행 (배치용).
+async fn run_single_strategy_internal(
+    state: &Arc<AppState>,
+    strategy_id: &str,
+    symbol: &str,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    initial_capital: Decimal,
+    commission_rate: Decimal,
+    slippage_rate: Decimal,
+    params: &Option<serde_json::Value>,
+) -> Result<BacktestMetricsResponse, String> {
+    use trader_analytics::backtest::BacktestConfig;
+
+    // 데이터 로드
+    let klines = if let Some(pool) = &state.db_pool {
+        match load_klines_from_db(pool, symbol, start_date, end_date).await {
+            Ok(data) if !data.is_empty() => data,
+            _ => generate_sample_klines(symbol, start_date, end_date),
+        }
+    } else {
+        generate_sample_klines(symbol, start_date, end_date)
+    };
+
+    if klines.is_empty() {
+        return Err("데이터 없음".to_string());
+    }
+
+    // 백테스트 설정
+    let config = BacktestConfig::new(initial_capital)
+        .with_commission_rate(commission_rate)
+        .with_slippage_rate(slippage_rate);
+
+    // 백테스트 실행
+    let report = run_strategy_backtest(strategy_id, config, &klines, params)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 메트릭만 반환
+    Ok(convert_report_to_metrics(&report))
+}
+
+/// 다중 자산 전략 내부 실행 (배치용).
+async fn run_multi_strategy_internal(
+    state: &Arc<AppState>,
+    strategy_id: &str,
+    symbols: &[String],
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+    initial_capital: Decimal,
+    commission_rate: Decimal,
+    slippage_rate: Decimal,
+    params: &Option<serde_json::Value>,
+) -> Result<BacktestMetricsResponse, String> {
+    use trader_analytics::backtest::BacktestConfig;
+
+    // 심볼 확장
+    let expanded_symbols = expand_strategy_symbols(strategy_id, symbols);
+
+    // 다중 심볼 데이터 로드
+    let multi_klines = if let Some(pool) = &state.db_pool {
+        match load_multi_klines_from_db(pool, &expanded_symbols, start_date, end_date).await {
+            Ok(data) if !data.is_empty() => data,
+            _ => generate_multi_sample_klines(&expanded_symbols, start_date, end_date),
+        }
+    } else {
+        generate_multi_sample_klines(&expanded_symbols, start_date, end_date)
+    };
+
+    // 병합
+    let merged_klines = merge_multi_klines(&multi_klines);
+
+    if merged_klines.is_empty() {
+        return Err("데이터 없음".to_string());
+    }
+
+    // 백테스트 설정
+    let config = BacktestConfig::new(initial_capital)
+        .with_commission_rate(commission_rate)
+        .with_slippage_rate(slippage_rate);
+
+    // 백테스트 실행
+    let report = run_multi_strategy_backtest(strategy_id, config, &merged_klines, &multi_klines, params)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // 메트릭만 반환
+    Ok(convert_report_to_metrics(&report))
+}
+
+/// BacktestReport에서 메트릭만 추출.
+fn convert_report_to_metrics(report: &trader_analytics::backtest::BacktestReport) -> BacktestMetricsResponse {
+    let metrics = &report.metrics;
+    BacktestMetricsResponse {
+        total_return_pct: metrics.total_return_pct,
+        annualized_return_pct: metrics.annualized_return_pct,
+        net_profit: metrics.net_profit,
+        total_trades: metrics.total_trades,
+        win_rate_pct: metrics.win_rate_pct,
+        profit_factor: metrics.profit_factor,
+        sharpe_ratio: metrics.sharpe_ratio,
+        sortino_ratio: metrics.sortino_ratio,
+        max_drawdown_pct: metrics.max_drawdown_pct,
+        calmar_ratio: metrics.calmar_ratio,
+        avg_win: metrics.avg_win,
+        avg_loss: metrics.avg_loss,
+        largest_win: metrics.largest_win,
+        largest_loss: metrics.largest_loss,
+    }
 }
 
 // ==================== 내장 전략 목록 ====================

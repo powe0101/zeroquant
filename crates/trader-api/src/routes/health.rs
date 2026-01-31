@@ -12,11 +12,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 
 /// 헬스 체크 응답 구조체.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct HealthResponse {
     /// 전체 서비스 상태 ("healthy" | "degraded" | "unhealthy")
     pub status: String,
@@ -35,7 +36,7 @@ pub struct HealthResponse {
 }
 
 /// 개별 컴포넌트 상태.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ComponentHealth {
     /// 데이터베이스 연결 상태
     pub database: ComponentStatus,
@@ -48,7 +49,7 @@ pub struct ComponentHealth {
 }
 
 /// 컴포넌트 상태.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ComponentStatus {
     /// 상태 ("up" | "down" | "not_configured")
     pub status: String,
@@ -96,6 +97,14 @@ impl ComponentStatus {
 ///
 /// 서버가 응답 가능한 상태인지만 확인합니다.
 /// GET /health
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "health",
+    responses(
+        (status = 200, description = "서버가 정상 동작 중", body = String)
+    )
+)]
 pub async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
@@ -104,6 +113,15 @@ pub async fn health_check() -> impl IntoResponse {
 ///
 /// 모든 의존성(DB, Redis 등)의 상태를 확인합니다.
 /// GET /health/ready
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    tag = "health",
+    responses(
+        (status = 200, description = "모든 컴포넌트 정상", body = HealthResponse),
+        (status = 503, description = "일부 컴포넌트 장애", body = HealthResponse)
+    )
+)]
 pub async fn health_ready(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {

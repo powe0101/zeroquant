@@ -27,7 +27,7 @@ tokio-tungstenite = "0.24"
 futures = "0.3"
 
 # Web framework
-axum = { version = "0.7", features = ["ws", "macros"] }
+axum = { version = "0.8", features = ["ws", "macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 
@@ -104,6 +104,13 @@ rand = "0.8"
 mockito = "1.6"
 proptest = "1.5"
 criterion = "0.5"
+
+# API Documentation
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid", "decimal"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+# Validation
+validator = { version = "0.19", features = ["derive"] }
 
 # Notifications
 teloxide = { version = "0.13", features = ["macros"] }

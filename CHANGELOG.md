@@ -5,6 +5,51 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.4.4] - 2026-01-31
+
+### Added
+
+#### OpenAPI/Swagger 문서화
+- **utoipa 통합**: REST API 자동 문서화
+  - `openapi.rs`: OpenAPI 3.0 스펙 중앙 집계
+  - Swagger UI (`/swagger-ui`) 경로에서 인터랙티브 문서 제공
+  - 모든 주요 엔드포인트 태그 분류 (strategies, backtest, portfolio 등)
+- **응답/요청 스키마**: ToSchema derive로 타입 자동 문서화
+  - `HealthResponse`, `ComponentHealth`, `StrategiesListResponse` 등
+  - 에러 응답 스키마 표준화 (`ApiError`)
+
+#### 타입 안전성 강화
+- **StrategyType enum** (`types/strategy_type.rs`): 전략 타입 열거형 추가
+  - 26개 전략 타입 정의 (rsi_mean_reversion, grid, bollinger_bands 등)
+  - serde 직렬화/역직렬화 지원
+  - OpenAPI 스키마 자동 생성
+
+#### 백테스트 API 개선
+- **OpenAPI 어노테이션**: 백테스트 엔드포인트 문서화
+  - `run_backtest`, `get_backtest_strategies` 등 핸들러
+  - 요청/응답 타입 스키마 정의
+
+### Changed
+
+#### API 구조 개선
+- `routes/mod.rs`: OpenAPI 스키마 타입 re-export
+- `routes/health.rs`: 헬스 체크 OpenAPI 어노테이션 추가
+- `routes/strategies.rs`: 전략 목록 API 문서화
+- `routes/credentials/types.rs`: 자격증명 타입 OpenAPI 스키마
+
+#### 거래소 커넥터
+- `binance.rs`: 타임아웃 설정 개선
+- `kis/config.rs`: 설정 타입 강화
+
+### Dependencies
+
+#### 신규 추가
+- `utoipa = "5.3"`: OpenAPI 스키마 생성
+- `utoipa-swagger-ui = "9.0"`: Swagger UI 서빙
+- `utoipa-axum = "0.2"`: Axum 라우터 통합
+
+---
+
 ## [0.4.3] - 2026-01-31
 
 ### Added

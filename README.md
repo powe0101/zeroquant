@@ -18,7 +18,7 @@
 
 ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를 수행하는 트레이딩 시스템입니다.
 
-검증된 27가지 전략과 47개의 ML 패턴 인식을 통해 **그리드 트레이딩**, **자산배분**, **모멘텀** 등 다양한 투자 방법론을 지원합니다. 웹 대시보드에서 실시간 모니터링과 전략 제어가 가능하며, 리스크 관리 시스템이 자동으로 자산을 보호합니다.
+검증된 **26가지 전략**과 **50개 ML 패턴 인식** (캔들스틱 26개 + 차트 패턴 24개)을 통해 **그리드 트레이딩**, **자산배분**, **모멘텀** 등 다양한 투자 방법론을 지원합니다. 웹 대시보드에서 실시간 모니터링과 전략 제어가 가능하며, 리스크 관리 시스템이 자동으로 자산을 보호합니다.
 
 ## 주요 기능
 
@@ -32,7 +32,8 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 - **실시간 시세**: WebSocket 기반 실시간 가격/호가/체결
 - **과거 데이터**: TimescaleDB 시계열 저장, 백테스팅 지원
 - **데이터셋 관리**: Yahoo Finance 데이터 다운로드, 캔들 데이터 CRUD
-- **ML 패턴 인식**: 캔들스틱 25개 + 차트 패턴 22개 (ONNX 추론)
+- **ML 패턴 인식**: 캔들스틱 26개 + 차트 패턴 24개 (ONNX 추론)
+- **ML 모델 훈련**: XGBoost, LightGBM, RandomForest, 앙상블 지원
 - **성과 지표**: Sharpe Ratio, MDD, Win Rate, CAGR 등
 
 ### 🛡️ 리스크 관리
@@ -43,9 +44,10 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 
 ### 🖥️ 웹 대시보드
 - 실시간 포트폴리오 모니터링
-- 전략 등록/시작/중지/설정
+- 전략 등록/시작/중지/설정 (SDUI 동적 폼)
 - 데이터셋 관리 (심볼 데이터 다운로드/조회/삭제)
 - 백테스트 실행 및 결과 저장/비교
+- ML 모델 훈련 및 관리
 - 동기화된 멀티 차트 패널
 - 거래소 API 키 관리 (AES-256-GCM 암호화)
 
@@ -68,7 +70,6 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 | **Bollinger Bands** | 볼린저 밴드 이탈 시 진입/청산 |
 | **Magic Split** | 10차수 분할매수 익절 전략 |
 | **Infinity Bot** | 무한매수봇 (50라운드, 트레일링 스탑) |
-| **Trailing Stop** | 동적 손절/익절 관리 |
 
 ### 일간 전략
 | 전략 | 설명 |
@@ -219,24 +220,29 @@ zeroquant/
 ├── crates/
 │   ├── trader-core/         # 도메인 모델, 공통 유틸리티
 │   ├── trader-exchange/     # 거래소 연동 (Binance, KIS)
-│   ├── trader-strategy/     # 전략 엔진, 27개 전략
+│   ├── trader-strategy/     # 전략 엔진, 26개 전략
 │   ├── trader-risk/         # 리스크 관리
 │   ├── trader-execution/    # 주문 실행 엔진
 │   ├── trader-data/         # 데이터 수집/저장 (OHLCV)
-│   ├── trader-analytics/    # ML 추론, 성과 분석
+│   ├── trader-analytics/    # ML 추론, 성과 분석, 패턴 인식
 │   ├── trader-api/          # REST/WebSocket API
-│   │   └── repository/      # 데이터 접근 계층 (Repository 패턴)
+│   │   ├── repository/      # 데이터 접근 계층 (8개 Repository)
+│   │   └── routes/          # 모듈화된 라우트 (analytics/, credentials/, backtest/)
 │   ├── trader-cli/          # CLI 도구
 │   └── trader-notification/ # 알림 (Telegram)
 ├── frontend/                # SolidJS + TypeScript + Vite
-│   └── src/pages/
-│       ├── Dashboard.tsx    # 포트폴리오 모니터링
-│       ├── Strategies.tsx   # 전략 등록/관리
-│       ├── Dataset.tsx      # 데이터셋 관리
-│       ├── Backtest.tsx     # 백테스트 실행
-│       └── Simulation.tsx   # 시뮬레이션
-├── migrations/              # DB 마이그레이션 (13개)
-└── scripts/ml/              # ML 훈련 파이프라인
+│   ├── src/pages/
+│   │   ├── Dashboard.tsx    # 포트폴리오 모니터링
+│   │   ├── Strategies.tsx   # 전략 등록/관리 (SDUI)
+│   │   ├── Dataset.tsx      # 데이터셋 관리
+│   │   ├── Backtest.tsx     # 백테스트 실행
+│   │   ├── Simulation.tsx   # 시뮬레이션
+│   │   ├── MLTraining.tsx   # ML 모델 훈련
+│   │   └── Settings.tsx     # 설정 (API 키, 알림)
+│   └── src/components/      # 재사용 컴포넌트 (8개)
+├── migrations/              # DB 마이그레이션 (14개)
+├── scripts/                 # ML 훈련 파이프라인
+└── docs/                    # 프로젝트 문서
 ```
 
 ## 기술 스택
@@ -246,8 +252,9 @@ zeroquant/
 | Backend | Rust, Tokio, Axum |
 | Database | PostgreSQL (TimescaleDB), Redis |
 | Frontend | SolidJS, TypeScript, Vite |
-| ML | ONNX Runtime, XGBoost, LightGBM, scikit-learn |
-| Infrastructure | Podman, TimescaleDB, Redis |
+| ML | ONNX Runtime, XGBoost, LightGBM, RandomForest |
+| Testing | Playwright (E2E), pytest (ML) |
+| Infrastructure | Podman/Docker, TimescaleDB, Redis |
 
 ## 빠른 시작
 
@@ -289,7 +296,7 @@ podman compose up -d    # Podman 사용 시
 # 2. 백엔드 실행 (로컬)
 export DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
 export REDIS_URL=redis://localhost:6379
-cargo run --bin trader-api
+cargo run --bin trader-api --features ml --release  # ML 기능 포함
 
 # 3. 프론트엔드 실행 (로컬)
 cd frontend && npm install && npm run dev
@@ -348,11 +355,13 @@ ENCRYPTION_KEY=your-32-byte-key-base64
 | 문서 | 설명 |
 |------|------|
 | [API 문서](docs/api.md) | REST/WebSocket API 레퍼런스 |
+| [아키텍처](docs/architecture.md) | 시스템 아키텍처 상세 |
 | [배포 가이드](docs/deployment.md) | 프로덕션 배포 방법 |
-| [모니터링](docs/monitoring.md) | Prometheus/Grafana 설정 |
 | [운영 가이드](docs/operations.md) | 일상 운영 및 관리 |
 | [트러블슈팅](docs/troubleshooting.md) | 문제 해결 가이드 |
 | [전략 비교](docs/STRATEGY_COMPARISON.md) | 전략별 상세 파라미터 |
+| [개선 로드맵](docs/improvement_todo.md) | 코드베이스 개선 계획 |
+| [Claude 가이드](CLAUDE.md) | AI 세션 컨텍스트 |
 
 ## 라이선스
 

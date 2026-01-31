@@ -17,6 +17,7 @@ use tracing::{info, warn, error};
 
 use trader_api::metrics::setup_metrics_recorder;
 use trader_api::middleware::{rate_limit_middleware, metrics_layer, RateLimitConfig, RateLimitState};
+use trader_api::openapi::swagger_ui_router;
 use trader_api::repository::StrategyRepository;
 use trader_api::routes::create_api_router;
 use trader_api::state::AppState;
@@ -469,6 +470,8 @@ fn create_router(
         .merge(metrics_router)
         .merge(api_router)
         .nest("/ws", ws_router)
+        // OpenAPI 문서 및 Swagger UI
+        .merge(swagger_ui_router())
         // 메트릭 미들웨어 (모든 요청에 적용)
         .layer(middleware::from_fn(metrics_layer))
         // 기타 미들웨어
@@ -560,6 +563,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 서버 시작
     info!(%addr, "API server listening");
+    info!("Swagger UI available at http://{}/swagger-ui", addr);
+    info!("OpenAPI spec at http://{}/api-docs/openapi.json", addr);
     info!("Metrics available at http://{}/metrics", addr);
     info!("WebSocket available at ws://{}/ws", addr);
 
