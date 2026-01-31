@@ -6,6 +6,7 @@
 //! - JWT 인증
 //! - 헬스 체크 엔드포인트
 //! - Prometheus 메트릭
+//! - 백그라운드 데이터 수집 태스크
 //!
 //! # 모듈 구성
 //!
@@ -16,6 +17,7 @@
 //! - [`metrics`]: Prometheus 메트릭 수집
 //! - [`middleware`]: HTTP 미들웨어
 //! - [`openapi`]: OpenAPI 문서 및 Swagger UI
+//! - [`tasks`]: 백그라운드 태스크 (Fundamental 데이터 수집 등)
 
 pub mod auth;
 pub mod error;
@@ -25,6 +27,7 @@ pub mod openapi;
 pub mod repository;
 pub mod routes;
 pub mod state;
+pub mod tasks;
 pub mod types;
 pub mod utils;
 pub mod websocket;
@@ -33,6 +36,7 @@ pub use auth::{Claims, Role, Permission, JwtAuth, JwtAuthError, hash_password, v
 pub use error::{ApiErrorResponse, ApiResult};
 pub use routes::*;
 pub use state::AppState;
+pub use tasks::{start_fundamental_collector, FundamentalCollectorConfig};
 pub use websocket::{
     websocket_handler, websocket_router, ClientMessage, ServerMessage, WsError,
     Subscription, SubscriptionManager, subscriptions::create_subscription_manager,

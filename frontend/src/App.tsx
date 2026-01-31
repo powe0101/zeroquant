@@ -7,6 +7,7 @@ import { Strategies } from './pages/Strategies'
 import { Backtest } from './pages/Backtest'
 import { Simulation } from './pages/Simulation'
 import { Dataset } from './pages/Dataset'
+import { Screening } from './pages/Screening'
 import { MLTraining } from './pages/MLTraining'
 import { TradingJournal } from './pages/TradingJournal'
 import { Settings } from './pages/Settings'
@@ -30,6 +31,7 @@ function App() {
           <Route path="/backtest" component={Backtest} />
           <Route path="/simulation" component={Simulation} />
           <Route path="/dataset" component={Dataset} />
+          <Route path="/screening" component={Screening} />
           <Route path="/ml-training" component={MLTraining} />
           <Route path="/journal" component={TradingJournal} />
           <Route path="/settings" component={Settings} />

@@ -5,6 +5,44 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.5.2] - 2026-01-31
+
+### Added
+
+#### 🔄 백그라운드 데이터 수집 시스템
+- **FundamentalCollector** (`tasks/fundamental.rs`)
+  - Yahoo Finance에서 펀더멘털 데이터 자동 수집
+  - 설정 가능한 수집 주기 및 배치 처리
+  - Rate limiting 기반 API 요청 관리
+  - OHLCV 캔들 데이터 증분 업데이트 지원
+- **SymbolSyncTask** (`tasks/symbol_sync.rs`)
+  - KRX (KOSPI/KOSDAQ) 종목 자동 동기화
+  - Binance USDT 거래 페어 동기화
+  - Yahoo Finance 주요 지수 종목 동기화
+  - 최소 심볼 수 기반 자동 실행 조건
+
+#### 📊 프론트엔드 스크리닝 페이지
+- **Screening.tsx** - 종목 스크리닝 UI 구현
+  - 프리셋 스크리닝 (가치주, 고배당, 성장주 등)
+  - 커스텀 필터 조합
+  - 결과 테이블 및 정렬
+
+#### 🛠️ 환경 변수 확장 (.env.example)
+- `FUNDAMENTAL_COLLECT_*`: 펀더멘털 수집 설정 (활성화, 주기, 배치 크기)
+- `SYMBOL_SYNC_*`: 심볼 동기화 설정 (KRX, Binance, Yahoo)
+
+### Changed
+
+#### 브랜딩 통일
+- Web UI 타이틀을 "ZeroQuant │ 퀀트 트레이딩 플랫폼"으로 통일
+- 사이드바 로고 텍스트 "Zero Quant" → "ZeroQuant"로 변경
+
+#### 데이터 캐시 확장
+- **FundamentalCache** (`cache/fundamental.rs`) - 펀더멘털 데이터 캐싱
+- **SymbolInfoProvider** 확장 - 심볼 정보 조회 기능 강화
+
+---
+
 ## [0.5.1] - 2026-01-31
 
 ### Added

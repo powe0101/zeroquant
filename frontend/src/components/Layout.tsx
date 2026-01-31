@@ -11,6 +11,7 @@ import {
   Play,
   Brain,
   Database,
+  ListFilter,
   BookOpen,
 } from 'lucide-solid'
 
@@ -24,6 +25,7 @@ const navItems = [
   { path: '/backtest', icon: FlaskConical, label: '백테스트' },
   { path: '/simulation', icon: Play, label: '시뮬레이션' },
   { path: '/dataset', icon: Database, label: '데이터셋' },
+  { path: '/screening', icon: ListFilter, label: '스크리닝' },
   { path: '/ml-training', icon: Brain, label: 'ML 훈련' },
   { path: '/journal', icon: BookOpen, label: '매매일지' },
   { path: '/settings', icon: Settings, label: '설정' },
@@ -43,8 +45,8 @@ export function Layout(props: LayoutProps) {
               <Activity class="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 class="text-lg font-bold text-[var(--color-text)]">Trader Bot</h1>
-              <p class="text-xs text-[var(--color-text-muted)]">Multi-Market Trading</p>
+              <h1 class="text-lg font-bold text-[var(--color-text)]">ZeroQuant</h1>
+              <p class="text-xs text-[var(--color-text-muted)]">퀀트 트레이딩 플랫폼</p>
             </div>
           </div>
         </div>

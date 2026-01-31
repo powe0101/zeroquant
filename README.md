@@ -32,6 +32,7 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 - **실시간 시세**: WebSocket 기반 실시간 가격/호가/체결
 - **과거 데이터**: TimescaleDB 시계열 저장, 백테스팅 지원
 - **데이터셋 관리**: Yahoo Finance 데이터 다운로드, 캔들 데이터 CRUD
+- **백그라운드 수집**: 펀더멘털 데이터 자동 수집, 심볼 자동 동기화 (KRX/Binance/Yahoo)
 - **ML 패턴 인식**: 캔들스틱 26개 + 차트 패턴 24개 (ONNX 추론)
 - **ML 모델 훈련**: XGBoost, LightGBM, RandomForest, 앙상블 지원
 - **성과 지표**: Sharpe Ratio, MDD, Win Rate, CAGR 등

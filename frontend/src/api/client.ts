@@ -1478,6 +1478,143 @@ export const getJournalStrategyPerformance = async (): Promise<StrategyPerforman
   return response.data;
 };
 
+// ==================== 스크리닝 (Screening) ====================
+
+/** 스크리닝 필터 요청 */
+export interface ScreeningRequest {
+  market?: string;
+  exchange?: string;
+  sector?: string;
+  min_market_cap?: string;
+  max_market_cap?: string;
+  min_per?: string;
+  max_per?: string;
+  min_pbr?: string;
+  max_pbr?: string;
+  min_roe?: string;
+  max_roe?: string;
+  min_roa?: string;
+  max_roa?: string;
+  min_dividend_yield?: string;
+  max_dividend_yield?: string;
+  max_debt_ratio?: string;
+  min_revenue_growth?: string;
+  min_earnings_growth?: string;
+  max_distance_from_52w_high?: string;
+  min_distance_from_52w_low?: string;
+  min_volume_ratio?: string;
+  sort_by?: string;
+  sort_order?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** 스크리닝 결과 DTO */
+export interface ScreeningResultDto {
+  ticker: string;
+  name: string;
+  market: string;
+  exchange: string | null;
+  sector: string | null;
+  market_cap: string | null;
+  per: string | null;
+  pbr: string | null;
+  roe: string | null;
+  roa: string | null;
+  eps: string | null;
+  dividend_yield: string | null;
+  operating_margin: string | null;
+  debt_ratio: string | null;
+  revenue_growth_yoy: string | null;
+  earnings_growth_yoy: string | null;
+  current_price: string | null;
+  week_52_high: string | null;
+  week_52_low: string | null;
+  distance_from_52w_high: string | null;
+  distance_from_52w_low: string | null;
+}
+
+/** 스크리닝 응답 */
+export interface ScreeningResponse {
+  total: number;
+  results: ScreeningResultDto[];
+  filter_summary: string;
+}
+
+/** 스크리닝 프리셋 */
+export interface ScreeningPreset {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** 프리셋 목록 응답 */
+export interface PresetsListResponse {
+  presets: ScreeningPreset[];
+}
+
+/** 모멘텀 스크리닝 쿼리 */
+export interface MomentumQuery {
+  market?: string;
+  days?: number;
+  min_change_pct?: string;
+  min_volume_ratio?: string;
+  limit?: number;
+}
+
+/** 모멘텀 스크리닝 결과 DTO */
+export interface MomentumResultDto {
+  symbol: string;
+  name: string;
+  market: string;
+  exchange: string | null;
+  start_price: string;
+  end_price: string;
+  change_pct: string;
+  avg_volume: string;
+  current_volume: string;
+  volume_ratio: string;
+}
+
+/** 모멘텀 스크리닝 응답 */
+export interface MomentumResponse {
+  total: number;
+  days: number;
+  min_change_pct: string;
+  results: MomentumResultDto[];
+}
+
+/** 커스텀 스크리닝 실행 */
+export const runScreening = async (request: ScreeningRequest): Promise<ScreeningResponse> => {
+  const response = await api.post('/screening', request);
+  return response.data;
+};
+
+/** 스크리닝 프리셋 목록 조회 */
+export const getScreeningPresets = async (): Promise<PresetsListResponse> => {
+  const response = await api.get('/screening/presets');
+  return response.data;
+};
+
+/** 프리셋 스크리닝 실행 */
+export const runPresetScreening = async (
+  preset: string,
+  market?: string,
+  limit?: number
+): Promise<ScreeningResponse> => {
+  const params: Record<string, string | number> = {};
+  if (market) params.market = market;
+  if (limit) params.limit = limit;
+  const response = await api.get(`/screening/presets/${preset}`, { params });
+  return response.data;
+};
+
+/** 모멘텀 스크리닝 실행 */
+export const runMomentumScreening = async (query: MomentumQuery): Promise<MomentumResponse> => {
+  const response = await api.get('/screening/momentum', { params: query });
+  return response.data;
+};
+
 // ==================== 인증 ====================
 
 export const login = async (username: string, password: string) => {

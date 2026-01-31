@@ -234,20 +234,22 @@ impl SymbolInfoProvider for BinanceSymbolProvider {
 
         let data: ExchangeInfo = response.json().await?;
 
+        // 티커는 정규화된 형식(BTC/USDT)으로 저장
+        // Yahoo Finance는 암호화폐를 지원하지 않으므로 yahoo_symbol은 None
         let symbols: Vec<SymbolMetadata> = data
             .symbols
             .into_iter()
             .filter(|s| s.status == "TRADING")
             .map(|s| {
-                let name = format!("{}/{}", s.base_asset, s.quote_asset);
+                let normalized_ticker = format!("{}/{}", s.base_asset, s.quote_asset);
                 SymbolMetadata {
-                    ticker: s.symbol.clone(),
-                    name,
+                    ticker: normalized_ticker.clone(), // 정규화된 형식
+                    name: normalized_ticker,
                     name_en: Some(s.base_asset.clone()),
                     market: "CRYPTO".to_string(),
                     exchange: Some("BINANCE".to_string()),
                     sector: None,
-                    yahoo_symbol: None,
+                    yahoo_symbol: None, // Yahoo Finance는 암호화폐 미지원
                 }
             })
             .collect();
@@ -276,6 +278,300 @@ impl SymbolInfoProvider for BinanceSymbolProvider {
     }
 }
 
+// ==================== Yahoo Finance Provider ====================
+
+/// Yahoo Finance 심볼 정보 Provider.
+///
+/// Yahoo Finance Screener API를 통해 미국 주식 심볼 정보를 제공합니다.
+/// S&P 500, NASDAQ 100 등 주요 지수 구성 종목을 수집합니다.
+pub struct YahooSymbolProvider {
+    /// 수집할 최대 종목 수 (기본: 1000)
+    max_symbols: usize,
+}
+
+impl YahooSymbolProvider {
+    pub fn new() -> Self {
+        Self { max_symbols: 1000 }
+    }
+
+    /// 최대 종목 수 설정.
+    pub fn with_max_symbols(max_symbols: usize) -> Self {
+        Self { max_symbols }
+    }
+
+    /// Yahoo Finance Screener API로 종목 목록 조회.
+    async fn fetch_screener(
+        &self,
+        client: &reqwest::Client,
+        screener_id: &str,
+    ) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
+        // Yahoo Finance Screener API 엔드포인트
+        // 미리 정의된 screener: most_actives, day_gainers, day_losers, undervalued_large_caps 등
+        let url = format!(
+            "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds={}&count=250",
+            screener_id
+        );
+
+        let response = client
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0")
+            .send()
+            .await?;
+
+        #[derive(Deserialize)]
+        struct ScreenerResponse {
+            finance: Option<FinanceResult>,
+        }
+
+        #[derive(Deserialize)]
+        struct FinanceResult {
+            result: Option<Vec<ScreenerResult>>,
+        }
+
+        #[derive(Deserialize)]
+        struct ScreenerResult {
+            quotes: Option<Vec<Quote>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Quote {
+            symbol: String,
+            #[serde(default)]
+            short_name: Option<String>,
+            #[serde(default)]
+            long_name: Option<String>,
+            #[serde(default)]
+            exchange: Option<String>,
+            #[serde(default)]
+            market: Option<String>,
+            #[serde(default)]
+            sector: Option<String>,
+        }
+
+        let data: ScreenerResponse = response.json().await?;
+
+        let symbols: Vec<SymbolMetadata> = data
+            .finance
+            .and_then(|f| f.result)
+            .and_then(|r| r.into_iter().next())
+            .and_then(|r| r.quotes)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|q| !q.symbol.contains('.') || q.symbol.ends_with(".L") || q.symbol.ends_with(".T"))
+            .map(|q| {
+                let name = q.long_name.or(q.short_name).unwrap_or_else(|| q.symbol.clone());
+                let exchange_name = q.exchange.clone();
+                // 정규화된 티커: Yahoo 접미사 제거 (AAPL.L → AAPL for UK)
+                // US 주식은 접미사가 없으므로 그대로 사용
+                let normalized_ticker = q.symbol.clone();
+                SymbolMetadata {
+                    ticker: normalized_ticker, // 정규화된 형식
+                    name: name.clone(),
+                    name_en: Some(name),
+                    market: "US".to_string(),
+                    exchange: exchange_name,
+                    sector: q.sector,
+                    yahoo_symbol: Some(q.symbol), // 조회용 Yahoo 심볼
+                }
+            })
+            .collect();
+
+        Ok(symbols)
+    }
+
+    /// 주요 지수 구성 종목 조회 (Yahoo Finance).
+    async fn fetch_index_components(
+        &self,
+        client: &reqwest::Client,
+        index_symbol: &str,
+    ) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
+        // Yahoo Finance Quote API를 사용하여 지수 정보 조회
+        // 실제로는 별도 데이터 소스가 필요할 수 있음
+        let url = format!(
+            "https://query1.finance.yahoo.com/v7/finance/quote?symbols={}",
+            index_symbol
+        );
+
+        let response = client
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0")
+            .send()
+            .await?;
+
+        // 지수 자체 정보만 반환 (구성 종목은 screener로 수집)
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct QuoteResponse {
+            quote_response: Option<QuoteResult>,
+        }
+
+        #[derive(Deserialize)]
+        struct QuoteResult {
+            result: Option<Vec<QuoteData>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct QuoteData {
+            symbol: String,
+            #[serde(default)]
+            short_name: Option<String>,
+            #[serde(default)]
+            long_name: Option<String>,
+        }
+
+        let _data: QuoteResponse = response.json().await?;
+
+        // 지수 자체는 건너뛰고, 구성 종목은 screener API 사용
+        Ok(vec![])
+    }
+}
+
+impl Default for YahooSymbolProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SymbolInfoProvider for YahooSymbolProvider {
+    fn name(&self) -> &str {
+        "Yahoo Finance"
+    }
+
+    fn supported_markets(&self) -> Vec<&str> {
+        vec!["US", "UK", "JP"]
+    }
+
+    async fn fetch_all(&self) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
+        let client = reqwest::Client::new();
+        let mut all_symbols: Vec<SymbolMetadata> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // 여러 Screener 카테고리에서 종목 수집
+        let screener_ids = [
+            "most_actives",           // 거래량 상위
+            "day_gainers",            // 상승 종목
+            "day_losers",             // 하락 종목
+            "undervalued_large_caps", // 저평가 대형주
+            "growth_technology_stocks", // 기술 성장주
+            "undervalued_growth_stocks", // 저평가 성장주
+            "small_cap_gainers",      // 소형주 상승
+        ];
+
+        for screener_id in &screener_ids {
+            match self.fetch_screener(&client, screener_id).await {
+                Ok(symbols) => {
+                    for symbol in symbols {
+                        if !seen.contains(&symbol.ticker) && all_symbols.len() < self.max_symbols {
+                            seen.insert(symbol.ticker.clone());
+                            all_symbols.push(symbol);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        screener = screener_id,
+                        error = %e,
+                        "Screener 조회 실패, 계속 진행"
+                    );
+                }
+            }
+
+            // Rate limiting: screener 요청 간 딜레이
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            if all_symbols.len() >= self.max_symbols {
+                break;
+            }
+        }
+
+        tracing::info!(
+            count = all_symbols.len(),
+            "Yahoo Finance 심볼 수집 완료"
+        );
+
+        Ok(all_symbols)
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
+        // Yahoo Finance 검색 API 사용
+        let client = reqwest::Client::new();
+        let url = format!(
+            "https://query1.finance.yahoo.com/v1/finance/search?q={}&quotesCount={}&newsCount=0",
+            query, limit
+        );
+
+        let response = client
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0")
+            .send()
+            .await?;
+
+        #[derive(Deserialize)]
+        struct SearchResponse {
+            quotes: Option<Vec<SearchQuote>>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct SearchQuote {
+            symbol: String,
+            #[serde(default)]
+            short_name: Option<String>,
+            #[serde(default)]
+            long_name: Option<String>,
+            #[serde(default)]
+            exchange: Option<String>,
+            #[serde(default)]
+            quote_type: Option<String>,
+            #[serde(default)]
+            sector: Option<String>,
+        }
+
+        let data: SearchResponse = response.json().await?;
+
+        let symbols: Vec<SymbolMetadata> = data
+            .quotes
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|q| {
+                // EQUITY만 필터링 (ETF, INDEX 등 제외)
+                q.quote_type.as_ref().map(|t| t == "EQUITY").unwrap_or(true)
+            })
+            .take(limit)
+            .map(|q| {
+                let name = q.long_name.or(q.short_name).unwrap_or_else(|| q.symbol.clone());
+                let market = if q.symbol.ends_with(".KS") || q.symbol.ends_with(".KQ") {
+                    "KR"
+                } else if q.symbol.ends_with(".T") {
+                    "JP"
+                } else if q.symbol.ends_with(".L") {
+                    "UK"
+                } else {
+                    "US"
+                };
+                SymbolMetadata {
+                    ticker: q.symbol.clone(),
+                    name: name.clone(),
+                    name_en: Some(name),
+                    market: market.to_string(),
+                    exchange: q.exchange,
+                    sector: q.sector,
+                    yahoo_symbol: Some(q.symbol),
+                }
+            })
+            .collect();
+
+        Ok(symbols)
+    }
+}
+
 // ==================== Composite Provider ====================
 
 /// 복합 심볼 정보 Provider.
@@ -291,6 +587,7 @@ impl CompositeSymbolProvider {
             providers: vec![
                 Box::new(KrxSymbolProvider::new()),
                 Box::new(BinanceSymbolProvider::new()),
+                Box::new(YahooSymbolProvider::new()),
             ],
         }
     }

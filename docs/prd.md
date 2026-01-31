@@ -1,6 +1,6 @@
 # ZeroQuant Trading Bot - PRD (Product Requirements Document)
 
-> 버전: 5.0 | 마지막 업데이트: 2026-01-31
+> 버전: 5.1 | 마지막 업데이트: 2026-01-31
 
 ---
 
@@ -209,6 +209,50 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
   - 정규화된 심볼 (canonical)
   - 거래소별 심볼 매핑 (Yahoo, KIS, Binance)
   - 표시 이름: "티커(종목명)" 형식
+
+#### 2.5.4 심볼 자동 동기화
+- **목적**: 스크리닝 수집기 가동 시 자동으로 전체 종목 목록을 수집하여 symbol_info 테이블에 등록
+- **데이터 소스**:
+  - **KRX (한국거래소)**: KOSPI/KOSDAQ 전 종목 (~2,500개)
+  - **Binance**: USDT 거래 페어 활성 종목 (~300개)
+  - **Yahoo Finance**: 미국 주식 주요 지수 구성종목 (S&P 500, NASDAQ 등)
+- **동기화 트리거**:
+  - 서버 시작 시 심볼 수가 최소 기준 이하면 자동 실행
+  - Fundamental 배치 수집 전 자동 호출
+- **환경변수**:
+  | 변수 | 기본값 | 설명 |
+  |------|--------|------|
+  | `SYMBOL_SYNC_KRX` | true | KRX 동기화 활성화 |
+  | `SYMBOL_SYNC_BINANCE` | false | Binance 동기화 활성화 |
+  | `SYMBOL_SYNC_YAHOO` | true | Yahoo Finance 동기화 활성화 |
+  | `SYMBOL_SYNC_YAHOO_MAX` | 500 | Yahoo 최대 수집 수 |
+  | `SYMBOL_SYNC_MIN_COUNT` | 100 | 최소 심볼 수 기준 |
+
+#### 2.5.5 Fundamental 데이터 백그라운드 수집
+- **목적**: 서버 실행 중 백그라운드에서 Fundamental 데이터를 주기적으로 배치 수집
+- **수집 지표**:
+  - 시가총액, 발행주식수, 52주 고저가
+  - PER, PBR, ROE, ROA
+  - 배당수익률, 배당성향
+  - 영업이익률, 순이익률
+  - 부채비율, 유동비율
+- **수집 방식**:
+  - Yahoo Finance API 연동
+  - Rate Limiting 적용 (요청 간 2초 딜레이)
+  - 7일 이상 경과한 데이터 자동 갱신
+- **OHLCV 증분 업데이트**:
+  - Fundamental 수집 시 동일 API 호출로 1년치 일봉 OHLCV도 함께 저장
+  - ON CONFLICT DO UPDATE로 중복 없이 병합
+- **환경변수**:
+  | 변수 | 기본값 | 설명 |
+  |------|--------|------|
+  | `FUNDAMENTAL_COLLECT_ENABLED` | true | 수집기 활성화 |
+  | `FUNDAMENTAL_COLLECT_INTERVAL_SECS` | 3600 | 수집 주기 (초) |
+  | `FUNDAMENTAL_STALE_DAYS` | 7 | 갱신 기준 (일) |
+  | `FUNDAMENTAL_BATCH_SIZE` | 50 | 배치당 처리 심볼 수 |
+  | `FUNDAMENTAL_REQUEST_DELAY_MS` | 2000 | API 요청 간 딜레이 |
+  | `FUNDAMENTAL_UPDATE_OHLCV` | true | OHLCV 증분 업데이트 |
+  | `FUNDAMENTAL_AUTO_SYNC_SYMBOLS` | true | 심볼 자동 동기화 |
 
 ---
 
@@ -540,4 +584,9 @@ Yahoo Finance / Binance / KIS
 
 ---
 
-*버전 이력: v1.0 → v2.0 → v2.1 → v3.0 → v4.0 → v4.1 → v5.0*
+*버전 이력: v1.0 → v2.0 → v2.1 → v3.0 → v4.0 → v4.1 → v5.0 → v5.1*
+
+**v5.1 변경사항:**
+- 심볼 자동 동기화 기능 추가 (KRX, Binance, Yahoo Finance)
+- Fundamental 데이터 백그라운드 수집 기능 추가
+- OHLCV 증분 업데이트 기능 추가

@@ -22,6 +22,7 @@ use trader_api::openapi::swagger_ui_router;
 use trader_api::repository::StrategyRepository;
 use trader_api::routes::create_api_router;
 use trader_api::state::AppState;
+use trader_api::tasks::{start_fundamental_collector, FundamentalCollectorConfig};
 use trader_api::websocket::{create_subscription_manager, start_aggregator, start_simulator, standalone_websocket_router, WsState};
 use trader_core::crypto::CredentialEncryptor;
 use trader_core::Symbol;
@@ -568,6 +569,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // 전역 종료 토큰 생성 (백그라운드 태스크용)
+    let shutdown_token = CancellationToken::new();
+
+    // Fundamental 데이터 백그라운드 수집기 시작
+    // FUNDAMENTAL_COLLECT_ENABLED 환경변수로 활성화 제어 (기본: 비활성화)
+    let fundamental_enabled = std::env::var("FUNDAMENTAL_COLLECT_ENABLED")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    if fundamental_enabled {
+        if let Some(ref pool) = state.db_pool {
+            let collector_config = FundamentalCollectorConfig::from_env();
+            info!(
+                interval_secs = collector_config.collect_interval.as_secs(),
+                stale_days = collector_config.stale_days,
+                batch_size = collector_config.batch_size,
+                "Fundamental 데이터 수집기 활성화됨"
+            );
+            start_fundamental_collector(
+                pool.clone(),
+                collector_config,
+                shutdown_token.clone(),
+            );
+        } else {
+            warn!("FUNDAMENTAL_COLLECT_ENABLED=true but database not connected, skipping");
+        }
+    } else {
+        info!("Fundamental 데이터 수집기 비활성화됨 (FUNDAMENTAL_COLLECT_ENABLED=true로 활성화)");
+    }
+
     // 라우터 생성
     let app = create_router(state, metrics_handle, ws_state);
 
@@ -580,20 +611,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    // 전역 종료 토큰 생성
-    let shutdown_token = CancellationToken::new();
-    let shutdown_token_clone = shutdown_token.clone();
+    // shutdown_token은 백그라운드 태스크용으로 이미 생성됨 (위에서)
+    let shutdown_token_for_signal = shutdown_token.clone();
 
     // Graceful shutdown 처리 (타임아웃 포함)
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shutdown_token))
+        .with_graceful_shutdown(shutdown_signal(shutdown_token_for_signal))
         .await?;
 
     // 종료 시그널 받은 후 정리 작업
     info!("Server shutdown initiated, cleaning up...");
 
     // 종료 토큰 취소 (백그라운드 태스크에 종료 시그널 전파)
-    shutdown_token_clone.cancel();
+    shutdown_token.cancel();
 
     // 정리 작업에 최대 10초 대기
     let cleanup_timeout = tokio::time::timeout(

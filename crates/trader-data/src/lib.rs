@@ -28,11 +28,14 @@ pub use storage::timescale::{
 pub use storage::ohlcv::{OhlcvCache, OhlcvRecord, OhlcvMetadataRecord};
 pub use cache::historical::{CachedHistoricalDataProvider, CacheStats as HistoricalCacheStats};
 
+// Fundamental 데이터 수집 재내보내기
+pub use cache::fundamental::{FetchResult, FundamentalData, FundamentalFetcher};
+
 // KRX 데이터 소스 재내보내기
 pub use storage::krx::KrxDataSource;
 
 // 심볼 정보 Provider 재내보내기
 pub use provider::{
     BinanceSymbolProvider, CompositeSymbolProvider, KrxSymbolProvider, SymbolInfoProvider,
-    SymbolMetadata, SymbolResolver,
+    SymbolMetadata, SymbolResolver, YahooSymbolProvider,
 };

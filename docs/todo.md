@@ -78,7 +78,14 @@ cd frontend && npm run dev
   - `GET /api/v1/screening/presets/{preset}` - 프리셋 실행 ✅
   - `GET /api/v1/screening/momentum` - 모멘텀 스크리닝 ✅
 - [x] 모멘텀 스크리닝 최적화 (OHLCV 기반 가격/거래량 분석)
-- [ ] Fundamental 데이터 수집 (symbol_info → symbol_fundamental)
+- [x] Fundamental 데이터 백그라운드 수집 ✅
+  - 서버 실행 중 자동 배치 수집
+  - Yahoo Finance API 연동 (rate limiting 적용)
+  - Fundamental + OHLCV 통합 수집 (API 효율화)
+- [x] 심볼 자동 동기화 ✅
+  - KRX: 한국거래소 전 종목 (~2,500개)
+  - Binance: USDT 페어 암호화폐 (~300개)
+  - Yahoo Finance: 미국 주식 상위 종목 (~500개)
 
 **전략 연계**
 - [ ] 전략에서 스크리닝 결과 활용 인터페이스 정의
