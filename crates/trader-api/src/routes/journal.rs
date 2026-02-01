@@ -18,11 +18,105 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc, TimeZone};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+
+// ==================== 날짜 파싱 헬퍼 ====================
+
+/// 날짜/시간 파싱 에러.
+#[derive(Debug)]
+pub struct DateParseError {
+    pub field: String,
+    pub value: String,
+    pub expected_formats: Vec<&'static str>,
+}
+
+impl DateParseError {
+    fn new(field: &str, value: &str, expected_formats: Vec<&'static str>) -> Self {
+        Self {
+            field: field.to_string(),
+            value: value.to_string(),
+            expected_formats,
+        }
+    }
+
+    fn to_api_error(&self) -> ApiError {
+        ApiError::new(
+            "INVALID_DATE_FORMAT",
+            format!(
+                "'{}' 필드의 날짜 형식이 올바르지 않습니다: '{}'. 허용 형식: {}",
+                self.field,
+                self.value,
+                self.expected_formats.join(", ")
+            ),
+        )
+    }
+}
+
+/// DateTime<Utc>로 유연하게 파싱합니다.
+///
+/// 지원 형식:
+/// - RFC 3339: `2024-01-15T09:30:00Z`, `2024-01-15T09:30:00+09:00`
+/// - ISO 8601 날짜만: `2024-01-15` (00:00:00 UTC로 변환)
+/// - 슬래시 구분: `2024/01/15`
+fn parse_datetime_flexible(s: &str, field_name: &str) -> Result<DateTime<Utc>, DateParseError> {
+    const FORMATS: &[&str] = &[
+        "RFC3339 (2024-01-15T09:30:00Z)",
+        "YYYY-MM-DD (2024-01-15)",
+        "YYYY/MM/DD (2024/01/15)",
+    ];
+
+    // RFC3339 먼저 시도
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+
+    // YYYY-MM-DD 형식
+    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Ok(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap()));
+    }
+
+    // YYYY/MM/DD 형식
+    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y/%m/%d") {
+        return Ok(Utc.from_utc_datetime(&date.and_hms_opt(0, 0, 0).unwrap()));
+    }
+
+    Err(DateParseError::new(field_name, s, FORMATS.to_vec()))
+}
+
+/// NaiveDate로 유연하게 파싱합니다.
+///
+/// 지원 형식:
+/// - ISO 8601: `2024-01-15`
+/// - 슬래시 구분: `2024/01/15`
+/// - 한국식: `20240115` (YYYYMMDD)
+fn parse_date_flexible(s: &str, field_name: &str) -> Result<NaiveDate, DateParseError> {
+    const FORMATS: &[&str] = &[
+        "YYYY-MM-DD (2024-01-15)",
+        "YYYY/MM/DD (2024/01/15)",
+        "YYYYMMDD (20240115)",
+    ];
+
+    // YYYY-MM-DD 형식
+    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return Ok(date);
+    }
+
+    // YYYY/MM/DD 형식
+    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y/%m/%d") {
+        return Ok(date);
+    }
+
+    // YYYYMMDD 형식 (KIS API에서 사용)
+    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y%m%d") {
+        return Ok(date);
+    }
+
+    Err(DateParseError::new(field_name, s, FORMATS.to_vec()))
+}
 
 use crate::repository::{
     CurrentPosition as RepoCurrentPosition, DailySummary, ExecutionFilter, JournalRepository,
@@ -456,16 +550,20 @@ pub async fn list_executions(
     let limit = query.limit.unwrap_or(50);
     let offset = query.offset.unwrap_or(0);
 
-    // 날짜 파싱
-    let start_date: Option<DateTime<Utc>> = query
-        .start_date
-        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-        .map(|dt| dt.with_timezone(&Utc));
+    // 날짜 파싱 - 유연한 형식 지원 + 에러 반환
+    let start_date: Option<DateTime<Utc>> = match query.start_date {
+        Some(ref s) => Some(parse_datetime_flexible(s, "start_date").map_err(|e| {
+            (StatusCode::BAD_REQUEST, Json(e.to_api_error()))
+        })?),
+        None => None,
+    };
 
-    let end_date: Option<DateTime<Utc>> = query
-        .end_date
-        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-        .map(|dt| dt.with_timezone(&Utc));
+    let end_date: Option<DateTime<Utc>> = match query.end_date {
+        Some(ref s) => Some(parse_datetime_flexible(s, "end_date").map_err(|e| {
+            (StatusCode::BAD_REQUEST, Json(e.to_api_error()))
+        })?),
+        None => None,
+    };
 
     let filter = ExecutionFilter {
         symbol: query.symbol,
@@ -537,13 +635,20 @@ pub async fn get_daily_pnl(
     let pool = get_db_pool(&state)?;
     let credential_id = get_active_credential_id(&state).await?;
 
-    let start_date: Option<NaiveDate> = query
-        .start_date
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+    // 날짜 파싱 - 유연한 형식 지원 + 에러 반환
+    let start_date: Option<NaiveDate> = match query.start_date {
+        Some(ref s) => Some(parse_date_flexible(s, "start_date").map_err(|e| {
+            (StatusCode::BAD_REQUEST, Json(e.to_api_error()))
+        })?),
+        None => None,
+    };
 
-    let end_date: Option<NaiveDate> = query
-        .end_date
-        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
+    let end_date: Option<NaiveDate> = match query.end_date {
+        Some(ref s) => Some(parse_date_flexible(s, "end_date").map_err(|e| {
+            (StatusCode::BAD_REQUEST, Json(e.to_api_error()))
+        })?),
+        None => None,
+    };
 
     let daily = JournalRepository::get_daily_summary(pool, credential_id, start_date, end_date)
         .await
@@ -1102,7 +1207,16 @@ pub async fn sync_executions(
     let default_start = (today - chrono::Duration::days(30)).format("%Y%m%d").to_string();
     let default_end = today.format("%Y%m%d").to_string();
 
-    let start_date = req.start_date.unwrap_or(default_start);
+    // 사용자가 입력한 날짜 파싱 (다양한 형식 지원) -> YYYYMMDD로 변환
+    let start_date = match req.start_date {
+        Some(ref s) => {
+            let parsed = parse_date_flexible(s, "start_date").map_err(|e| {
+                (StatusCode::BAD_REQUEST, Json(e.to_api_error()))
+            })?;
+            parsed.format("%Y%m%d").to_string()
+        }
+        None => default_start,
+    };
     let end_date = default_end;
 
     // 체결 내역 조회 (매수+매도 전체)
@@ -1320,5 +1434,87 @@ mod tests {
         assert_eq!(item.total_trades, 10);
         assert_eq!(item.buy_count, 6);
         assert_eq!(item.sell_count, 4);
+    }
+
+    // ==================== 날짜 파싱 테스트 ====================
+
+    #[test]
+    fn test_parse_datetime_flexible_rfc3339() {
+        // RFC3339 형식 (Z)
+        let result = parse_datetime_flexible("2024-01-15T09:30:00Z", "test");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.format("%Y-%m-%d").to_string(), "2024-01-15");
+
+        // RFC3339 형식 (타임존 오프셋)
+        let result = parse_datetime_flexible("2024-01-15T18:30:00+09:00", "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_datetime_flexible_date_only() {
+        // YYYY-MM-DD 형식
+        let result = parse_datetime_flexible("2024-01-15", "test");
+        assert!(result.is_ok());
+        let dt = result.unwrap();
+        assert_eq!(dt.format("%Y-%m-%d").to_string(), "2024-01-15");
+
+        // YYYY/MM/DD 형식
+        let result = parse_datetime_flexible("2024/01/15", "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_datetime_flexible_invalid() {
+        // 잘못된 형식
+        let result = parse_datetime_flexible("invalid-date", "start_date");
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert_eq!(err.field, "start_date");
+        assert_eq!(err.value, "invalid-date");
+        assert!(!err.expected_formats.is_empty());
+    }
+
+    #[test]
+    fn test_parse_date_flexible_iso() {
+        // YYYY-MM-DD 형식
+        let result = parse_date_flexible("2024-01-15", "test");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().to_string(), "2024-01-15");
+
+        // YYYY/MM/DD 형식
+        let result = parse_date_flexible("2024/01/15", "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_date_flexible_yyyymmdd() {
+        // YYYYMMDD 형식 (KIS API용)
+        let result = parse_date_flexible("20240115", "test");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().to_string(), "2024-01-15");
+    }
+
+    #[test]
+    fn test_parse_date_flexible_invalid() {
+        // 잘못된 형식
+        let result = parse_date_flexible("15-01-2024", "end_date");
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        assert_eq!(err.field, "end_date");
+        assert!(err.to_api_error().message.contains("허용 형식"));
+    }
+
+    #[test]
+    fn test_date_parse_error_message() {
+        let err = DateParseError::new("start_date", "bad-date", vec!["YYYY-MM-DD", "YYYYMMDD"]);
+        let api_err = err.to_api_error();
+
+        assert_eq!(api_err.code, "INVALID_DATE_FORMAT");
+        assert!(api_err.message.contains("start_date"));
+        assert!(api_err.message.contains("bad-date"));
+        assert!(api_err.message.contains("YYYY-MM-DD"));
     }
 }
