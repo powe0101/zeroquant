@@ -23,8 +23,8 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
-use tracing::{debug, info};
+use trader_core::{MarketData, MarketDataType, MarketType, Order, OrderStatusType, Position, Side, Signal, Symbol};
+use tracing::{debug, info, warn};
 
 /// 볼린저 밴드 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -366,28 +366,23 @@ impl BollingerStrategy {
                         .with_metadata("exit_reason", json!(reason))
                 );
 
-                // 승/패 추적
-                let pnl = match pos.side {
+                // 예상 손익 계산 (로깅용, 실제 통계는 on_order_filled에서 업데이트)
+                let expected_pnl = match pos.side {
                     Side::Buy => current_price - pos.entry_price,
                     Side::Sell => pos.entry_price - current_price,
                 };
 
-                if pnl > Decimal::ZERO {
-                    self.wins += 1;
-                } else {
-                    self.losses_count += 1;
-                }
-
-                info!(
+                debug!(
                     reason = reason,
                     entry = %pos.entry_price,
-                    exit = %current_price,
-                    pnl = %pnl,
-                    "Position closed"
+                    target_exit = %current_price,
+                    expected_pnl = %expected_pnl,
+                    "청산 신호 생성 (실제 체결은 on_order_filled에서 처리)"
                 );
 
-                self.position = None;
-                self.trades_count += 1;
+                // 포지션 상태는 on_order_filled()에서 업데이트
+                // 여기서 self.position = None을 하면 중복 신호 방지 가능하지만
+                // 주문 실패 시 상태 불일치 발생 → on_order_filled 신뢰
             }
 
             return signals;
@@ -412,6 +407,8 @@ impl BollingerStrategy {
                     .with_metadata("lower_band", json!(lower.to_string()))
             );
 
+            // 낙관적 포지션 설정 (중복 신호 방지용)
+            // 실제 체결은 on_order_filled()에서 검증/수정됨
             self.position = Some(PositionState {
                 side: Side::Buy,
                 entry_price: current_price,
@@ -419,11 +416,11 @@ impl BollingerStrategy {
                 take_profit,
             });
 
-            info!(
+            debug!(
                 price = %current_price,
                 lower_band = %lower,
                 rsi = ?self.rsi,
-                "Buy signal: price at lower band"
+                "매수 신호 생성: 가격이 하단 밴드 이하"
             );
         }
 
@@ -444,6 +441,7 @@ impl BollingerStrategy {
                     .with_metadata("upper_band", json!(upper.to_string()))
             );
 
+            // 낙관적 포지션 설정 (중복 신호 방지용)
             self.position = Some(PositionState {
                 side: Side::Sell,
                 entry_price: current_price,
@@ -451,11 +449,11 @@ impl BollingerStrategy {
                 take_profit,
             });
 
-            info!(
+            debug!(
                 price = %current_price,
                 upper_band = %upper,
                 rsi = ?self.rsi,
-                "Sell signal: price at upper band"
+                "매도 신호 생성: 가격이 상단 밴드 이상"
             );
         }
 
@@ -551,18 +549,221 @@ impl Strategy for BollingerStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        debug!(
-            side = ?order.side,
-            quantity = %order.quantity,
-            "Order filled"
-        );
+        // 완전 체결된 주문만 처리
+        if order.status != OrderStatusType::Filled {
+            debug!(
+                order_id = %order.id,
+                status = ?order.status,
+                "주문이 아직 완전 체결되지 않음, 건너뜀"
+            );
+            return Ok(());
+        }
+
+        // 대상 심볼 확인
+        if let Some(ref symbol) = self.symbol {
+            if order.symbol != *symbol {
+                return Ok(());
+            }
+        }
+
+        // 체결 가격 결정
+        let fill_price = order
+            .average_fill_price
+            .or(order.price)
+            .unwrap_or(Decimal::ZERO);
+
+        if fill_price == Decimal::ZERO {
+            warn!(order_id = %order.id, "체결 가격을 결정할 수 없음");
+            return Ok(());
+        }
+
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return Ok(()),
+        };
+
+        match (&self.position, order.side) {
+            // 포지션 없는 상태에서 매수 → 롱 포지션 진입
+            (None, Side::Buy) => {
+                let stop_loss_pct = Decimal::from_f64(config.stop_loss_pct / 100.0)
+                    .unwrap_or(dec!(0.02));
+                let take_profit_pct = Decimal::from_f64(config.take_profit_pct / 100.0)
+                    .unwrap_or(dec!(0.04));
+
+                let stop_loss = fill_price * (Decimal::ONE - stop_loss_pct);
+                let take_profit = fill_price * (Decimal::ONE + take_profit_pct);
+
+                self.position = Some(PositionState {
+                    side: Side::Buy,
+                    entry_price: fill_price,
+                    stop_loss,
+                    take_profit,
+                });
+
+                info!(
+                    side = "Buy",
+                    entry_price = %fill_price,
+                    stop_loss = %stop_loss,
+                    take_profit = %take_profit,
+                    "포지션 동기화: 롱 진입"
+                );
+            }
+
+            // 포지션 없는 상태에서 매도 → 숏 포지션 진입
+            (None, Side::Sell) => {
+                let stop_loss_pct = Decimal::from_f64(config.stop_loss_pct / 100.0)
+                    .unwrap_or(dec!(0.02));
+                let take_profit_pct = Decimal::from_f64(config.take_profit_pct / 100.0)
+                    .unwrap_or(dec!(0.04));
+
+                let stop_loss = fill_price * (Decimal::ONE + stop_loss_pct);
+                let take_profit = fill_price * (Decimal::ONE - take_profit_pct);
+
+                self.position = Some(PositionState {
+                    side: Side::Sell,
+                    entry_price: fill_price,
+                    stop_loss,
+                    take_profit,
+                });
+
+                info!(
+                    side = "Sell",
+                    entry_price = %fill_price,
+                    stop_loss = %stop_loss,
+                    take_profit = %take_profit,
+                    "포지션 동기화: 숏 진입"
+                );
+            }
+
+            // 롱 포지션에서 매도 → 청산
+            (Some(pos), Side::Sell) if pos.side == Side::Buy => {
+                let pnl = fill_price - pos.entry_price;
+                let is_win = pnl > Decimal::ZERO;
+
+                self.trades_count += 1;
+                if is_win {
+                    self.wins += 1;
+                } else {
+                    self.losses_count += 1;
+                }
+
+                info!(
+                    entry = %pos.entry_price,
+                    exit = %fill_price,
+                    pnl = %pnl,
+                    is_win = is_win,
+                    "포지션 동기화: 롱 청산"
+                );
+
+                self.position = None;
+            }
+
+            // 숏 포지션에서 매수 → 청산
+            (Some(pos), Side::Buy) if pos.side == Side::Sell => {
+                let pnl = pos.entry_price - fill_price;
+                let is_win = pnl > Decimal::ZERO;
+
+                self.trades_count += 1;
+                if is_win {
+                    self.wins += 1;
+                } else {
+                    self.losses_count += 1;
+                }
+
+                info!(
+                    entry = %pos.entry_price,
+                    exit = %fill_price,
+                    pnl = %pnl,
+                    is_win = is_win,
+                    "포지션 동기화: 숏 청산"
+                );
+
+                self.position = None;
+            }
+
+            // 같은 방향 추가 매매 (현재 전략에서는 미지원)
+            _ => {
+                debug!(
+                    order_side = ?order.side,
+                    position_side = ?self.position.as_ref().map(|p| p.side),
+                    "추가 매매는 현재 미지원"
+                );
+            }
+        }
+
         Ok(())
     }
 
     async fn on_position_update(
         &mut self,
-        _position: &Position,
+        position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 대상 심볼 확인
+        if let Some(ref symbol) = self.symbol {
+            if position.symbol != *symbol {
+                return Ok(());
+            }
+        }
+
+        // 외부 포지션 정보와 내부 상태 동기화
+        if position.quantity == Decimal::ZERO {
+            // 외부에서 포지션 없음 → 내부도 초기화
+            if self.position.is_some() {
+                warn!(
+                    symbol = %position.symbol,
+                    "외부 포지션 없음, 내부 상태 초기화"
+                );
+                self.position = None;
+            }
+        } else {
+            // 포지션 존재 시 진입가 확인
+            if let Some(ref mut pos) = self.position {
+                if pos.entry_price != position.entry_price {
+                    warn!(
+                        internal_entry = %pos.entry_price,
+                        external_entry = %position.entry_price,
+                        "진입가 불일치, 외부 값으로 동기화"
+                    );
+                    pos.entry_price = position.entry_price;
+                }
+            } else {
+                // 내부에 포지션 없는데 외부에 있음 → 생성
+                warn!(
+                    symbol = %position.symbol,
+                    quantity = %position.quantity,
+                    "예상치 못한 외부 포지션 발견, 내부 상태 생성"
+                );
+
+                let config = self.config.as_ref();
+                let (stop_loss_pct, take_profit_pct) = config
+                    .map(|c| (c.stop_loss_pct, c.take_profit_pct))
+                    .unwrap_or((2.0, 4.0));
+
+                let stop_loss_pct = Decimal::from_f64(stop_loss_pct / 100.0)
+                    .unwrap_or(dec!(0.02));
+                let take_profit_pct = Decimal::from_f64(take_profit_pct / 100.0)
+                    .unwrap_or(dec!(0.04));
+
+                let (stop_loss, take_profit) = match position.side {
+                    Side::Buy => (
+                        position.entry_price * (Decimal::ONE - stop_loss_pct),
+                        position.entry_price * (Decimal::ONE + take_profit_pct),
+                    ),
+                    Side::Sell => (
+                        position.entry_price * (Decimal::ONE + stop_loss_pct),
+                        position.entry_price * (Decimal::ONE - take_profit_pct),
+                    ),
+                };
+
+                self.position = Some(PositionState {
+                    side: position.side,
+                    entry_price: position.entry_price,
+                    stop_loss,
+                    take_profit,
+                });
+            }
+        }
+
         Ok(())
     }
 

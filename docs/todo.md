@@ -1,34 +1,3 @@
-# 작업 규칙
-
-- Context7과 Sequential Thinking을 적극적으로 사용하세요.
-- 모든 작업 수행시 UI와 API의 필드 매칭을 무조건 맞추고 진행 하세요.
-- API는 무조건 호출하여 정상작동 하는지 테스트 합니다.
-- UI는 playwright를 이용하여 항상 동작 확인을 수행합니다.
-- 작업의 완료는 API, 구조, UI 모두 정상적일때 완료입니다.
-
----
-
-## 실행 환경
-
-### Docker 구성 (인프라 + ML만)
-```bash
-docker-compose up -d timescaledb redis  # 인프라
-docker-compose --profile ml run --rm trader-ml python scripts/train_ml_model.py  # ML
-```
-
-### 로컬 실행
-```bash
-# API 서버
-export DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
-export REDIS_URL=redis://localhost:6379
-cargo run --bin trader-api --features ml --release
-
-# 프론트엔드
-cd frontend && npm run dev
-```
-
----
-
 ## 🔴 미구현 작업
 
 ### 1. 매매 일지 (Trading Journal) ⭐ 신규
@@ -100,10 +69,82 @@ cd frontend && npm run dev
 - [ ] 스크리닝 결과 테이블 (정렬, 페이지네이션)
 - [ ] 종목 상세 모달 (Fundamental + 차트)
 
-### 5. ML 예측 활용 (선택적)
+### 5. 종목 랭킹 시스템 (Global Score) ⭐ 신규
+
+**백엔드 - 핵심 모듈**
+- [ ] `GlobalScorer` 구현 (trader-analytics)
+  - [ ] 7개 팩터 가중치 시스템 (RR, T1, SL, NEAR, MOM, LIQ, TEC)
+  - [ ] 페널티 시스템 (과열, RSI 이탈, MACD 음수 등 7개)
+  - [ ] 정규화 유틸리티 (`pct_norm_pos`, `inv_dist_norm`)
+- [ ] `LiquidityGate` 시장별 설정
+  - [ ] KRX: KOSPI 200억/KOSDAQ 100억
+  - [ ] US: $100M (완화 $50M)
+- [ ] `ERS (Entry Ready Score)` 계산
+  - [ ] EBS + MACD slope + RSI band 조합
+- [ ] 스코어링 설정 테이블 (DB)
+
+**백엔드 - API**
+- [ ] `POST /api/v1/ranking/global` - 글로벌 랭킹 조회
+- [ ] `GET /api/v1/ranking/top?market=KR&n=10` - TOP N 조회
+- [ ] 스크리닝 API에 `global_score` 필드 추가
+
+**프론트엔드**
+- [ ] GlobalRanking.tsx 페이지
+- [ ] TOP 10 대시보드 위젯
+- [ ] 점수 구성 요소 시각화 (레이더 차트)
+
+### 6. 종목 상태 관리 (RouteState) ⭐ 신규
+
+**백엔드**
+- [ ] `RouteState` enum 정의 (trader-core)
+  - `Attack`, `Armed`, `Wait`, `Overheat`, `Neutral`
+- [ ] 상태 판정 로직 구현
+  - [ ] ATTACK: TTM Squeeze 해제 + 모멘텀 상승
+  - [ ] ARMED: 박스권 상단 + 거래량 증가
+  - [ ] OVERHEAT: 5일 수익률 > 15% 또는 RSI > 70
+- [ ] symbol_fundamental 테이블에 `route_state` 컬럼 추가
+- [ ] 스크리닝 응답에 `route_state` 포함
+
+**프론트엔드**
+- [ ] RouteState 뱃지 컴포넌트
+- [ ] 상태별 필터링 UI
+
+**알림 연동**
+- [ ] ATTACK 상태 전환 시 텔레그램 알림
+
+### 7. 호가 단위 관리 (Tick Size) ⭐ 신규
+
+**백엔드**
+- [ ] `TickSizeProvider` trait 정의 (trader-core)
+- [ ] 거래소별 구현
+  - [ ] `KrxTickSize`: 7단계 호가 단위
+  - [ ] `UsEquityTickSize`: 고정 $0.01
+  - [ ] `BinanceTickSize`: 심볼별 설정
+- [ ] `round_to_tick()` 유틸리티 함수
+- [ ] 주문 가격 유효성 검증 미들웨어
+
+**활용**
+- [ ] 목표가/손절가 자동 반올림
+- [ ] 슬리피지 계산 정확도 개선
+
+### 8. 구조적 피처 (Structural Features) ⭐ 신규
+
+**백엔드**
+- [ ] `StructuralFeatures` 구조체 정의 (trader-analytics)
+  - `low_trend`, `vol_quality`, `range_pos`, `dist_ma20`, `bb_width`, `rsi`
+- [ ] OHLCV 데이터로부터 피처 계산 로직
+- [ ] ML 파이프라인에 피처 추가
+- [ ] 스크리닝 필터 조건으로 활용
+
+**활용**
+- [ ] RouteState 판정 로직에 반영
+- [ ] GlobalScorer 모멘텀 점수에 반영
+
+### 9. ML 예측 활용 (선택적)
 
 - [ ] 전략에서 ML 예측 결과 사용
-- [ ] Docker ML 훈련 End-to-End 테스트
+- [ ] 구조적 피처 기반 모델 재훈련
+- [ ] ONNX 모델 추론 성능 최적화
 
 ---
 
@@ -136,6 +177,14 @@ cd frontend && npm run dev
 - [ ] Interactive Brokers
 - [ ] 키움증권
 
+### 외부 데이터 연동 (선택적)
+- [ ] 뉴스 수집
+  - [ ] Finnhub API 연동 (US)
+  - [ ] Yahoo Finance 뉴스 (Global)
+- [ ] 공시 수집
+  - [ ] SEC EDGAR 연동 (US)
+- [ ] 뉴스/공시 감성 분석 (LLM 연동)
+
 ### 인프라
 - [ ] Grafana 모니터링
 - [ ] 부하 테스트
@@ -166,6 +215,10 @@ cd frontend && npm run dev
 | ML (훈련 + ONNX 추론) | 95% |
 | 거래소 (Binance, KIS) | 85-95% |
 | 테스트 (258개 단위 + 28개 통합) | 완료 |
+| **Global Score 시스템** | 0% (신규) |
+| **RouteState 상태 관리** | 0% (신규) |
+| **Tick Size 관리** | 0% (신규) |
+| **구조적 피처** | 0% (신규) |
 
 > 상세 구조는 `CLAUDE.md` 참조
 

@@ -519,18 +519,22 @@ fn is_symbol_not_found_error(error_msg: &str) -> bool {
 /// 종목명 업데이트 (symbol_info 테이블).
 ///
 /// 종목명이 비어있거나 티커와 동일한 경우에만 업데이트합니다.
+/// CSV에서 이미 실제 이름(한글 등)이 설정된 경우에는 Yahoo Finance 영문 이름으로 덮어쓰지 않습니다.
 async fn update_symbol_name(
     pool: &PgPool,
     symbol_info_id: uuid::Uuid,
     name: &str,
 ) -> Result<(), sqlx::Error> {
-    // 현재 종목명이 티커와 같거나 비어있는 경우에만 업데이트
+    // 현재 종목명이 비어있거나 티커와 동일한 경우에만 업데이트
+    // - name IS NULL / name = '' / TRIM(name) = '' → 비어있음
+    // - name = ticker → CSV에서 이름 없이 등록된 경우 (ticker가 이름으로 사용됨)
+    // CSV에서 실제 이름(한글 등)이 설정된 경우에는 ticker와 다르므로 업데이트되지 않음
     sqlx::query(
         r#"
         UPDATE symbol_info
         SET name = $2, updated_at = NOW()
         WHERE id = $1
-          AND (name = '' OR name = ticker OR name IS NULL)
+          AND (name IS NULL OR name = '' OR TRIM(name) = '' OR name = ticker)
         "#,
     )
     .bind(symbol_info_id)

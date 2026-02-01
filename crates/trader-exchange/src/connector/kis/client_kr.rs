@@ -17,12 +17,13 @@
 use super::auth::KisOAuth;
 use super::config::{KisAccountType, KisEnvironment};
 use super::tr_id;
+use crate::retry::RetryConfig;
 use crate::ExchangeError;
 use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use trader_core::{ExecutionRecord, ExecutionHistory, Side, OrderStatusType, Symbol};
 
 /// KIS 국내 주식 REST API 클라이언트.
@@ -30,9 +31,14 @@ use trader_core::{ExecutionRecord, ExecutionHistory, Side, OrderStatusType, Symb
 /// `KisOAuth`를 `Arc`로 공유하여 동일한 `app_key`를 사용하는 여러 클라이언트가
 /// 토큰을 공유할 수 있습니다. KIS API는 토큰 발급을 1분에 1회로 제한하므로
 /// 토큰 공유가 필수적입니다.
+///
+/// # 재시도 로직
+/// 모든 API 호출에는 자동 재시도가 적용됩니다. 네트워크 오류, Rate Limit,
+/// 타임아웃 등 일시적 오류 발생 시 설정된 횟수만큼 재시도합니다.
 pub struct KisKrClient {
     oauth: Arc<KisOAuth>,
     client: Client,
+    retry_config: RetryConfig,
 }
 
 impl KisKrClient {
@@ -61,12 +67,28 @@ impl KisKrClient {
     /// # Errors
     /// HTTP 클라이언트 생성에 실패하면 `ExchangeError::NetworkError`를 반환합니다.
     pub fn with_shared_oauth(oauth: Arc<KisOAuth>) -> Result<Self, ExchangeError> {
+        Self::with_shared_oauth_and_retry(oauth, RetryConfig::default())
+    }
+
+    /// 공유된 OAuth와 재시도 설정으로 클라이언트 생성.
+    ///
+    /// # Arguments
+    /// * `oauth` - 공유 OAuth 인스턴스
+    /// * `retry_config` - 재시도 설정
+    pub fn with_shared_oauth_and_retry(
+        oauth: Arc<KisOAuth>,
+        retry_config: RetryConfig,
+    ) -> Result<Self, ExchangeError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(oauth.config().timeout_secs))
             .build()
             .map_err(|e| ExchangeError::NetworkError(format!("HTTP client 생성 실패: {}", e)))?;
 
-        Ok(Self { oauth, client })
+        Ok(Self {
+            oauth,
+            client,
+            retry_config,
+        })
     }
 
     /// 내부 OAuth 참조 반환 (토큰 캐싱용).
@@ -74,11 +96,221 @@ impl KisKrClient {
         &self.oauth
     }
 
+    /// 재시도 설정 변경.
+    pub fn set_retry_config(&mut self, config: RetryConfig) {
+        self.retry_config = config;
+    }
+
     /// 환경에 따른 적절한 tr_id 반환.
     fn get_tr_id<'a>(&self, real_id: &'a str, paper_id: &'a str) -> &'a str {
         match self.oauth.config().environment {
             KisEnvironment::Real => real_id,
             KisEnvironment::Paper => paper_id,
+        }
+    }
+
+    /// 재시도 가능한 GET 요청 실행.
+    ///
+    /// 네트워크 오류, Rate Limit 등 일시적 오류 발생 시 자동 재시도합니다.
+    async fn execute_get_with_retry<T, F>(
+        &self,
+        url: &str,
+        tr_id: &str,
+        query: &[(&str, &str)],
+        parse_response: F,
+    ) -> Result<T, ExchangeError>
+    where
+        F: Fn(&str) -> Result<T, ExchangeError>,
+    {
+        let mut attempt = 0;
+
+        loop {
+            // 매 시도마다 새 토큰 빌드 (토큰 갱신 지원)
+            let headers = self.oauth.build_headers(tr_id, None).await?;
+
+            let result = self
+                .client
+                .get(url)
+                .headers(headers)
+                .query(query)
+                .send()
+                .await;
+
+            match result {
+                Ok(response) => {
+                    let status = response.status();
+                    let body = response
+                        .text()
+                        .await
+                        .map_err(|e| ExchangeError::NetworkError(e.to_string()))?;
+
+                    if status.is_success() {
+                        return parse_response(&body);
+                    }
+
+                    // HTTP 에러 코드별 처리
+                    let err = if status.as_u16() == 429 {
+                        ExchangeError::RateLimited
+                    } else if status.as_u16() == 401 {
+                        ExchangeError::Unauthorized(body.clone())
+                    } else {
+                        ExchangeError::ApiError {
+                            code: status.as_u16() as i32,
+                            message: body,
+                        }
+                    };
+
+                    if err.is_retryable() && attempt < self.retry_config.max_retries {
+                        let delay = err
+                            .retry_delay_ms()
+                            .map(std::time::Duration::from_millis)
+                            .unwrap_or(self.retry_config.base_delay);
+
+                        warn!(
+                            attempt = attempt + 1,
+                            max_retries = self.retry_config.max_retries,
+                            delay_ms = delay.as_millis(),
+                            error = %err,
+                            "KIS API 요청 재시도 대기"
+                        );
+
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+
+                    return Err(err);
+                }
+                Err(e) => {
+                    let err = if e.is_timeout() {
+                        ExchangeError::Timeout(e.to_string())
+                    } else {
+                        ExchangeError::NetworkError(e.to_string())
+                    };
+
+                    if err.is_retryable() && attempt < self.retry_config.max_retries {
+                        let delay = err
+                            .retry_delay_ms()
+                            .map(std::time::Duration::from_millis)
+                            .unwrap_or(self.retry_config.base_delay);
+
+                        warn!(
+                            attempt = attempt + 1,
+                            max_retries = self.retry_config.max_retries,
+                            delay_ms = delay.as_millis(),
+                            error = %err,
+                            "KIS API 요청 재시도 대기"
+                        );
+
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    /// 재시도 가능한 POST 요청 실행.
+    async fn execute_post_with_retry<T, F>(
+        &self,
+        url: &str,
+        tr_id: &str,
+        hash_body: Option<&str>,
+        body: &serde_json::Value,
+        parse_response: F,
+    ) -> Result<T, ExchangeError>
+    where
+        F: Fn(&str) -> Result<T, ExchangeError>,
+    {
+        let mut attempt = 0;
+
+        loop {
+            let headers = self.oauth.build_headers(tr_id, hash_body).await?;
+
+            let result = self
+                .client
+                .post(url)
+                .headers(headers)
+                .json(body)
+                .send()
+                .await;
+
+            match result {
+                Ok(response) => {
+                    let status = response.status();
+                    let resp_body = response
+                        .text()
+                        .await
+                        .map_err(|e| ExchangeError::NetworkError(e.to_string()))?;
+
+                    if status.is_success() {
+                        return parse_response(&resp_body);
+                    }
+
+                    let err = if status.as_u16() == 429 {
+                        ExchangeError::RateLimited
+                    } else if status.as_u16() == 401 {
+                        ExchangeError::Unauthorized(resp_body.clone())
+                    } else {
+                        ExchangeError::ApiError {
+                            code: status.as_u16() as i32,
+                            message: resp_body,
+                        }
+                    };
+
+                    if err.is_retryable() && attempt < self.retry_config.max_retries {
+                        let delay = err
+                            .retry_delay_ms()
+                            .map(std::time::Duration::from_millis)
+                            .unwrap_or(self.retry_config.base_delay);
+
+                        warn!(
+                            attempt = attempt + 1,
+                            max_retries = self.retry_config.max_retries,
+                            delay_ms = delay.as_millis(),
+                            error = %err,
+                            "KIS API POST 요청 재시도 대기"
+                        );
+
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+
+                    return Err(err);
+                }
+                Err(e) => {
+                    let err = if e.is_timeout() {
+                        ExchangeError::Timeout(e.to_string())
+                    } else {
+                        ExchangeError::NetworkError(e.to_string())
+                    };
+
+                    if err.is_retryable() && attempt < self.retry_config.max_retries {
+                        let delay = err
+                            .retry_delay_ms()
+                            .map(std::time::Duration::from_millis)
+                            .unwrap_or(self.retry_config.base_delay);
+
+                        warn!(
+                            attempt = attempt + 1,
+                            max_retries = self.retry_config.max_retries,
+                            delay_ms = delay.as_millis(),
+                            error = %err,
+                            "KIS API POST 요청 재시도 대기"
+                        );
+
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+
+                    return Err(err);
+                }
+            }
         }
     }
 
@@ -90,6 +322,9 @@ impl KisKrClient {
     ///
     /// # 인자
     /// * `stock_code` - 종목코드 (예: "005930" 삼성전자)
+    ///
+    /// # 재시도
+    /// 네트워크 오류, Rate Limit 시 자동 재시도 (설정에 따름)
     pub async fn get_price(&self, stock_code: &str) -> Result<KrStockPrice, ExchangeError> {
         let tr_id = self.get_tr_id(tr_id::KR_PRICE_REAL, tr_id::KR_PRICE_PAPER);
         let url = format!(
@@ -97,44 +332,27 @@ impl KisKrClient {
             self.oauth.config().rest_base_url()
         );
 
-        let headers = self.oauth.build_headers(tr_id, None).await?;
+        self.execute_get_with_retry(
+            &url,
+            tr_id,
+            &[("FID_COND_MRKT_DIV_CODE", "J"), ("FID_INPUT_ISCD", stock_code)],
+            |body| {
+                debug!("KR price response: {}", body);
 
-        let response = self
-            .client
-            .get(&url)
-            .headers(headers)
-            .query(&[("FID_COND_MRKT_DIV_CODE", "J"), ("FID_INPUT_ISCD", stock_code)])
-            .send()
-            .await
-            .map_err(|e| ExchangeError::NetworkError(e.to_string()))?;
+                let resp: KisKrPriceResponse = serde_json::from_str(body)
+                    .map_err(|e| ExchangeError::ParseError(format!("Failed to parse price response: {}", e)))?;
 
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|e| ExchangeError::NetworkError(e.to_string()))?;
+                if resp.rt_cd != "0" {
+                    return Err(ExchangeError::ApiError {
+                        code: resp.msg_cd.parse().unwrap_or(-1),
+                        message: resp.msg1,
+                    });
+                }
 
-        if !status.is_success() {
-            error!("KR price inquiry failed: {} - {}", status, body);
-            return Err(ExchangeError::ApiError {
-                code: status.as_u16() as i32,
-                message: body,
-            });
-        }
-
-        debug!("KR price response: {}", body);
-
-        let resp: KisKrPriceResponse = serde_json::from_str(&body)
-            .map_err(|e| ExchangeError::ParseError(format!("Failed to parse price response: {}", e)))?;
-
-        if resp.rt_cd != "0" {
-            return Err(ExchangeError::ApiError {
-                code: resp.msg_cd.parse().unwrap_or(-1),
-                message: resp.msg1,
-            });
-        }
-
-        Ok(resp.output)
+                Ok(resp.output)
+            },
+        )
+        .await
     }
 
     /// 주식현재가 호가 조회.

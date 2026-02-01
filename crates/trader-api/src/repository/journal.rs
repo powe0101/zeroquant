@@ -1,6 +1,14 @@
 //! 매매일지 저장소.
 //!
 //! 체결 내역(trade_executions)과 포지션 스냅샷(position_snapshots)을 관리합니다.
+//!
+//! # 비용 기준 계산
+//!
+//! - **가중평균 매입가**: 물타기(추가 매수) 시 자동 계산
+//! - **FIFO 실현손익**: 선입선출 방식으로 매도 시 실현 손익 계산
+//!
+//! [`calculate_cost_basis`](JournalRepository::calculate_cost_basis) 메서드로 특정 종목의
+//! 비용 기준을 계산할 수 있습니다.
 
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -8,6 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
+
+use super::cost_basis::{self, CostBasisSummary, CostBasisTracker};
 
 // =====================================================
 // Trade Execution 타입
@@ -990,4 +1000,146 @@ impl JournalRepository {
         .fetch_all(pool)
         .await
     }
+
+    // =====================================================
+    // 비용 기준 계산 (물타기 평균가, FIFO 실현손익)
+    // =====================================================
+
+    /// 특정 종목의 비용 기준 계산.
+    ///
+    /// 체결 내역을 분석하여 가중평균 매입가와 FIFO 기반 실현손익을 계산합니다.
+    ///
+    /// # Arguments
+    /// * `pool` - 데이터베이스 커넥션 풀
+    /// * `credential_id` - 계정 ID
+    /// * `symbol` - 종목 심볼
+    /// * `current_price` - 현재가 (미실현 손익 계산용, 선택)
+    ///
+    /// # Returns
+    /// 비용 기준 요약 정보 (가중평균 매입가, 실현/미실현 손익 등)
+    pub async fn calculate_cost_basis(
+        pool: &PgPool,
+        credential_id: Uuid,
+        symbol: &str,
+        current_price: Option<Decimal>,
+    ) -> Result<CostBasisSummary, sqlx::Error> {
+        // 해당 종목의 모든 체결 내역 조회
+        let executions = sqlx::query_as::<_, ExecutionRow>(
+            r#"
+            SELECT id, symbol, side, quantity, price,
+                   COALESCE(fee, 0) as fee, executed_at
+            FROM v_journal_executions
+            WHERE credential_id = $1 AND symbol = $2
+            ORDER BY executed_at ASC
+            "#,
+        )
+        .bind(credential_id)
+        .bind(symbol)
+        .fetch_all(pool)
+        .await?;
+
+        // cost_basis 모듈의 TradeExecution으로 변환
+        let trade_executions: Vec<cost_basis::TradeExecution> = executions
+            .into_iter()
+            .map(|e| cost_basis::TradeExecution {
+                id: e.id,
+                symbol: e.symbol,
+                side: e.side,
+                quantity: e.quantity,
+                price: e.price,
+                fee: e.fee,
+                executed_at: e.executed_at,
+            })
+            .collect();
+
+        // 비용 기준 추적기 생성
+        let tracker = cost_basis::build_tracker_from_executions(symbol, trade_executions);
+
+        Ok(tracker.summary(current_price))
+    }
+
+    /// 모든 종목의 비용 기준 계산.
+    ///
+    /// 보유 중인 모든 종목의 비용 기준을 한 번에 계산합니다.
+    pub async fn calculate_all_cost_basis(
+        pool: &PgPool,
+        credential_id: Uuid,
+        current_prices: &std::collections::HashMap<String, Decimal>,
+    ) -> Result<Vec<CostBasisSummary>, sqlx::Error> {
+        // 거래한 모든 종목 조회
+        let symbols: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT symbol
+            FROM v_journal_executions
+            WHERE credential_id = $1
+            "#,
+        )
+        .bind(credential_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut summaries = Vec::new();
+
+        for (symbol,) in symbols {
+            let current_price = current_prices.get(&symbol).copied();
+            let summary = Self::calculate_cost_basis(pool, credential_id, &symbol, current_price).await?;
+
+            // 보유 수량이 있는 종목만 포함
+            if summary.total_quantity > Decimal::ZERO {
+                summaries.push(summary);
+            }
+        }
+
+        Ok(summaries)
+    }
+
+    /// 비용 기준 추적기 반환 (상세 분석용).
+    ///
+    /// 로트별 상세 정보가 필요한 경우 사용합니다.
+    pub async fn get_cost_basis_tracker(
+        pool: &PgPool,
+        credential_id: Uuid,
+        symbol: &str,
+    ) -> Result<CostBasisTracker, sqlx::Error> {
+        let executions = sqlx::query_as::<_, ExecutionRow>(
+            r#"
+            SELECT id, symbol, side, quantity, price,
+                   COALESCE(fee, 0) as fee, executed_at
+            FROM v_journal_executions
+            WHERE credential_id = $1 AND symbol = $2
+            ORDER BY executed_at ASC
+            "#,
+        )
+        .bind(credential_id)
+        .bind(symbol)
+        .fetch_all(pool)
+        .await?;
+
+        let trade_executions: Vec<cost_basis::TradeExecution> = executions
+            .into_iter()
+            .map(|e| cost_basis::TradeExecution {
+                id: e.id,
+                symbol: e.symbol,
+                side: e.side,
+                quantity: e.quantity,
+                price: e.price,
+                fee: e.fee,
+                executed_at: e.executed_at,
+            })
+            .collect();
+
+        Ok(cost_basis::build_tracker_from_executions(symbol, trade_executions))
+    }
+}
+
+/// 내부 체결 내역 행 (비용 기준 계산용).
+#[derive(Debug, FromRow)]
+struct ExecutionRow {
+    id: Uuid,
+    symbol: String,
+    side: String,
+    quantity: Decimal,
+    price: Decimal,
+    fee: Decimal,
+    executed_at: DateTime<Utc>,
 }

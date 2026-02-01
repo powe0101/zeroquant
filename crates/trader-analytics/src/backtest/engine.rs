@@ -42,6 +42,7 @@ use thiserror::Error;
 use trader_core::{Kline, MarketData, Side, Signal, SignalType, Symbol, Trade};
 use uuid::Uuid;
 
+use crate::backtest::slippage::SlippageModel;
 use crate::performance::{EquityPoint, PerformanceMetrics, PerformanceTracker, RoundTrip};
 
 /// 백테스트 오류
@@ -78,34 +79,80 @@ pub type BacktestResult<T> = Result<T, BacktestError>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestConfig {
     /// 초기 자본금
+    #[serde(default = "default_initial_capital")]
     pub initial_capital: Decimal,
 
     /// 거래 수수료율 (예: 0.001 = 0.1%)
+    #[serde(default = "default_commission_rate")]
     pub commission_rate: Decimal,
 
     /// 슬리피지율 (예: 0.0005 = 0.05%)
+    ///
+    /// 참고: slippage_model이 설정되면 무시됩니다.
+    #[serde(default = "default_slippage_rate")]
     pub slippage_rate: Decimal,
 
+    /// 동적 슬리피지 모델 (Optional)
+    ///
+    /// 설정되면 slippage_rate 대신 이 모델을 사용합니다.
+    /// Fixed, Linear, VolatilityBased, Tiered 모델 지원.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slippage_model: Option<SlippageModel>,
+
     /// 최대 동시 포지션 수
+    #[serde(default = "default_max_positions")]
     pub max_positions: usize,
 
     /// 포지션당 최대 자본 비율 (예: 0.1 = 10%)
+    #[serde(default = "default_max_position_size_pct")]
     pub max_position_size_pct: Decimal,
 
     /// 무위험 이자율 (연율화 계산용)
+    #[serde(default = "default_risk_free_rate")]
     pub risk_free_rate: f64,
 
     /// 거래소 이름 (시뮬레이션용)
+    #[serde(default = "default_exchange_name")]
     pub exchange_name: String,
 
     /// 틱 데이터 사용 여부 (캔들 내 가격 변동 시뮬레이션)
+    #[serde(default)]
     pub use_tick_simulation: bool,
 
     /// 마진 거래 허용 여부
+    #[serde(default)]
     pub allow_margin: bool,
 
     /// 숏 포지션 허용 여부
+    #[serde(default)]
     pub allow_short: bool,
+}
+
+// 설정 기본값 함수들 (serde default용)
+fn default_initial_capital() -> Decimal { Decimal::new(10_000_000, 0) }
+fn default_commission_rate() -> Decimal { Decimal::new(1, 3) }  // 0.1%
+fn default_slippage_rate() -> Decimal { Decimal::new(5, 4) }    // 0.05%
+fn default_max_positions() -> usize { 10 }
+fn default_max_position_size_pct() -> Decimal { Decimal::new(2, 1) }  // 20%
+fn default_risk_free_rate() -> f64 { 0.05 }  // 5%
+fn default_exchange_name() -> String { "backtest".to_string() }
+
+impl Default for BacktestConfig {
+    fn default() -> Self {
+        Self {
+            initial_capital: default_initial_capital(),
+            commission_rate: default_commission_rate(),
+            slippage_rate: default_slippage_rate(),
+            slippage_model: None,
+            max_positions: default_max_positions(),
+            max_position_size_pct: default_max_position_size_pct(),
+            risk_free_rate: default_risk_free_rate(),
+            exchange_name: default_exchange_name(),
+            use_tick_simulation: false,
+            allow_margin: false,
+            allow_short: false,
+        }
+    }
 }
 
 impl BacktestConfig {
@@ -113,15 +160,7 @@ impl BacktestConfig {
     pub fn new(initial_capital: Decimal) -> Self {
         Self {
             initial_capital,
-            commission_rate: Decimal::new(1, 3),      // 0.1%
-            slippage_rate: Decimal::new(5, 4),        // 0.05%
-            max_positions: 10,
-            max_position_size_pct: Decimal::new(2, 1), // 20%
-            risk_free_rate: 0.05,
-            exchange_name: "backtest".to_string(),
-            use_tick_simulation: false,
-            allow_margin: false,
-            allow_short: false,
+            ..Default::default()
         }
     }
 
@@ -131,9 +170,36 @@ impl BacktestConfig {
         self
     }
 
-    /// 슬리피지율 설정
+    /// 슬리피지율 설정 (고정 비율)
+    ///
+    /// 참고: with_slippage_model()로 동적 모델을 설정하면 무시됩니다.
     pub fn with_slippage_rate(mut self, rate: Decimal) -> Self {
         self.slippage_rate = rate;
+        self
+    }
+
+    /// 동적 슬리피지 모델 설정
+    ///
+    /// 설정되면 slippage_rate 대신 이 모델을 사용합니다.
+    ///
+    /// # 예시
+    /// ```rust,ignore
+    /// use trader_analytics::backtest::{BacktestConfig, SlippageModel};
+    ///
+    /// // 변동성 기반 모델 사용
+    /// let config = BacktestConfig::default()
+    ///     .with_slippage_model(SlippageModel::volatility_based(0.5));
+    ///
+    /// // 구간별 차등 모델 사용
+    /// let config = BacktestConfig::default()
+    ///     .with_slippage_model(SlippageModel::tiered(vec![
+    ///         (dec!(10000), dec!(0.0003)),
+    ///         (dec!(100000), dec!(0.0005)),
+    ///         (dec!(1000000), dec!(0.001)),
+    ///     ]));
+    /// ```
+    pub fn with_slippage_model(mut self, model: SlippageModel) -> Self {
+        self.slippage_model = Some(model);
         self
     }
 
@@ -179,12 +245,6 @@ impl BacktestConfig {
             ));
         }
         Ok(())
-    }
-}
-
-impl Default for BacktestConfig {
-    fn default() -> Self {
-        Self::new(Decimal::new(10_000_000, 0)) // 1천만원
     }
 }
 

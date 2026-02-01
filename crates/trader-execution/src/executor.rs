@@ -5,13 +5,17 @@
 //! - 주문 라우팅 및 실행
 //! - OrderManager를 통한 주문 생명주기 관리
 //! - PositionTracker를 통한 포지션 추적
+//! - 브라켓 주문 (손절/익절) 자동 관리
+//! - OCO(One-Cancels-Other) 주문 관리
 //! - 실행 추적 및 보고
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
 use trader_core::{Order, OrderRequest, OrderStatus, OrderStatusType, OrderType, Position, Side, Signal, SignalType, TimeInForce};
 use trader_risk::RiskManager;
 use uuid::Uuid;
@@ -39,6 +43,276 @@ pub enum ExecutionError {
 
     #[error("Position not found: {0}")]
     PositionNotFound(String),
+
+    #[error("Bracket order error: {0}")]
+    BracketOrderError(String),
+}
+
+// ==================== 브라켓 주문 관리 ====================
+
+/// 브라켓 주문 (메인 주문 + 손절/익절).
+///
+/// 메인 주문 체결 시 손절과 익절 주문이 자동으로 제출되며,
+/// 둘 중 하나가 체결되면 다른 하나는 자동 취소됩니다 (OCO).
+#[derive(Debug, Clone)]
+pub struct BracketOrder {
+    /// 메인 주문 ID.
+    pub parent_order_id: Uuid,
+    /// 손절 주문 요청.
+    pub stop_loss: Option<OrderRequest>,
+    /// 손절 주문 ID (제출 후 설정).
+    pub stop_loss_id: Option<Uuid>,
+    /// 익절 주문 요청.
+    pub take_profit: Option<OrderRequest>,
+    /// 익절 주문 ID (제출 후 설정).
+    pub take_profit_id: Option<Uuid>,
+    /// 메인 주문 체결 여부.
+    pub parent_filled: bool,
+    /// 브라켓 주문 활성 상태.
+    pub active: bool,
+}
+
+impl BracketOrder {
+    /// 새로운 브라켓 주문 생성.
+    pub fn new(
+        parent_order_id: Uuid,
+        stop_loss: Option<OrderRequest>,
+        take_profit: Option<OrderRequest>,
+    ) -> Self {
+        Self {
+            parent_order_id,
+            stop_loss,
+            stop_loss_id: None,
+            take_profit,
+            take_profit_id: None,
+            parent_filled: false,
+            active: true,
+        }
+    }
+
+    /// 손절 또는 익절 주문 여부 확인.
+    pub fn has_child_orders(&self) -> bool {
+        self.stop_loss.is_some() || self.take_profit.is_some()
+    }
+
+    /// 주문 ID가 이 브라켓의 자식 주문인지 확인.
+    pub fn is_child_order(&self, order_id: Uuid) -> bool {
+        self.stop_loss_id == Some(order_id) || self.take_profit_id == Some(order_id)
+    }
+
+    /// 손절 주문 ID 설정.
+    pub fn set_stop_loss_id(&mut self, id: Uuid) {
+        self.stop_loss_id = Some(id);
+    }
+
+    /// 익절 주문 ID 설정.
+    pub fn set_take_profit_id(&mut self, id: Uuid) {
+        self.take_profit_id = Some(id);
+    }
+
+    /// 브라켓 비활성화.
+    pub fn deactivate(&mut self) {
+        self.active = false;
+    }
+}
+
+/// 브라켓 주문 관리자.
+///
+/// 메인 주문과 연결된 손절/익절 주문을 추적하고,
+/// OCO(One-Cancels-Other) 로직을 관리합니다.
+#[derive(Debug, Default)]
+pub struct BracketOrderManager {
+    /// 메인 주문 ID -> 브라켓 주문 매핑.
+    brackets: HashMap<Uuid, BracketOrder>,
+    /// 자식 주문 ID -> 부모 주문 ID 역참조.
+    child_to_parent: HashMap<Uuid, Uuid>,
+}
+
+impl BracketOrderManager {
+    /// 새로운 브라켓 주문 관리자 생성.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 브라켓 주문 등록.
+    ///
+    /// # Arguments
+    /// * `parent_order_id` - 메인 주문 ID
+    /// * `stop_loss` - 손절 주문 요청
+    /// * `take_profit` - 익절 주문 요청
+    pub fn register_bracket(
+        &mut self,
+        parent_order_id: Uuid,
+        stop_loss: Option<OrderRequest>,
+        take_profit: Option<OrderRequest>,
+    ) {
+        if stop_loss.is_none() && take_profit.is_none() {
+            return; // 손절/익절 없으면 등록하지 않음
+        }
+
+        let bracket = BracketOrder::new(parent_order_id, stop_loss, take_profit);
+        self.brackets.insert(parent_order_id, bracket);
+
+        debug!(
+            parent_order_id = %parent_order_id,
+            "브라켓 주문 등록됨"
+        );
+    }
+
+    /// 메인 주문 체결 처리.
+    ///
+    /// 메인 주문이 체결되면 손절/익절 주문을 반환하여 제출할 수 있게 합니다.
+    ///
+    /// # Returns
+    /// * `Some((stop_loss, take_profit))` - 제출할 손절/익절 주문
+    /// * `None` - 브라켓이 없거나 이미 처리됨
+    pub fn on_parent_filled(
+        &mut self,
+        parent_order_id: Uuid,
+    ) -> Option<(Option<OrderRequest>, Option<OrderRequest>)> {
+        let bracket = self.brackets.get_mut(&parent_order_id)?;
+
+        if bracket.parent_filled || !bracket.active {
+            return None;
+        }
+
+        bracket.parent_filled = true;
+
+        info!(
+            parent_order_id = %parent_order_id,
+            has_stop_loss = bracket.stop_loss.is_some(),
+            has_take_profit = bracket.take_profit.is_some(),
+            "메인 주문 체결, 브라켓 주문 제출 준비"
+        );
+
+        Some((bracket.stop_loss.clone(), bracket.take_profit.clone()))
+    }
+
+    /// 자식 주문 ID 등록 (제출 후 호출).
+    pub fn register_child_order(
+        &mut self,
+        parent_order_id: Uuid,
+        child_order_id: Uuid,
+        is_stop_loss: bool,
+    ) {
+        if let Some(bracket) = self.brackets.get_mut(&parent_order_id) {
+            if is_stop_loss {
+                bracket.set_stop_loss_id(child_order_id);
+            } else {
+                bracket.set_take_profit_id(child_order_id);
+            }
+            self.child_to_parent.insert(child_order_id, parent_order_id);
+        }
+    }
+
+    /// 자식 주문 체결 시 OCO 처리.
+    ///
+    /// 손절 또는 익절 중 하나가 체결되면, 다른 하나의 주문 ID를 반환하여 취소할 수 있게 합니다.
+    ///
+    /// # Returns
+    /// * `Some(order_id_to_cancel)` - 취소할 상대 주문 ID
+    /// * `None` - OCO 대상 없음
+    pub fn on_child_filled(&mut self, child_order_id: Uuid) -> Option<Uuid> {
+        let parent_id = self.child_to_parent.get(&child_order_id).copied()?;
+        let bracket = self.brackets.get_mut(&parent_id)?;
+
+        if !bracket.active {
+            return None;
+        }
+
+        // 체결된 것이 손절인지 익절인지 확인
+        let (filled_type, other_id) = if bracket.stop_loss_id == Some(child_order_id) {
+            ("손절", bracket.take_profit_id)
+        } else if bracket.take_profit_id == Some(child_order_id) {
+            ("익절", bracket.stop_loss_id)
+        } else {
+            return None;
+        };
+
+        bracket.deactivate();
+
+        info!(
+            parent_order_id = %parent_id,
+            filled_type = filled_type,
+            cancel_order_id = ?other_id,
+            "브라켓 {} 체결, OCO 취소 처리", filled_type
+        );
+
+        // 상대 주문이 있으면 취소 대상으로 반환
+        other_id
+    }
+
+    /// 특정 부모 주문의 브라켓 조회.
+    pub fn get_bracket(&self, parent_order_id: Uuid) -> Option<&BracketOrder> {
+        self.brackets.get(&parent_order_id)
+    }
+
+    /// 특정 자식 주문의 부모 주문 ID 조회.
+    pub fn get_parent_id(&self, child_order_id: Uuid) -> Option<Uuid> {
+        self.child_to_parent.get(&child_order_id).copied()
+    }
+
+    /// 브라켓 주문 제거.
+    pub fn remove_bracket(&mut self, parent_order_id: Uuid) {
+        if let Some(bracket) = self.brackets.remove(&parent_order_id) {
+            if let Some(sl_id) = bracket.stop_loss_id {
+                self.child_to_parent.remove(&sl_id);
+            }
+            if let Some(tp_id) = bracket.take_profit_id {
+                self.child_to_parent.remove(&tp_id);
+            }
+        }
+    }
+
+    /// 활성 브라켓 수 조회.
+    pub fn active_count(&self) -> usize {
+        self.brackets.values().filter(|b| b.active).count()
+    }
+}
+
+/// 브라켓 체결 처리 결과.
+///
+/// `handle_fill_with_brackets()` 호출 후 반환되며,
+/// 호출자가 적절한 거래소에 주문을 제출하거나 취소해야 합니다.
+#[derive(Debug, Clone)]
+pub enum BracketFillResult {
+    /// 추가 작업 없음.
+    None,
+
+    /// 브라켓 주문 제출 필요 (메인 주문 체결 시).
+    SubmitBracket {
+        /// 메인 주문 ID.
+        parent_order_id: Uuid,
+        /// 손절 주문 (있는 경우).
+        stop_loss: Option<OrderRequest>,
+        /// 익절 주문 (있는 경우).
+        take_profit: Option<OrderRequest>,
+    },
+
+    /// OCO 주문 취소 필요 (손절 또는 익절 체결 시).
+    CancelOther {
+        /// 체결된 주문 ID.
+        filled_order_id: Uuid,
+        /// 취소할 상대 주문 ID.
+        cancel_order_id: Uuid,
+    },
+}
+
+impl BracketFillResult {
+    /// 브라켓 제출이 필요한지 확인.
+    pub fn needs_bracket_submit(&self) -> bool {
+        matches!(self, BracketFillResult::SubmitBracket { .. })
+    }
+
+    /// OCO 취소가 필요한지 확인.
+    pub fn needs_cancel(&self) -> bool {
+        matches!(self, BracketFillResult::CancelOther { .. })
+    }
+
+    /// 추가 작업이 필요한지 확인.
+    pub fn has_action(&self) -> bool {
+        !matches!(self, BracketFillResult::None)
+    }
 }
 
 /// Signal 변환 설정.
@@ -278,6 +552,12 @@ impl SignalConverter {
 /// - RiskManager: 리스크 한도에 대해 주문 검증
 /// - OrderManager: 주문 생명주기 추적 (생성 -> 체결 -> 완료)
 /// - PositionTracker: 포지션 관리 및 손익 계산
+/// - BracketOrderManager: 브라켓 주문 (손절/익절) 관리
+///
+/// # 거래소 중립성
+/// 이 executor는 거래소에 독립적으로 설계되었습니다.
+/// 실제 주문 제출은 호출자가 적절한 거래소 커넥터를 통해 수행해야 합니다.
+/// `handle_fill_with_brackets()`는 제출할 브라켓 주문을 반환합니다.
 pub struct OrderExecutor {
     /// Signal 변환기
     converter: SignalConverter,
@@ -287,6 +567,8 @@ pub struct OrderExecutor {
     order_manager: Arc<RwLock<OrderManager>>,
     /// 포지션 관리를 위한 포지션 추적기
     position_tracker: Arc<RwLock<PositionTracker>>,
+    /// 브라켓 주문 관리자
+    bracket_manager: Arc<RwLock<BracketOrderManager>>,
     /// 실행 설정
     config: ConversionConfig,
     /// 거래소 식별자
@@ -307,6 +589,7 @@ impl OrderExecutor {
             risk_manager,
             order_manager,
             position_tracker,
+            bracket_manager: Arc::new(RwLock::new(BracketOrderManager::new())),
             config,
             exchange,
         }
@@ -431,6 +714,18 @@ impl OrderExecutor {
             }
         }
 
+        // 브라켓 주문 등록 (손절/익절이 있는 경우)
+        if let Some(order_id) = result.order_id {
+            if result.stop_loss.is_some() || result.take_profit.is_some() {
+                let mut bracket_manager = self.bracket_manager.write().await;
+                bracket_manager.register_bracket(
+                    order_id,
+                    result.stop_loss.clone(),
+                    result.take_profit.clone(),
+                );
+            }
+        }
+
         result
     }
 
@@ -507,11 +802,90 @@ impl OrderExecutor {
             // apply_fill은 새 포지션과 기존 포지션 모두 처리
             if let Err(e) = position_tracker.apply_fill(&order, &fill) {
                 // 오류 로그만 남기고 실패 처리하지 않음 - 포지션이 이미 청산되었을 수 있음
-                tracing::warn!("Failed to apply fill to position: {}", e);
+                warn!("Failed to apply fill to position: {}", e);
             }
         }
 
         Ok(())
+    }
+
+    /// 거래소로부터 주문 체결 처리 (브라켓 주문 포함).
+    ///
+    /// 기본 `handle_fill`에 추가로 브라켓 주문 관리를 수행합니다.
+    /// 메인 주문 체결 시 손절/익절 주문을 반환하고,
+    /// 손절/익절 체결 시 OCO 취소 대상을 반환합니다.
+    ///
+    /// # Returns
+    /// * `BracketFillResult` - 제출할 브라켓 주문 또는 취소할 주문 정보
+    ///
+    /// # 거래소 중립성
+    /// 반환된 주문은 호출자가 적절한 거래소 커넥터를 통해 제출/취소해야 합니다.
+    pub async fn handle_fill_with_brackets(
+        &self,
+        order_id: Uuid,
+        fill: OrderFill,
+        is_complete: bool,
+    ) -> Result<BracketFillResult, ExecutionError> {
+        // 기본 체결 처리
+        self.handle_fill(order_id, fill.clone(), is_complete).await?;
+
+        // 완전 체결이 아니면 브라켓 처리 안 함
+        if !is_complete {
+            return Ok(BracketFillResult::None);
+        }
+
+        // 브라켓 주문 확인
+        let mut bracket_manager = self.bracket_manager.write().await;
+
+        // 1. 메인 주문 체결인지 확인
+        if let Some((stop_loss, take_profit)) = bracket_manager.on_parent_filled(order_id) {
+            info!(
+                order_id = %order_id,
+                has_stop_loss = stop_loss.is_some(),
+                has_take_profit = take_profit.is_some(),
+                "메인 주문 체결, 브라켓 주문 제출 필요"
+            );
+            return Ok(BracketFillResult::SubmitBracket {
+                parent_order_id: order_id,
+                stop_loss,
+                take_profit,
+            });
+        }
+
+        // 2. 자식 주문(손절/익절) 체결인지 확인 -> OCO 처리
+        if let Some(cancel_order_id) = bracket_manager.on_child_filled(order_id) {
+            info!(
+                filled_order_id = %order_id,
+                cancel_order_id = %cancel_order_id,
+                "브라켓 주문 체결, OCO 취소 필요"
+            );
+            return Ok(BracketFillResult::CancelOther {
+                filled_order_id: order_id,
+                cancel_order_id,
+            });
+        }
+
+        Ok(BracketFillResult::None)
+    }
+
+    /// 브라켓 자식 주문 ID 등록.
+    ///
+    /// 손절/익절 주문을 거래소에 제출한 후 호출하여
+    /// 내부 주문 ID를 등록합니다.
+    pub async fn register_bracket_child(
+        &self,
+        parent_order_id: Uuid,
+        child_order_id: Uuid,
+        is_stop_loss: bool,
+    ) {
+        let mut bracket_manager = self.bracket_manager.write().await;
+        bracket_manager.register_child_order(parent_order_id, child_order_id, is_stop_loss);
+    }
+
+    /// 활성 브라켓 주문 수 조회.
+    pub async fn active_bracket_count(&self) -> usize {
+        let bracket_manager = self.bracket_manager.read().await;
+        bracket_manager.active_count()
     }
 
     /// 주문 취소.

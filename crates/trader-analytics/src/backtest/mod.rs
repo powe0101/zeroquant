@@ -7,7 +7,10 @@
 //! - [`BacktestConfig`]: 백테스트 설정 (초기 자본, 수수료, 슬리피지 등)
 //! - [`BacktestEngine`]: 백테스트 실행 엔진
 //! - [`BacktestReport`]: 백테스트 결과 리포트
+//! - [`SlippageModel`]: 동적 슬리피지 모델 (Fixed/Linear/VolatilityBased/Tiered)
 
 pub mod engine;
+pub mod slippage;
 
 pub use engine::{BacktestConfig, BacktestEngine, BacktestError, BacktestReport, BacktestResult};
+pub use slippage::{SlippageModel, SlippageResult, SlippageTier};

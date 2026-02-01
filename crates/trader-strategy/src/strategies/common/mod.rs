@@ -6,10 +6,12 @@
 //! - **모멘텀**: 자산 배분 전략을 위한 다기간 모멘텀 스코어링
 //! - **리밸런싱**: 포트폴리오 리밸런싱 계산
 //! - **serde_helpers**: SDUI와 전략 설정 간 타입 변환
+//! - **position_sync**: 거래소 중립 포지션 상태 동기화
 //! - **시그널**: 공통 시그널 생성 패턴 (추후 지원 예정)
 
 pub mod defaults;
 pub mod momentum;
+pub mod position_sync;
 pub mod rebalance;
 pub mod serde_helpers;
 
@@ -17,6 +19,8 @@ pub use momentum::{
     MomentumCalculator, MomentumConfig, MomentumResult, MomentumScore,
     WeightedMomentumConfig,
 };
+
+pub use position_sync::{FillResult, PositionSync, SyncedPosition};
 
 pub use rebalance::{
     RebalanceCalculator, RebalanceConfig, RebalanceOrder, RebalanceOrderSide,

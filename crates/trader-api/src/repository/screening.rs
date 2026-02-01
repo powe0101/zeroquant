@@ -421,20 +421,10 @@ impl ScreeningRepository {
     ) -> Result<Vec<MomentumScreenResult>, sqlx::Error> {
         let lookback_date = Utc::now() - Duration::days(days.into());
 
-        let market_filter = if let Some(m) = market {
-            format!("AND si.market = '{}'", m)
-        } else {
-            String::new()
-        };
-
-        let volume_filter = if let Some(vr) = min_volume_ratio {
-            format!("AND m.volume_ratio >= {}", vr)
-        } else {
-            String::new()
-        };
-
-        // 윈도우 함수와 집계 함수를 분리하여 처리
-        let query = format!(
+        // SQL Injection 방지: 파라미터화된 쿼리 사용
+        // $3 = market (NULL이면 필터 무시)
+        // $4 = min_volume_ratio (NULL이면 필터 무시)
+        let results = sqlx::query_as::<_, MomentumScreenResult>(
             r#"
             WITH start_prices AS (
                 -- 기간 시작 시점의 가격 (DISTINCT ON으로 심볼별 첫 번째 레코드)
@@ -499,20 +489,19 @@ impl ScreeningRepository {
             LEFT JOIN symbol_info si ON (si.yahoo_symbol = m.symbol OR si.ticker = m.symbol)
             WHERE (si.is_active = true OR si.id IS NULL)
               AND m.change_pct >= $2
-              {}
-              {}
+              AND ($3::text IS NULL OR si.market = $3)
+              AND ($4::numeric IS NULL OR m.volume_ratio >= $4)
             ORDER BY m.change_pct DESC
-            LIMIT $3
+            LIMIT $5
             "#,
-            market_filter, volume_filter
-        );
-
-        let results = sqlx::query_as::<_, MomentumScreenResult>(&query)
-            .bind(lookback_date)
-            .bind(min_change_pct)
-            .bind(limit)
-            .fetch_all(pool)
-            .await?;
+        )
+        .bind(lookback_date)
+        .bind(min_change_pct)
+        .bind(market)
+        .bind(min_volume_ratio)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
 
         debug!(
             "모멘텀 스크리닝 완료: {}일간 {}% 이상 상승, {} 종목",

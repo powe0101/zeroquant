@@ -3,12 +3,93 @@
 //! 제공 기능:
 //! - 리스크 한도 설정
 //! - 일일 손익 추적
-//! - UTC 자정에 자동 일일 초기화
+//! - 시간대별 일일 초기화 (UTC/KST/EST 지원)
+//!
+//! # 시간대 지원
+//!
+//! 각 시장의 거래일 기준으로 일일 한도를 초기화합니다:
+//! - **UTC**: UTC 자정 기준 (기본값)
+//! - **KST**: 한국 시간 09:00 (장 개시) 기준
+//! - **EST**: 미국 동부 시간 09:30 (장 개시) 기준
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Timelike};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// 거래 시간대 설정.
+///
+/// 일일 한도 초기화 기준 시간을 결정합니다.
+/// 각 시장의 장 개시 시간을 기준으로 합니다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TradingTimezone {
+    /// UTC 자정 기준 (기본값)
+    #[default]
+    Utc,
+    /// 한국 시간 (KST, UTC+9) - 09:00 장 개시 기준
+    /// 실제 초기화: UTC 00:00 (KST 09:00)
+    Kst,
+    /// 미국 동부 시간 (EST, UTC-5 / EDT, UTC-4) - 09:30 장 개시 기준
+    /// 실제 초기화: UTC 14:30 (EST 09:30) 또는 UTC 13:30 (EDT 09:30)
+    Est,
+}
+
+impl TradingTimezone {
+    /// 현재 시간 기준으로 거래일 날짜를 계산합니다.
+    ///
+    /// 각 시장의 장 개시 시간을 기준으로 거래일을 결정합니다.
+    pub fn current_trading_date(&self) -> chrono::NaiveDate {
+        let now = Utc::now();
+
+        match self {
+            TradingTimezone::Utc => now.date_naive(),
+
+            TradingTimezone::Kst => {
+                // KST는 UTC+9, 장 개시 09:00 KST = 00:00 UTC
+                // 00:00 UTC 이전이면 전날 거래일
+                let kst_hour = (now.hour() + 9) % 24;
+                let crossed_day = now.hour() + 9 >= 24;
+
+                if crossed_day {
+                    now.date_naive() + chrono::Duration::days(1)
+                } else if kst_hour < 9 {
+                    // KST 09:00 이전 = 이전 거래일
+                    now.date_naive()
+                } else {
+                    now.date_naive()
+                }
+            }
+
+            TradingTimezone::Est => {
+                // EST는 UTC-5 (DST 기간에는 UTC-4)
+                // 장 개시 09:30 EST = 14:30 UTC (또는 13:30 UTC during DST)
+                // 간단히 14:30 UTC를 기준으로 사용 (DST 무시)
+                let market_open_hour = 14;
+                let market_open_minute = 30;
+
+                let current_minutes = now.hour() * 60 + now.minute();
+                let market_open_minutes = market_open_hour * 60 + market_open_minute;
+
+                if current_minutes < market_open_minutes {
+                    // 장 개시 전 = 전날 거래일
+                    now.date_naive() - chrono::Duration::days(1)
+                } else {
+                    now.date_naive()
+                }
+            }
+        }
+    }
+
+    /// 시간대 이름 반환.
+    pub fn name(&self) -> &'static str {
+        match self {
+            TradingTimezone::Utc => "UTC",
+            TradingTimezone::Kst => "KST (Korea)",
+            TradingTimezone::Est => "EST (US East)",
+        }
+    }
+}
 
 /// 리스크 한도 설정.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,9 +227,16 @@ impl DailyLimitStatus {
 ///
 /// 이 추적기의 기능:
 /// - 하루 동안의 모든 손익 이벤트 기록
-/// - UTC 자정에 자동 초기화
+/// - 설정된 시간대(UTC/KST/EST) 기준 자동 초기화
 /// - 일일 손실 한도의 실시간 상태 제공
 /// - 상세 분석을 위한 심볼별 손익 추적
+///
+/// # 거래소 중립 설계
+///
+/// 시간대 설정으로 다양한 시장을 지원합니다:
+/// - 한국 시장 (KOSPI/KOSDAQ): `TradingTimezone::Kst`
+/// - 미국 시장 (NYSE/NASDAQ): `TradingTimezone::Est`
+/// - 글로벌/암호화폐: `TradingTimezone::Utc`
 #[derive(Debug, Clone)]
 pub struct DailyLossTracker {
     /// 허용된 최대 일일 손실 (절대값)
@@ -157,7 +245,9 @@ pub struct DailyLossTracker {
     max_daily_loss_pct: f64,
     /// 비율 계산을 위한 시작 잔액
     starting_balance: Decimal,
-    /// 현재 날짜 (초기화 감지용)
+    /// 거래 시간대 (일일 초기화 기준)
+    timezone: TradingTimezone,
+    /// 현재 거래일 (초기화 감지용)
     current_date: chrono::NaiveDate,
     /// 오늘의 모든 손익 기록
     records: Vec<PnLRecord>,
@@ -177,11 +267,33 @@ impl DailyLossTracker {
     /// * `max_daily_loss_pct` - 비율 기준 최대 일일 손실 (예: 3%는 3.0)
     /// * `starting_balance` - 비율 계산을 위한 당일 시작 계좌 잔액
     pub fn new(max_daily_loss: Decimal, max_daily_loss_pct: f64, starting_balance: Decimal) -> Self {
+        Self::with_timezone(max_daily_loss, max_daily_loss_pct, starting_balance, TradingTimezone::default())
+    }
+
+    /// 시간대를 지정하여 새 일일 손실 추적기 생성.
+    ///
+    /// # Arguments
+    /// * `max_daily_loss` - 절대값 기준 최대 일일 손실
+    /// * `max_daily_loss_pct` - 비율 기준 최대 일일 손실
+    /// * `starting_balance` - 비율 계산을 위한 당일 시작 계좌 잔액
+    /// * `timezone` - 일일 초기화 기준 시간대
+    ///
+    /// # 거래소별 시간대 예시
+    /// - 한국 시장: `TradingTimezone::Kst`
+    /// - 미국 시장: `TradingTimezone::Est`
+    /// - 암호화폐: `TradingTimezone::Utc`
+    pub fn with_timezone(
+        max_daily_loss: Decimal,
+        max_daily_loss_pct: f64,
+        starting_balance: Decimal,
+        timezone: TradingTimezone,
+    ) -> Self {
         Self {
             max_daily_loss,
             max_daily_loss_pct,
             starting_balance,
-            current_date: Utc::now().date_naive(),
+            timezone,
+            current_date: timezone.current_trading_date(),
             records: Vec::new(),
             symbol_pnl: HashMap::new(),
             daily_total: Decimal::ZERO,
@@ -199,9 +311,29 @@ impl DailyLossTracker {
         )
     }
 
-    /// 새로운 날을 위한 초기화가 필요한지 확인하고 필요시 수행.
+    /// RiskConfig에서 시간대를 지정하여 생성.
+    pub fn from_config_with_timezone(
+        config: &crate::config::RiskConfig,
+        starting_balance: Decimal,
+        timezone: TradingTimezone,
+    ) -> Self {
+        Self::with_timezone(
+            Decimal::from_f64_retain(config.max_daily_loss_pct * starting_balance.to_f64().unwrap_or(0.0) / 100.0)
+                .unwrap_or(Decimal::ZERO),
+            config.max_daily_loss_pct,
+            starting_balance,
+            timezone,
+        )
+    }
+
+    /// 현재 설정된 시간대 반환.
+    pub fn timezone(&self) -> TradingTimezone {
+        self.timezone
+    }
+
+    /// 새로운 거래일을 위한 초기화가 필요한지 확인하고 필요시 수행.
     fn check_and_reset(&mut self) {
-        let today = Utc::now().date_naive();
+        let today = self.timezone.current_trading_date();
         if today != self.current_date {
             self.reset_daily(today);
         }

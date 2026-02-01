@@ -4,6 +4,7 @@
 //! 모든 Repository는 static methods 패턴을 사용합니다.
 
 pub mod backtest_results;
+pub mod cost_basis;
 pub mod equity_history;
 pub mod execution_cache;
 pub mod journal;
@@ -54,4 +55,9 @@ pub use journal::{
     WeeklyPnL, MonthlyPnL, YearlyPnL, CumulativePnL,
     // 인사이트 타입
     TradingInsights, StrategyPerformance,
+};
+
+pub use cost_basis::{
+    CostBasisSummary, CostBasisTracker, FifoSaleResult, Lot, LotUsage, TradeExecution,
+    build_tracker_from_executions,
 };

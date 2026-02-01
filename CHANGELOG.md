@@ -5,6 +5,87 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.5.5] - 2026-02-01
+
+### Added
+
+#### 🔄 API 재시도 시스템 (P0)
+- **RetryConfig** (`trader-exchange/src/retry.rs`)
+  - 지수 백오프 기반 재시도 로직
+  - `with_retry()`, `with_retry_context()`, `with_retry_if()` 유틸리티
+  - 에러별 대기 시간 자동 적용 (`retry_delay_ms()`)
+  - 빠른/적극적/무재시도 프리셋 지원
+- **KIS 클라이언트 통합** (`client_kr.rs`)
+  - `execute_get_with_retry()`, `execute_post_with_retry()` 구현
+  - 네트워크 오류, Rate Limit, 타임아웃 자동 재시도
+
+#### 💰 비용 기준 및 FIFO 실현손익 (P1)
+- **CostBasisTracker** (`repository/cost_basis.rs`)
+  - 로트(Lot) 기반 FIFO 추적
+  - 가중평균 매입가 자동 계산 (물타기 반영)
+  - `sell()` 메서드로 FIFO 기반 실현손익 계산
+  - 미실현 손익, 평균 보유 기간 계산
+- **JournalRepository 확장**
+  - `calculate_cost_basis()` - 종목별 비용 기준 조회
+  - `calculate_all_cost_basis()` - 전체 종목 비용 기준
+  - `get_cost_basis_tracker()` - 상세 분석용 추적기 반환
+
+#### 📊 동적 슬리피지 모델 (P2)
+- **SlippageModel** (`backtest/slippage.rs`)
+  - **Fixed**: 고정 비율 슬리피지 (기본 0.05%)
+  - **Linear**: 기본 슬리피지 + 거래량 기반 시장 충격
+  - **VolatilityBased**: ATR/캔들 범위 기반 동적 계산
+  - **Tiered**: 거래 금액 구간별 차등 슬리피지
+- **BacktestConfig 확장**
+  - `with_slippage_model()` 빌더 메서드
+  - serde 기본값 함수 분리 (설정 파일화)
+
+#### 🛡️ 서킷 브레이커 에러 카테고리 (P1)
+- **ErrorCategory** (`circuit_breaker.rs`)
+  - Network, RateLimit, Timeout, Service 분류
+  - 카테고리별 독립적 실패 카운트
+- **CategoryThresholds** 설정
+  - 카테고리별 차등 임계치 (Rate Limit은 더 관대)
+  - `conservative()`, `aggressive()` 프리셋
+- **메트릭 확장**
+  - `tripped_by` - 서킷 오픈 원인 카테고리
+  - `category_failures` - 카테고리별 현재 실패 수
+
+#### 🔗 포지션 동기화 (P1)
+- **PositionSynchronizer** (`strategies/common/position_sync.rs`)
+  - 전략 내부 포지션과 실제 포지션 동기화
+  - `on_order_filled()`, `on_position_update()` 콜백 연동
+- **볼린저 전략 통합**
+  - 체결/포지션 이벤트 시 내부 상태 동기화
+
+### Changed
+
+#### 보안 수정 (P0)
+- **SQL Injection 수정** (`repository/screening.rs`)
+  - `screen_momentum()` 동적 쿼리를 파라미터화된 쿼리로 변경
+  - `$3::text IS NULL OR si.market = $3` 패턴 적용
+
+#### 백테스트 설정 개선 (P2)
+- **BacktestConfig 기본값 함수화** (`backtest/engine.rs`)
+  - `default_initial_capital()`, `default_commission_rate()` 등 분리
+  - serde default 어트리뷰트로 JSON/YAML 설정 파일 지원
+
+#### KIS 클라이언트 개선
+- **토큰 갱신 지원**: 매 재시도마다 헤더 새로 빌드
+- **에러 코드 세분화**: HTTP 429 → RateLimited, 401 → Unauthorized
+
+#### 종목명 업데이트 로직 개선
+- CSV에서 한글 이름이 설정된 경우 Yahoo Finance 영문 이름으로 덮어쓰지 않음
+
+### Documentation
+
+- `docs/infrastructure.md` - Podman 컨테이너 인프라 가이드
+- `docs/agent_guidelines.md` - AI 에이전트 가이드라인 (Context7 사용법)
+- `docs/system_usage.md` - 모니터링, CSV 동기화 시스템 사용법
+- `CLAUDE.md` - 세션 컨텍스트 문서 간소화 (상세 내용은 별도 문서로 분리)
+
+---
+
 ## [0.5.4] - 2026-02-01
 
 ### Added
