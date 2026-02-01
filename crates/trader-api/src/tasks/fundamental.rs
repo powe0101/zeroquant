@@ -19,8 +19,16 @@ use tracing::{debug, error, info, warn};
 use trader_data::cache::{FundamentalData, FundamentalFetcher};
 use trader_data::OhlcvCache;
 
-use crate::repository::{NewSymbolFundamental, SymbolFundamentalRepository};
+use crate::repository::{NewSymbolFundamental, SymbolFundamentalRepository, SymbolInfoRepository};
 use super::symbol_sync::{sync_symbols, SymbolSyncConfig};
+
+/// 데이터 수집 실패로 간주할 오류 패턴.
+const FETCH_FAILURE_PATTERNS: &[&str] = &[
+    "No data found",
+    "symbol may be delisted",
+    "not found",
+    "Invalid symbol",
+];
 
 /// Decimal 값을 소수점 4자리로 반올림 (DB 저장 전 안전 처리).
 fn round_dp4(value: Option<Decimal>) -> Option<Decimal> {
@@ -268,6 +276,11 @@ async fn run_collection_batch(
                         Ok(_) => {
                             success_count += 1;
                             debug!(ticker = %ticker, "Fundamental 데이터 저장 완료");
+
+                            // 수집 성공 시 실패 카운트 초기화
+                            if let Err(e) = SymbolInfoRepository::reset_fetch_failure(pool, symbol_info_id).await {
+                                warn!(ticker = %ticker, error = %e, "실패 카운트 초기화 실패");
+                            }
                         }
                         Err(e) => {
                             error_count += 1;
@@ -319,12 +332,41 @@ async fn run_collection_batch(
                 }
                 Err(e) => {
                     error_count += 1;
+                    let error_msg = e.to_string();
                     warn!(
                         ticker = %ticker,
                         yahoo_symbol = %yahoo_symbol,
-                        error = %e,
+                        error = %error_msg,
                         "Yahoo Finance 통합 수집 실패"
                     );
+
+                    // 심볼 없음/상장폐지 오류인 경우 실패 기록
+                    if is_symbol_not_found_error(&error_msg) {
+                        match SymbolInfoRepository::record_fetch_failure(
+                            pool,
+                            symbol_info_id,
+                            &error_msg,
+                        ).await {
+                            Ok(result) => {
+                                if result.deactivated {
+                                    warn!(
+                                        ticker = %ticker,
+                                        fail_count = result.fail_count,
+                                        "심볼 자동 비활성화됨 (연속 실패)"
+                                    );
+                                } else {
+                                    debug!(
+                                        ticker = %ticker,
+                                        fail_count = result.fail_count,
+                                        "수집 실패 기록됨"
+                                    );
+                                }
+                            }
+                            Err(db_err) => {
+                                warn!(ticker = %ticker, error = %db_err, "실패 기록 저장 실패");
+                            }
+                        }
+                    }
                 }
             }
         } else {
@@ -345,12 +387,41 @@ async fn run_collection_batch(
                 }
                 Err(e) => {
                     error_count += 1;
+                    let error_msg = e.to_string();
                     warn!(
                         ticker = %ticker,
                         yahoo_symbol = %yahoo_symbol,
-                        error = %e,
+                        error = %error_msg,
                         "Yahoo Finance 데이터 수집 실패"
                     );
+
+                    // 심볼 없음/상장폐지 오류인 경우 실패 기록
+                    if is_symbol_not_found_error(&error_msg) {
+                        match SymbolInfoRepository::record_fetch_failure(
+                            pool,
+                            symbol_info_id,
+                            &error_msg,
+                        ).await {
+                            Ok(result) => {
+                                if result.deactivated {
+                                    warn!(
+                                        ticker = %ticker,
+                                        fail_count = result.fail_count,
+                                        "심볼 자동 비활성화됨 (연속 실패)"
+                                    );
+                                } else {
+                                    debug!(
+                                        ticker = %ticker,
+                                        fail_count = result.fail_count,
+                                        "수집 실패 기록됨"
+                                    );
+                                }
+                            }
+                            Err(db_err) => {
+                                warn!(ticker = %ticker, error = %db_err, "실패 기록 저장 실패");
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -432,6 +503,17 @@ fn convert_to_new_fundamental(
         earnings_growth_3y: None,
         fiscal_year_end: None,
     }
+}
+
+/// 오류 메시지가 "심볼 없음" 패턴인지 확인.
+///
+/// Yahoo Finance에서 상장폐지되거나 존재하지 않는 심볼에 대해
+/// 실패 카운트를 증가시킬지 결정합니다.
+fn is_symbol_not_found_error(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    FETCH_FAILURE_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(&pattern.to_lowercase()))
 }
 
 /// 종목명 업데이트 (symbol_info 테이블).

@@ -17,30 +17,23 @@
 //! 외부 크레이트의 타입은 두 가지 방법으로 처리:
 //! - 해당 크레이트에 `ToSchema` 구현 추가
 //! - 또는 `#[schema(value_type = Object)]` 사용하여 JSON 객체로 처리
-//!
-//! # 사용법
-//!
-//! ```rust,ignore
-//! use trader_api::openapi::swagger_ui_router;
-//!
-//! let app = Router::new()
-//!     .merge(swagger_ui_router());
-//! ```
 
+use axum::Router;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
-use axum::Router;
 
 // ==================== 각 모듈에서 스키마 Import ====================
-// 새로운 엔드포인트 추가 시 아래에 import 추가
 
 use crate::routes::{
     // Health 모듈
-    HealthResponse, ComponentHealth, ComponentStatus,
-    // Strategies 모듈 (기본)
+    ComponentHealth, ComponentStatus, HealthResponse,
+    // Strategies 모듈
+    strategies::{ApiError, StrategyListItem},
     StrategiesListResponse,
-    strategies::StrategyListItem,
-    ApiError,
+    // Monitoring 모듈
+    ErrorRecordDto, ErrorsResponse, StatsResponse,
+    // Screening 모듈
+    MomentumResponse, ScreeningRequest, ScreeningResponse,
 };
 
 // ==================== OpenAPI 문서 정의 ====================
@@ -48,14 +41,13 @@ use crate::routes::{
 /// Trader API 문서.
 ///
 /// 모든 엔드포인트와 스키마를 포함하는 OpenAPI 3.0 스펙입니다.
-/// 새로운 엔드포인트 추가 시 `paths(...)` 섹션에 핸들러 함수 참조를 추가하세요.
 #[derive(OpenApi)]
 #[openapi(
     info(
-        title = "Trader API",
-        version = "0.1.0",
+        title = "ZeroQuant Trading API",
+        version = "0.4.4",
         description = r#"
-# 트레이딩 봇 REST API
+# ZeroQuant 트레이딩 봇 REST API
 
 전략 관리, 백테스트, 포트폴리오 분석을 위한 REST API입니다.
 
@@ -65,16 +57,24 @@ use crate::routes::{
 - **백테스트**: 과거 데이터 기반 전략 성과 분석
 - **포트폴리오**: 실시간 포트폴리오 상태 조회
 - **시장 데이터**: 실시간 시세 및 차트 데이터
+- **모니터링**: 에러 추적 및 시스템 상태 모니터링
+- **스크리닝**: 종목 스크리닝 및 필터링
+- **ML**: 머신러닝 모델 훈련 및 배포
 
 ## 인증
 
 대부분의 엔드포인트는 JWT Bearer 토큰 인증이 필요합니다.
 `Authorization: Bearer <token>` 헤더를 포함하세요.
+
+## 심볼 동기화
+
+- **KRX**: `POST /api/v1/dataset/sync/krx` - 한국 거래소 심볼
+- **EODData**: `POST /api/v1/dataset/sync/eod` - 해외 거래소 심볼
 "#,
         license(name = "MIT", url = "https://opensource.org/licenses/MIT"),
         contact(
-            name = "Trading Bot Team",
-            url = "https://github.com/user/trader"
+            name = "ZeroQuant Team",
+            url = "https://github.com/user/zeroquant"
         )
     ),
     servers(
@@ -93,32 +93,61 @@ use crate::routes::{
         (name = "credentials", description = "자격증명 - API 키 관리"),
         (name = "notifications", description = "알림 - 텔레그램 등 알림 설정"),
         (name = "ml", description = "ML - 머신러닝 모델 훈련"),
-        (name = "dataset", description = "데이터셋 - 학습 데이터 관리"),
-        (name = "simulation", description = "시뮬레이션 - 모의 거래")
+        (name = "dataset", description = "데이터셋 - 심볼 동기화 및 데이터 관리"),
+        (name = "journal", description = "매매일지 - 체결 내역 및 손익 분석"),
+        (name = "screening", description = "스크리닝 - 종목 필터링"),
+        (name = "simulation", description = "시뮬레이션 - 모의 거래"),
+        (name = "monitoring", description = "모니터링 - 에러 추적 및 시스템 상태")
     ),
     // ==================== 스키마 등록 ====================
-    // 새로운 타입 추가 시 아래에 추가
     components(
         schemas(
-            // Health
+            // ===== Health =====
             HealthResponse,
             ComponentHealth,
             ComponentStatus,
-            // Strategies
+
+            // ===== Common =====
+            ApiError,
+
+            // ===== Strategies =====
             StrategiesListResponse,
             StrategyListItem,
-            // Common
-            ApiError,
+
+            // ===== Monitoring =====
+            ErrorsResponse,
+            ErrorRecordDto,
+            StatsResponse,
+
+            // ===== Screening =====
+            ScreeningRequest,
+            ScreeningResponse,
+            MomentumResponse,
         )
     ),
     // ==================== 경로 등록 ====================
-    // 새로운 핸들러 추가 시 아래에 추가
     paths(
-        // Health
+        // ===== Health =====
         crate::routes::health::health_check,
         crate::routes::health::health_ready,
-        // Strategies
+
+        // ===== Strategies =====
         crate::routes::strategies::list_strategies,
+
+        // ===== Monitoring =====
+        crate::routes::monitoring::list_errors,
+        crate::routes::monitoring::list_critical_errors,
+        crate::routes::monitoring::get_error_by_id,
+        crate::routes::monitoring::get_stats,
+        crate::routes::monitoring::reset_stats,
+        crate::routes::monitoring::clear_errors,
+        crate::routes::monitoring::get_summary,
+
+        // ===== Screening =====
+        crate::routes::screening::run_screening,
+        crate::routes::screening::list_presets,
+        crate::routes::screening::run_preset_screening,
+        crate::routes::screening::run_momentum_screening,
     )
 )]
 pub struct ApiDoc;
@@ -130,13 +159,6 @@ pub struct ApiDoc;
 /// 다음 경로에 문서 UI를 마운트합니다:
 /// - `/swagger-ui` - Swagger UI 대화형 문서
 /// - `/api-docs/openapi.json` - OpenAPI JSON 스펙
-///
-/// # 사용법
-///
-/// ```rust,ignore
-/// let app = Router::new()
-///     .merge(swagger_ui_router());
-/// ```
 pub fn swagger_ui_router<S>() -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -158,16 +180,20 @@ mod tests {
         let json = serde_json::to_string_pretty(&spec).unwrap();
 
         // 기본 정보 확인
-        assert!(json.contains("Trader API"));
-        assert!(json.contains("0.1.0"));
+        assert!(json.contains("ZeroQuant Trading API"));
+        assert!(json.contains("0.4.4"));
 
         // 태그 확인
         assert!(json.contains("health"));
         assert!(json.contains("strategies"));
+        assert!(json.contains("monitoring"));
+        assert!(json.contains("screening"));
 
         // 경로 확인
         assert!(json.contains("/health"));
         assert!(json.contains("/health/ready"));
+        assert!(json.contains("/api/v1/monitoring/errors"));
+        assert!(json.contains("/api/v1/screening"));
     }
 
     #[test]
@@ -182,7 +208,8 @@ mod tests {
 
         // 스키마 확인
         assert!(json.contains("HealthResponse"));
-        assert!(json.contains("StrategiesListResponse"));
+        assert!(json.contains("ErrorsResponse"));
+        assert!(json.contains("ScreeningRequest"));
         assert!(json.contains("ApiError"));
     }
 }

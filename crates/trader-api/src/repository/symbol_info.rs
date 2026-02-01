@@ -642,3 +642,208 @@ pub enum ExternalFetchError {
     #[error("Parse error: {0}")]
     Parse(String),
 }
+
+/// 최대 연속 실패 횟수 (이 횟수 이상이면 자동 비활성화).
+pub const MAX_FETCH_FAILURES: i32 = 3;
+
+/// 실패 기록 결과.
+#[derive(Debug)]
+pub struct FetchFailureResult {
+    /// 현재 실패 카운트.
+    pub fail_count: i32,
+    /// 자동 비활성화 여부.
+    pub deactivated: bool,
+}
+
+impl SymbolInfoRepository {
+    /// 데이터 수집 실패 기록.
+    ///
+    /// 연속 실패 횟수를 증가시키고, MAX_FETCH_FAILURES 이상이면 자동 비활성화합니다.
+    /// 특정 오류 패턴("No data found", "symbol may be delisted")만 실패로 기록합니다.
+    ///
+    /// # Arguments
+    /// * `pool` - DB 연결 풀
+    /// * `symbol_info_id` - 심볼 정보 ID
+    /// * `error_message` - 오류 메시지
+    ///
+    /// # Returns
+    /// * `FetchFailureResult` - 현재 실패 카운트 및 비활성화 여부
+    pub async fn record_fetch_failure(
+        pool: &PgPool,
+        symbol_info_id: Uuid,
+        error_message: &str,
+    ) -> Result<FetchFailureResult, sqlx::Error> {
+        // 실패 카운트 증가
+        let new_count = sqlx::query_scalar::<_, i32>(
+            r#"
+            UPDATE symbol_info
+            SET fetch_fail_count = COALESCE(fetch_fail_count, 0) + 1,
+                last_fetch_error = $2,
+                last_fetch_attempt = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING fetch_fail_count
+            "#,
+        )
+        .bind(symbol_info_id)
+        .bind(error_message)
+        .fetch_one(pool)
+        .await?;
+
+        // MAX_FETCH_FAILURES 이상이면 자동 비활성화
+        let deactivated = if new_count >= MAX_FETCH_FAILURES {
+            sqlx::query(
+                "UPDATE symbol_info SET is_active = FALSE, updated_at = NOW() WHERE id = $1",
+            )
+            .bind(symbol_info_id)
+            .execute(pool)
+            .await?;
+
+            info!(
+                symbol_info_id = %symbol_info_id,
+                fail_count = new_count,
+                "심볼 자동 비활성화 (연속 {} 회 실패)", new_count
+            );
+            true
+        } else {
+            false
+        };
+
+        Ok(FetchFailureResult {
+            fail_count: new_count,
+            deactivated,
+        })
+    }
+
+    /// 데이터 수집 성공 시 실패 카운트 초기화.
+    ///
+    /// # Arguments
+    /// * `pool` - DB 연결 풀
+    /// * `symbol_info_id` - 심볼 정보 ID
+    pub async fn reset_fetch_failure(
+        pool: &PgPool,
+        symbol_info_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE symbol_info
+            SET fetch_fail_count = 0,
+                last_fetch_error = NULL,
+                last_fetch_attempt = NOW(),
+                updated_at = NOW()
+            WHERE id = $1 AND fetch_fail_count > 0
+            "#,
+        )
+        .bind(symbol_info_id)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// 실패한 심볼 목록 조회.
+    ///
+    /// # Arguments
+    /// * `pool` - DB 연결 풀
+    /// * `min_failures` - 최소 실패 횟수 (기본: 1)
+    pub async fn get_failed_symbols(
+        pool: &PgPool,
+        min_failures: i32,
+    ) -> Result<Vec<FailedSymbolInfo>, sqlx::Error> {
+        sqlx::query_as::<_, FailedSymbolInfo>(
+            r#"
+            SELECT
+                id,
+                ticker,
+                name,
+                market,
+                yahoo_symbol,
+                is_active,
+                fetch_fail_count,
+                last_fetch_error,
+                last_fetch_attempt
+            FROM symbol_info
+            WHERE fetch_fail_count >= $1
+            ORDER BY fetch_fail_count DESC, last_fetch_attempt DESC
+            "#,
+        )
+        .bind(min_failures)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// 비활성화된 심볼 통계 조회.
+    pub async fn get_deactivated_stats(pool: &PgPool) -> Result<DeactivatedStats, sqlx::Error> {
+        let stats = sqlx::query_as::<_, (i64, i64, i64)>(
+            r#"
+            SELECT
+                COUNT(*) FILTER (WHERE is_active = false) as deactivated_count,
+                COUNT(*) FILTER (WHERE fetch_fail_count >= $1 AND is_active = true) as critical_count,
+                COUNT(*) FILTER (WHERE fetch_fail_count > 0 AND fetch_fail_count < $1 AND is_active = true) as warning_count
+            FROM symbol_info
+            "#,
+        )
+        .bind(MAX_FETCH_FAILURES)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(DeactivatedStats {
+            deactivated: stats.0,
+            critical: stats.1,
+            warning: stats.2,
+        })
+    }
+
+    /// 비활성화된 심볼 일괄 재활성화.
+    ///
+    /// 실패 카운트도 함께 초기화합니다.
+    pub async fn reactivate_symbols(
+        pool: &PgPool,
+        symbol_ids: &[Uuid],
+    ) -> Result<u64, sqlx::Error> {
+        if symbol_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE symbol_info
+            SET is_active = TRUE,
+                fetch_fail_count = 0,
+                last_fetch_error = NULL,
+                updated_at = NOW()
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(symbol_ids)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+}
+
+/// 실패한 심볼 정보.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct FailedSymbolInfo {
+    pub id: Uuid,
+    pub ticker: String,
+    pub name: String,
+    pub market: String,
+    pub yahoo_symbol: Option<String>,
+    pub is_active: Option<bool>,
+    pub fetch_fail_count: Option<i32>,
+    pub last_fetch_error: Option<String>,
+    pub last_fetch_attempt: Option<DateTime<Utc>>,
+}
+
+/// 비활성화 통계.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeactivatedStats {
+    /// 비활성화된 심볼 수.
+    pub deactivated: i64,
+    /// 임계 상태 (MAX_FETCH_FAILURES 이상, 아직 활성).
+    pub critical: i64,
+    /// 경고 상태 (1회 이상 실패, 아직 활성).
+    pub warning: i64,
+}

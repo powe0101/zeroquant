@@ -1,7 +1,7 @@
 # ZeroQuant - Claude 세션 컨텍스트
 
 > 이 문서를 세션 시작 시 복사하여 Claude에게 컨텍스트를 제공하세요.
-> 마지막 업데이트: 2026-02-01 | 버전: v0.5.3
+> 마지막 업데이트: 2026-02-01 | 버전: v0.5.4
 
 ---
 
@@ -28,7 +28,7 @@
 | Crate 수 | 10개 |
 | 전략 수 | 26개 |
 | API 라우트 | 24개 |
-| 마이그레이션 | 21개 |
+| 마이그레이션 | 23개 |
 
 ### 기술 스택
 - **Backend**: Rust, Tokio, Axum
@@ -238,21 +238,21 @@ zeroquant/
 │   └── trader-notification/ # 알림 (Telegram)
 ├── data/                    # 정적 데이터 (KRX 종목코드, 섹터 매핑)
 ├── frontend/                # SolidJS + TypeScript + Vite
-├── migrations/              # DB 마이그레이션 (21개)
+├── migrations/              # DB 마이그레이션 (23개)
 └── scripts/                 # ML 훈련 파이프라인, 스크래퍼
 ```
 
 ---
 
-## 🔄 최근 완료된 개선사항 (v0.5.3)
+## 🔄 최근 완료된 개선사항 (v0.5.4)
 
-- ✅ **모니터링 에러 추적 시스템**: AI 디버깅용 구조화된 에러 로깅
-- ✅ **CSV 심볼 동기화**: KRX/EOD 해외 거래소 종목 자동 동기화
+- ✅ **스크리닝 쿼리 성능 최적화**: Materialized View (`mv_latest_prices`)
+- ✅ **심볼 수집 실패 추적**: 3회 연속 실패 시 자동 비활성화
+- ✅ **심볼 상태 관리 API**: 실패 심볼 조회/재활성화
+- ✅ **심볼 캐시 관리**: 동기화 후 자동 캐시 클리어
+- ✅ 모니터링 에러 추적 시스템
+- ✅ CSV 심볼 동기화 (KRX/EOD)
 - ✅ 매매일지 (Trading Journal) 기능
-- ✅ 종목 스크리닝 API 및 프론트엔드
-- ✅ OpenAPI/Swagger 문서화 (utoipa)
-- ✅ Repository 패턴 12개 완료
-- ✅ Graceful Shutdown (CancellationToken)
 
 ---
 

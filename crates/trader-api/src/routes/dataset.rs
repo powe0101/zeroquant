@@ -23,7 +23,9 @@ use tracing::{error, info};
 use trader_core::Timeframe;
 use trader_data::cache::CachedHistoricalDataProvider;
 
-use crate::repository::{SymbolInfoRepository, SymbolSearchResult};
+use crate::repository::{
+    DeactivatedStats, FailedSymbolInfo, SymbolInfoRepository, SymbolSearchResult,
+};
 use crate::routes::strategies::ApiError;
 use crate::state::AppState;
 use crate::tasks::eod_csv_sync::{sync_eod_all, sync_eod_exchange, EodSyncResult};
@@ -1004,6 +1006,9 @@ pub async fn sync_krx_csv(
     // 전체 동기화 실행
     match sync_krx_full(pool, codes_csv, sector_csv).await {
         Ok((symbol_result, sector_result)) => {
+            // 심볼 캐시 클리어 (DB 업데이트 반영)
+            state.clear_symbol_cache().await;
+
             let message = format!(
                 "심볼 {}개 동기화, 섹터 {}개 업데이트 완료",
                 symbol_result.upserted, sector_result.upserted
@@ -1049,6 +1054,9 @@ pub async fn sync_sectors_csv(
 
     match update_sectors_from_csv(pool, sector_csv).await {
         Ok(result) => {
+            // 심볼 캐시 클리어 (섹터 정보 반영)
+            state.clear_symbol_cache().await;
+
             let message = format!("섹터 {}개 업데이트 완료", result.upserted);
 
             info!(%message, "섹터 동기화 완료");
@@ -1091,6 +1099,9 @@ pub async fn sync_symbols_csv(
 
     match sync_krx_from_csv(pool, codes_csv).await {
         Ok(result) => {
+            // 심볼 캐시 클리어 (DB 업데이트 반영)
+            state.clear_symbol_cache().await;
+
             let message = format!("심볼 {}개 동기화 완료", result.upserted);
 
             info!(%message, "심볼 동기화 완료");
@@ -1186,6 +1197,9 @@ pub async fn sync_eod_csv(
 
             match sync_eod_exchange(pool, exchange_code, &csv_path).await {
                 Ok(result) => {
+                    // 심볼 캐시 클리어 (DB 업데이트 반영)
+                    state.clear_symbol_cache().await;
+
                     let message = format!(
                         "[{}] 심볼 {}개 동기화 완료",
                         exchange_code, result.upserted
@@ -1213,6 +1227,9 @@ pub async fn sync_eod_csv(
 
             match sync_eod_all(pool, data_dir).await {
                 Ok(results) => {
+                    // 심볼 캐시 클리어 (DB 업데이트 반영)
+                    state.clear_symbol_cache().await;
+
                     let total_upserted: usize = results.values().map(|r| r.upserted).sum();
                     let exchanges: Vec<EodExchangeResultDto> = results
                         .into_values()
@@ -1258,7 +1275,231 @@ pub fn dataset_router() -> Router<Arc<AppState>> {
         .route("/sync/sectors", post(sync_sectors_csv))
         // EODData CSV 동기화 (해외 거래소)
         .route("/sync/eod", post(sync_eod_csv))
+        // 심볼 상태 관리 (실패/비활성화)
+        .route("/symbols/failed", get(get_failed_symbols))
+        .route("/symbols/stats", get(get_symbol_stats))
+        .route("/symbols/reactivate", post(reactivate_symbols))
         // 심볼별 조회/삭제
         .route("/{symbol}", get(get_candles))
         .route("/{symbol}", delete(delete_dataset))
+}
+
+// ==================== 심볼 상태 관리 ====================
+
+/// 실패 심볼 목록 응답.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedSymbolsResponse {
+    /// 실패한 심볼 목록.
+    pub symbols: Vec<FailedSymbolDto>,
+    /// 총 개수.
+    pub total_count: usize,
+}
+
+/// 실패 심볼 정보 DTO.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedSymbolDto {
+    pub id: String,
+    pub ticker: String,
+    pub name: String,
+    pub market: String,
+    pub yahoo_symbol: Option<String>,
+    pub is_active: bool,
+    pub fail_count: i32,
+    pub last_error: Option<String>,
+    pub last_attempt: Option<String>,
+    /// 실패 레벨: CRITICAL (3+), WARNING (2), MINOR (1).
+    pub failure_level: String,
+}
+
+/// 심볼 통계 응답.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolStatsResponse {
+    /// 비활성화된 심볼 수.
+    pub deactivated: i64,
+    /// 임계 상태 (3회+ 실패, 아직 활성).
+    pub critical: i64,
+    /// 경고 상태 (1-2회 실패, 아직 활성).
+    pub warning: i64,
+}
+
+/// 심볼 재활성화 요청.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactivateSymbolsRequest {
+    /// 재활성화할 심볼 ID 목록.
+    pub symbol_ids: Vec<String>,
+}
+
+/// 심볼 재활성화 응답.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactivateSymbolsResponse {
+    pub success: bool,
+    /// 재활성화된 심볼 수.
+    pub reactivated_count: u64,
+    pub message: String,
+}
+
+/// 실패 심볼 목록 쿼리 파라미터.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedSymbolsQuery {
+    /// 최소 실패 횟수 (기본: 1).
+    #[serde(default = "default_min_failures")]
+    pub min_failures: i32,
+}
+
+fn default_min_failures() -> i32 {
+    1
+}
+
+/// 실패 심볼 목록 조회.
+///
+/// GET /api/v1/dataset/symbols/failed
+async fn get_failed_symbols(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<FailedSymbolsQuery>,
+) -> Result<Json<FailedSymbolsResponse>, (StatusCode, Json<ApiError>)> {
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new("DB_NOT_AVAILABLE", "데이터베이스 연결이 없습니다")),
+        )
+    })?;
+
+    match SymbolInfoRepository::get_failed_symbols(pool, params.min_failures).await {
+        Ok(symbols) => {
+            let total_count = symbols.len();
+            let symbols_dto: Vec<FailedSymbolDto> = symbols
+                .into_iter()
+                .map(|s| {
+                    let fail_count = s.fetch_fail_count.unwrap_or(0);
+                    let failure_level = match fail_count {
+                        c if c >= 3 => "CRITICAL",
+                        2 => "WARNING",
+                        1 => "MINOR",
+                        _ => "OK",
+                    };
+
+                    FailedSymbolDto {
+                        id: s.id.to_string(),
+                        ticker: s.ticker,
+                        name: s.name,
+                        market: s.market,
+                        yahoo_symbol: s.yahoo_symbol,
+                        is_active: s.is_active.unwrap_or(true),
+                        fail_count,
+                        last_error: s.last_fetch_error,
+                        last_attempt: s.last_fetch_attempt.map(|t| t.to_rfc3339()),
+                        failure_level: failure_level.to_string(),
+                    }
+                })
+                .collect();
+
+            Ok(Json(FailedSymbolsResponse {
+                symbols: symbols_dto,
+                total_count,
+            }))
+        }
+        Err(e) => {
+            error!(error = %e, "실패 심볼 목록 조회 실패");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", &e.to_string())),
+            ))
+        }
+    }
+}
+
+/// 심볼 통계 조회.
+///
+/// GET /api/v1/dataset/symbols/stats
+async fn get_symbol_stats(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SymbolStatsResponse>, (StatusCode, Json<ApiError>)> {
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new("DB_NOT_AVAILABLE", "데이터베이스 연결이 없습니다")),
+        )
+    })?;
+
+    match SymbolInfoRepository::get_deactivated_stats(pool).await {
+        Ok(stats) => Ok(Json(SymbolStatsResponse {
+            deactivated: stats.deactivated,
+            critical: stats.critical,
+            warning: stats.warning,
+        })),
+        Err(e) => {
+            error!(error = %e, "심볼 통계 조회 실패");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", &e.to_string())),
+            ))
+        }
+    }
+}
+
+/// 심볼 재활성화.
+///
+/// POST /api/v1/dataset/symbols/reactivate
+async fn reactivate_symbols(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ReactivateSymbolsRequest>,
+) -> Result<Json<ReactivateSymbolsResponse>, (StatusCode, Json<ApiError>)> {
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new("DB_NOT_AVAILABLE", "데이터베이스 연결이 없습니다")),
+        )
+    })?;
+
+    // UUID 파싱
+    let symbol_ids: Result<Vec<uuid::Uuid>, _> = request
+        .symbol_ids
+        .iter()
+        .map(|id| uuid::Uuid::parse_str(id))
+        .collect();
+
+    let symbol_ids = match symbol_ids {
+        Ok(ids) => ids,
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new("INVALID_UUID", &format!("잘못된 UUID 형식: {}", e))),
+            ));
+        }
+    };
+
+    if symbol_ids.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("EMPTY_REQUEST", "심볼 ID가 필요합니다")),
+        ));
+    }
+
+    match SymbolInfoRepository::reactivate_symbols(pool, &symbol_ids).await {
+        Ok(count) => {
+            info!(count = count, "심볼 재활성화 완료");
+
+            // SymbolResolver 캐시 클리어
+            state.clear_symbol_cache().await;
+
+            Ok(Json(ReactivateSymbolsResponse {
+                success: true,
+                reactivated_count: count,
+                message: format!("{}개 심볼 재활성화 완료", count),
+            }))
+        }
+        Err(e) => {
+            error!(error = %e, "심볼 재활성화 실패");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", &e.to_string())),
+            ))
+        }
+    }
 }

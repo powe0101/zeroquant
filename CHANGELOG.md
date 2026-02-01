@@ -5,6 +5,49 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.5.4] - 2026-02-01
+
+### Added
+
+#### ⚡ 스크리닝 쿼리 성능 최적화
+- **Materialized View** (`mv_latest_prices`)
+  - 심볼별 최신 일봉 가격을 미리 계산하여 저장
+  - 스크리닝 쿼리 성능 1.5초+ → 수십ms로 개선
+  - `refresh_latest_prices()` 함수로 갱신 지원
+
+#### 🛡️ 심볼 데이터 수집 실패 추적
+- **자동 비활성화 시스템** (`symbol_info` 컬럼 추가)
+  - `fetch_fail_count`: 연속 실패 횟수 기록
+  - `last_fetch_error`: 마지막 에러 메시지
+  - `last_fetch_attempt`: 마지막 시도 시간
+  - 3회 이상 연속 실패 시 자동 비활성화
+
+- **DB 함수**
+  - `record_symbol_fetch_failure()`: 실패 기록 및 자동 비활성화
+  - `reset_symbol_fetch_failure()`: 성공 시 카운트 초기화
+
+- **실패 심볼 관리 뷰**
+  - `v_symbol_fetch_failures`: 실패 심볼 현황 (레벨별 분류)
+
+#### 🔧 심볼 상태 관리 API
+- `GET /api/v1/dataset/symbols/failed` - 실패한 심볼 목록 조회
+- `GET /api/v1/dataset/symbols/stats` - 심볼 통계 (활성/비활성/실패)
+- `POST /api/v1/dataset/symbols/reactivate` - 비활성화된 심볼 재활성화
+
+### Changed
+
+#### 심볼 캐시 관리 개선
+- `AppState.clear_symbol_cache()`: CSV 동기화 후 캐시 자동 클리어
+- `AppState.symbol_cache_size()`: 캐시 크기 조회
+- 동기화 시 최신 DB 데이터가 즉시 반영되도록 개선
+
+### Database
+
+- `migrations/022_latest_prices_materialized_view.sql` - 최신 가격 Materialized View
+- `migrations/023_symbol_fetch_failure_tracking.sql` - 심볼 수집 실패 추적
+
+---
+
 ## [0.5.3] - 2026-02-01
 
 ### Added

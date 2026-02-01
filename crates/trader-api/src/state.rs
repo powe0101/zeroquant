@@ -280,6 +280,26 @@ impl AppState {
         self.symbol_resolver.is_some()
     }
 
+    /// SymbolResolver 캐시 클리어.
+    ///
+    /// 심볼 정보가 DB에서 업데이트된 후 호출하여 메모리 캐시를 무효화합니다.
+    /// 다음 조회 시 최신 DB 데이터를 다시 로드합니다.
+    pub async fn clear_symbol_cache(&self) {
+        if let Some(ref resolver) = self.symbol_resolver {
+            resolver.clear_cache().await;
+            tracing::info!("SymbolResolver 캐시 클리어 완료");
+        }
+    }
+
+    /// SymbolResolver 캐시 크기 조회.
+    pub async fn symbol_cache_size(&self) -> usize {
+        if let Some(ref resolver) = self.symbol_resolver {
+            resolver.cache_size().await
+        } else {
+            0
+        }
+    }
+
     /// 여러 심볼의 display name을 배치로 조회.
     ///
     /// SymbolResolver가 설정되지 않은 경우 빈 HashMap 반환.

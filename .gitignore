@@ -83,8 +83,8 @@ Desktop.ini
 # Project Specific - Data Files
 # =====================================================
 # Trading data (sensitive)
-data/
-*.csv
+#data/
+#*.csv
 
 # Python strategy examples (external/third-party)
 python-strategy/

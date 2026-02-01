@@ -123,18 +123,10 @@ impl ScreeningRepository {
         pool: &PgPool,
         filter: &ScreeningFilter,
     ) -> Result<Vec<ScreeningResult>, sqlx::Error> {
-        // 기본 쿼리: Fundamental 뷰 + OHLCV 최신 가격 정보
-        // 복잡한 price_changes CTE 대신 단순화된 쿼리 사용
+        // 기본 쿼리: Fundamental 뷰 + Materialized View (최신 가격)
+        // mv_latest_prices 사용으로 DISTINCT ON 쿼리 제거 → 성능 ~10x 향상
         let mut builder: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
             r#"
-            WITH price_data AS (
-                SELECT DISTINCT ON (symbol)
-                    symbol,
-                    close as current_price
-                FROM ohlcv
-                WHERE timeframe = '1d'
-                ORDER BY symbol, open_time DESC
-            )
             SELECT
                 sf.id,
                 sf.ticker,
@@ -155,21 +147,21 @@ impl ScreeningRepository {
                 sf.debt_ratio,
                 sf.revenue_growth_yoy,
                 sf.earnings_growth_yoy,
-                pd.current_price,
+                lp.close as current_price,
                 NULL::decimal as price_change_1d,
                 NULL::decimal as price_change_5d,
                 NULL::decimal as price_change_20d,
                 NULL::decimal as volume_ratio,
                 sf.week_52_high,
                 sf.week_52_low,
-                CASE WHEN sf.week_52_high > 0 AND pd.current_price IS NOT NULL
-                    THEN ((sf.week_52_high - pd.current_price) / sf.week_52_high) * 100
+                CASE WHEN sf.week_52_high > 0 AND lp.close IS NOT NULL
+                    THEN ((sf.week_52_high - lp.close) / sf.week_52_high) * 100
                     ELSE NULL END as distance_from_52w_high,
-                CASE WHEN sf.week_52_low > 0 AND pd.current_price IS NOT NULL
-                    THEN ((pd.current_price - sf.week_52_low) / sf.week_52_low) * 100
+                CASE WHEN sf.week_52_low > 0 AND lp.close IS NOT NULL
+                    THEN ((lp.close - sf.week_52_low) / sf.week_52_low) * 100
                     ELSE NULL END as distance_from_52w_low
             FROM v_symbol_with_fundamental sf
-            LEFT JOIN price_data pd ON pd.symbol = sf.yahoo_symbol OR pd.symbol = sf.ticker
+            LEFT JOIN mv_latest_prices lp ON lp.symbol = sf.yahoo_symbol OR lp.symbol = sf.ticker
             WHERE sf.is_active = true
             "#,
         );
@@ -187,7 +179,7 @@ impl ScreeningRepository {
             "pbr" => builder.push("sf.pbr"),
             "roe" => builder.push("sf.roe"),
             "dividend_yield" => builder.push("sf.dividend_yield"),
-            "price_change_1d" => builder.push("pd.current_price"), // TODO: 실제 변동률로 변경
+            "price_change_1d" => builder.push("lp.close"), // TODO: 실제 변동률로 변경
             _ => builder.push("sf.market_cap"),
         };
 
@@ -317,16 +309,16 @@ impl ScreeningRepository {
         // 52주 고저가 필터
         if let Some(v) = filter.max_distance_from_52w_high {
             builder.push(
-                " AND CASE WHEN sf.week_52_high > 0 AND pd.current_price IS NOT NULL
-                  THEN ((sf.week_52_high - pd.current_price) / sf.week_52_high) * 100
+                " AND CASE WHEN sf.week_52_high > 0 AND lp.close IS NOT NULL
+                  THEN ((sf.week_52_high - lp.close) / sf.week_52_high) * 100
                   ELSE NULL END <= ",
             );
             builder.push_bind(v);
         }
         if let Some(v) = filter.min_distance_from_52w_low {
             builder.push(
-                " AND CASE WHEN sf.week_52_low > 0 AND pd.current_price IS NOT NULL
-                  THEN ((pd.current_price - sf.week_52_low) / sf.week_52_low) * 100
+                " AND CASE WHEN sf.week_52_low > 0 AND lp.close IS NOT NULL
+                  THEN ((lp.close - sf.week_52_low) / sf.week_52_low) * 100
                   ELSE NULL END >= ",
             );
             builder.push_bind(v);
@@ -589,4 +581,37 @@ pub struct ScreeningPreset {
     pub id: String,
     pub name: String,
     pub description: String,
+}
+
+// =====================================================
+// Materialized View 관리
+// =====================================================
+
+/// 최신 가격 Materialized View 갱신.
+///
+/// 새 가격 데이터가 입력된 후 호출하여 스크리닝 성능을 유지합니다.
+/// CONCURRENTLY 옵션으로 읽기 차단 없이 갱신됩니다.
+///
+/// # 호출 시점
+/// - 트레이딩 시간 종료 후
+/// - 일봉 데이터 배치 입력 후
+/// - 수동 갱신 요청 시
+pub async fn refresh_latest_prices(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_latest_prices")
+        .execute(pool)
+        .await?;
+
+    debug!("mv_latest_prices 갱신 완료");
+    Ok(())
+}
+
+/// Materialized View 존재 여부 확인.
+pub async fn check_latest_prices_view_exists(pool: &PgPool) -> Result<bool, sqlx::Error> {
+    let result: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM pg_matviews WHERE matviewname = 'mv_latest_prices'"
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(result.is_some())
 }

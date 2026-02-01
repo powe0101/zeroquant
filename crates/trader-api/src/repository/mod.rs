@@ -39,7 +39,8 @@ pub use symbol_fundamental::{
     NewSymbolFundamental, SymbolFundamental, SymbolFundamentalRepository, SymbolWithFundamental,
 };
 pub use symbol_info::{
-    ExternalFetchError, NewSymbolInfo, SymbolInfo, SymbolInfoRepository, SymbolSearchResult,
+    DeactivatedStats, ExternalFetchError, FailedSymbolInfo, FetchFailureResult, NewSymbolInfo,
+    SymbolInfo, SymbolInfoRepository, SymbolSearchResult, MAX_FETCH_FAILURES,
 };
 pub use screening::{
     MomentumScreenResult, ScreeningFilter, ScreeningPreset, ScreeningRepository, ScreeningResult,
