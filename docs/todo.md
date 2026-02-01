@@ -165,10 +165,11 @@
 > - Journal-Backtest 통합 → P&L 계산 로직 1곳에서 관리, 버그 수정 범위 축소
 > - 레지스트리 패턴 → 모든 전략에 새 기능(RouteState, GlobalScore) 일괄 적용 가능
 >
-> **예상 시간**: 3주 (96시간) - SDUI 시스템 포함
+> **예상 시간**: 3주 (188시간) - SDUI 시스템 포함
 > **핵심 효과**: 코드 중복 40-50% 감소, 사이드 이펙트 최소화, 유지보수 용이성 증대, UI 자동 생성
 
 ### 1. 전략 레지스트리 패턴 ⭐ 최우선
+**[병렬 가능: P0.1]**
 
 **현재 문제**: 새 전략 추가 시 **5곳 이상 수정** 필요
 - `strategies/mod.rs` - pub mod, pub use
@@ -216,7 +217,39 @@
 
 ---
 
-### 2. 전략 공통 로직 추출
+### 2. TickSizeProvider (호가 단위 계산)
+
+**[병렬 가능: P0.1]**
+
+**목적**: 거래소별 호가 단위 통합 관리 (StrategyContext.exchange_constraints에서 활용)
+
+**구현 항목**
+- [ ] `TickSizeProvider` trait 정의 (trader-core)
+  ```rust
+  pub trait TickSizeProvider: Send + Sync {
+      fn tick_size(&self, price: Decimal) -> Decimal;
+      fn round_to_tick(&self, price: Decimal, method: RoundMethod) -> Decimal;
+  }
+  ```
+- [ ] 거래소별 구현
+  - [ ] `KrxTickSize`: 7단계 호가 단위
+  - [ ] `UsEquityTickSize`: 고정 $0.01
+  - [ ] `BinanceTickSize`: 심볼별 설정
+- [ ] `round_to_tick()` 유틸리티 함수
+- [ ] 팩토리 함수 `get_tick_provider(exchange: Exchange)`
+
+**효과**:
+- 백테스트 정확도 향상 (실제 호가 단위 반영)
+- 주문 실행 시 가격 유효성 자동 검증
+- Global Score의 목표가/손절가 계산에 활용
+
+**예상 시간**: 4시간 (0.5일)
+
+---
+
+### 3. 전략 공통 로직 추출
+
+**[의존성: P0.1 완료 후]**
 
 **현재 문제**: 26개 전략이 유사한 코드 패턴 반복
 
@@ -250,11 +283,351 @@ strategies/common/
 - 새 전략 개발 시 보일러플레이트 80% 감소
 - 버그 수정 시 한 곳만 수정
 
-**예상 시간**: 12시간 (1.5일)
+**예상 시간**: 25시간 (3일)
+
+---
+### 4. SDUI 스키마 자동 생성 시스템 ⭐ 확장
+
+**[병렬 가능: P0.2]**
+
+**목적**: 전략 Config에서 UI 스키마를 자동 생성하고, 재사용 가능한 Fragment로 동적 UI 조합
+
+**현재 문제**:
+- 전략마다 수동으로 SDUI JSON 스키마 작성 필요
+- 동일한 지표/필터 설정이 여러 전략에 중복 정의
+- 전략 추가 시 프론트엔드 코드 수정 필요
+
+#### 4.1 Schema Fragment 시스템
+
+**구현 항목**
+- [ ] `SchemaFragment` 구조체 정의 (trader-core)
+  ```rust
+  /// 재사용 가능한 UI 스키마 조각
+  pub struct SchemaFragment {
+      pub id: String,           // "indicator.rsi", "filter.route_state"
+      pub name: String,         // "RSI 설정"
+      pub description: Option<String>,
+      pub category: FragmentCategory,
+      pub fields: Vec<FieldSchema>,
+      pub dependencies: Vec<String>,  // 다른 Fragment 의존성
+  }
+
+  pub enum FragmentCategory {
+      Indicator,    // 기술적 지표 (RSI, MACD, BB 등)
+      Filter,       // 필터 조건 (RouteState, MarketRegime 등)
+      RiskManagement,  // 리스크 관리 (손절, 익절, 트레일링)
+      PositionSizing,  // 포지션 크기 (고정, 켈리, ATR 기반)
+      Timing,       // 타이밍 (리밸런싱 주기, 거래 시간)
+      Asset,        // 자산 선택 (심볼, 유니버스)
+  }
+  ```
+
+- [ ] 기본 Fragment 정의 (26개 전략 공통 요소)
+  ```rust
+  // 지표 Fragment
+  pub static RSI_FRAGMENT: SchemaFragment = fragment! {
+      id: "indicator.rsi",
+      name: "RSI 설정",
+      category: Indicator,
+      fields: [
+          { name: "period", type: "integer", default: 14, min: 2, max: 100, label: "RSI 기간" },
+          { name: "overbought", type: "number", default: 70.0, min: 50, max: 100, label: "과매수 임계값" },
+          { name: "oversold", type: "number", default: 30.0, min: 0, max: 50, label: "과매도 임계값" },
+      ]
+  };
+
+  // 필터 Fragment
+  pub static ROUTE_STATE_FILTER: SchemaFragment = fragment! {
+      id: "filter.route_state",
+      name: "RouteState 필터",
+      category: Filter,
+      fields: [
+          { name: "enabled", type: "boolean", default: false, label: "RouteState 필터 활성화" },
+          { name: "allowed_states", type: "multi_select",
+            options: ["Attack", "Armed", "Wait", "Overheat", "Neutral"],
+            default: ["Attack", "Armed"], label: "허용 상태" },
+      ]
+  };
+
+  // 리스크 Fragment
+  pub static TRAILING_STOP_FRAGMENT: SchemaFragment = fragment! {
+      id: "risk.trailing_stop",
+      name: "트레일링 스탑",
+      category: RiskManagement,
+      fields: [
+          { name: "enabled", type: "boolean", default: false, label: "트레일링 스탑 활성화" },
+          { name: "trigger_pct", type: "number", default: 2.0, min: 0.1, max: 20,
+            label: "활성화 수익률 (%)", condition: "enabled == true" },
+          { name: "trail_pct", type: "number", default: 1.0, min: 0.1, max: 10,
+            label: "추적 비율 (%)", condition: "enabled == true" },
+      ]
+  };
+  ```
+
+#### 4.2 FragmentRegistry (Fragment 관리)
+
+- [ ] `FragmentRegistry` 구현
+  ```rust
+  pub struct FragmentRegistry {
+      fragments: HashMap<String, SchemaFragment>,
+  }
+
+  impl FragmentRegistry {
+      /// 빌트인 Fragment 자동 등록
+      pub fn with_builtins() -> Self;
+
+      /// Fragment 조회
+      pub fn get(&self, id: &str) -> Option<&SchemaFragment>;
+
+      /// 카테고리별 Fragment 목록
+      pub fn list_by_category(&self, category: FragmentCategory) -> Vec<&SchemaFragment>;
+
+      /// 의존성 포함 전체 Fragment 수집
+      pub fn resolve_with_dependencies(&self, ids: &[&str]) -> Vec<&SchemaFragment>;
+  }
+  ```
+
+- [ ] 빌트인 Fragment 카탈로그
+  | 카테고리 | Fragment ID | 설명 |
+  |----------|-------------|------|
+  | Indicator | `indicator.rsi` | RSI 설정 |
+  | Indicator | `indicator.macd` | MACD 설정 |
+  | Indicator | `indicator.bollinger` | 볼린저 밴드 설정 |
+  | Indicator | `indicator.ma` | 이동평균 설정 (SMA/EMA) |
+  | Indicator | `indicator.atr` | ATR 설정 |
+  | Filter | `filter.route_state` | RouteState 필터 |
+  | Filter | `filter.market_regime` | MarketRegime 필터 |
+  | Filter | `filter.volume` | 거래량 필터 |
+  | RiskManagement | `risk.stop_loss` | 손절 설정 |
+  | RiskManagement | `risk.take_profit` | 익절 설정 |
+  | RiskManagement | `risk.trailing_stop` | 트레일링 스탑 |
+  | PositionSizing | `sizing.fixed_ratio` | 고정 비율 |
+  | PositionSizing | `sizing.kelly` | 켈리 기준 |
+  | Timing | `timing.rebalance` | 리밸런싱 주기 |
+  | Asset | `asset.single` | 단일 심볼 |
+  | Asset | `asset.universe` | 심볼 유니버스 |
+
+#### 4.3 StrategyConfig Derive 매크로
+
+- [ ] `#[derive(StrategyConfig)]` 프로시저 매크로
+  ```rust
+  use trader_strategy_macro::StrategyConfig;
+
+  #[derive(StrategyConfig)]
+  #[strategy(
+      id = "rsi_mean_reversion",
+      name = "RSI 평균회귀",
+      description = "RSI 과매수/과매도 구간에서 평균회귀 매매",
+      category = "single_asset"
+  )]
+  pub struct RsiConfig {
+      // 기본 Fragment 사용
+      #[fragment("indicator.rsi")]
+      pub rsi: RsiIndicatorConfig,
+
+      // 선택적 Fragment
+      #[fragment("filter.route_state", optional)]
+      pub route_filter: Option<RouteStateFilterConfig>,
+
+      // 커스텀 필드
+      #[schema(label = "쿨다운 캔들 수", min = 0, max = 100)]
+      pub cooldown_candles: usize,
+  }
+  ```
+
+- [ ] 매크로가 생성하는 코드
+  ```rust
+  impl RsiConfig {
+      /// 전체 UI 스키마 생성
+      pub fn ui_schema() -> StrategyUISchema {
+          StrategyUISchema {
+              id: "rsi_mean_reversion".to_string(),
+              name: "RSI 평균회귀".to_string(),
+              description: Some("RSI 과매수/과매도 구간에서 평균회귀 매매".to_string()),
+              category: "single_asset".to_string(),
+              fragments: vec![
+                  FragmentRef { id: "indicator.rsi", required: true },
+                  FragmentRef { id: "filter.route_state", required: false },
+              ],
+              custom_fields: vec![
+                  FieldSchema {
+                      name: "cooldown_candles".to_string(),
+                      field_type: FieldType::Integer,
+                      label: "쿨다운 캔들 수".to_string(),
+                      min: Some(0.0), max: Some(100.0),
+                      ..Default::default()
+                  }
+              ],
+          }
+      }
+  }
+  ```
+
+#### 4.4 SchemaComposer (스키마 조합기)
+
+- [ ] `SchemaComposer` 구현
+  ```rust
+  pub struct SchemaComposer {
+      registry: Arc<FragmentRegistry>,
+  }
+
+  impl SchemaComposer {
+      /// 전략 스키마 + Fragment → 완성된 SDUI JSON
+      pub fn compose(&self, strategy_schema: &StrategyUISchema) -> serde_json::Value {
+          let mut sections = vec![];
+
+          // Fragment 섹션 추가
+          for frag_ref in &strategy_schema.fragments {
+              if let Some(fragment) = self.registry.get(&frag_ref.id) {
+                  sections.push(self.fragment_to_section(fragment, frag_ref.required));
+              }
+          }
+
+          // 커스텀 필드 섹션
+          if !strategy_schema.custom_fields.is_empty() {
+              sections.push(self.custom_fields_section(&strategy_schema.custom_fields));
+          }
+
+          json!({
+              "strategy_id": strategy_schema.id,
+              "name": strategy_schema.name,
+              "description": strategy_schema.description,
+              "sections": sections
+          })
+      }
+
+      fn fragment_to_section(&self, fragment: &SchemaFragment, required: bool) -> serde_json::Value {
+          json!({
+              "id": fragment.id,
+              "name": fragment.name,
+              "required": required,
+              "collapsible": !required,
+              "fields": fragment.fields.iter().map(|f| self.field_to_json(f)).collect::<Vec<_>>()
+          })
+      }
+  }
+  ```
+
+#### 4.5 API 엔드포인트
+
+- [ ] `GET /api/v1/strategies/meta` - 전략 목록 + 기본 메타데이터
+- [ ] `GET /api/v1/strategies/{id}/schema` - 완성된 SDUI JSON 스키마
+- [ ] `GET /api/v1/schema/fragments` - 사용 가능한 Fragment 목록
+- [ ] `GET /api/v1/schema/fragments/{category}` - 카테고리별 Fragment
+
+#### 4.6 프론트엔드 통합
+
+- [ ] `SDUIRenderer` 컴포넌트 (SolidJS)
+  - Fragment 기반 섹션 자동 렌더링
+  - 조건부 필드 표시/숨김 (`condition` 속성 처리)
+  - 실시간 유효성 검증
+
+**효과**:
+| 항목 | 개선 |
+|------|------|
+| 전략 추가 UI 작업 | 2시간 → 0분 (자동 생성) |
+| Fragment 재사용 | 26개 전략에서 공통 설정 통합 |
+| 프론트엔드 수정 | 새 전략 추가 시 코드 변경 불필요 |
+| 일관성 | 모든 전략이 동일한 UI 패턴 사용 |
+
+**예상 시간**: 20시간 (2.5일)
+- FragmentRegistry + 빌트인: 8시간
+- Derive 매크로: 6시간
+- SchemaComposer + API: 4시간
+- 프론트엔드 통합: 2시간
 
 ---
 
-### 3. StrategyContext (전략 실행 컨텍스트) ⭐ 신규
+### 5. Journal-Backtest 공통 모듈 ⭐ 신규
+
+**[병렬 가능: P0.4]**
+
+**목적**: 매매일지와 백테스트에서 중복되는 로직을 통합하여 일관성 확보
+
+**현재 문제**:
+- P&L 계산이 `journal.rs`와 `engine.rs`에서 각각 독립 구현됨
+- 승률, Profit Factor 등 통계 로직이 분산됨
+- `TradeExecutionRecord`(Journal)와 `RoundTrip`(Backtest) 타입이 별도 정의
+- 버그 수정 시 양쪽 모두 수정 필요
+
+**구현 항목**
+- [ ] `trader-core/domain/calculations.rs` - 공유 계산 함수
+  ```rust
+  pub mod calculations {
+      /// 비용기준 계산 (FIFO, 가중평균, 최종평가 지원)
+      pub fn cost_basis(entries: &[TradeEntry], method: CostMethod) -> Decimal;
+
+      /// 실현손익 계산
+      pub fn realized_pnl(entry: Decimal, exit: Decimal, qty: Decimal, side: Side) -> Decimal;
+
+      /// 수익률 계산
+      pub fn return_pct(pnl: Decimal, cost_basis: Decimal) -> Decimal;
+
+      /// 미실현손익 계산
+      pub fn unrealized_pnl(entry: Decimal, current: Decimal, qty: Decimal, side: Side) -> Decimal;
+  }
+  ```
+- [ ] `trader-core/domain/statistics.rs` - 통합 통계 모듈
+  ```rust
+  pub struct TradeStatistics {
+      pub total_trades: usize,
+      pub winning_trades: usize,
+      pub losing_trades: usize,
+      pub win_rate_pct: Decimal,
+      pub profit_factor: Decimal,
+      pub avg_win: Decimal,
+      pub avg_loss: Decimal,
+      pub largest_win: Decimal,
+      pub largest_loss: Decimal,
+      pub avg_holding_period: Duration,
+      pub expectancy: Decimal,  // 기대값 = 승률*평균이익 - 패률*평균손실
+  }
+
+  impl TradeStatistics {
+      pub fn from_round_trips(trades: &[RoundTrip]) -> Self;
+      pub fn from_journal_trades(trades: &[TradeExecutionRecord]) -> Self;
+  }
+  ```
+- [ ] `UnifiedTrade` trait 정의 (두 타입 간 변환)
+  ```rust
+  pub trait UnifiedTrade {
+      fn symbol(&self) -> &str;
+      fn side(&self) -> Side;
+      fn entry_price(&self) -> Decimal;
+      fn exit_price(&self) -> Option<Decimal>;
+      fn quantity(&self) -> Decimal;
+      fn pnl(&self) -> Option<Decimal>;
+      fn entry_time(&self) -> DateTime<Utc>;
+      fn exit_time(&self) -> Option<DateTime<Utc>>;
+  }
+
+  impl UnifiedTrade for RoundTrip { /* ... */ }
+  impl UnifiedTrade for TradeExecutionRecord { /* ... */ }
+  ```
+- [ ] 백테스트에서 Journal 통계 재사용
+  ```rust
+  // 백테스트 결과를 Journal 형식으로 내보내기
+  pub fn export_to_journal(report: &BacktestReport) -> Vec<TradeExecutionRecord>;
+
+  // Journal 데이터로 백테스트 비교 분석
+  pub fn compare_with_actual(backtest: &BacktestReport, journal: &[TradeExecutionRecord]) -> ComparisonReport;
+  ```
+
+**효과**:
+| 항목 | 개선 |
+|------|------|
+| 코드 중복 | 40-50% 감소 |
+| 버그 수정 범위 | 1곳으로 통합 |
+| 새 지표 추가 | 양쪽 자동 적용 |
+| 백테스트-실거래 비교 | 동일 기준으로 분석 가능 |
+
+**예상 시간**: 15시간 (2일)
+
+---
+
+### 6. StrategyContext (전략 실행 컨텍스트) ⭐ 신규
+
+**[의존성: P0.4, P0.5 완료 후]**
 
 **목적**: 전략이 거래소 정보와 현재 포지션 상태를 실시간으로 조회하여 의사결정에 활용
 
@@ -459,372 +832,23 @@ fn check_overheat_exit(&self, ctx: &StrategyContext) -> Vec<Signal> {
 | **상태 기반 매매** | RouteState(ATTACK/OVERHEAT)로 진입/청산 자동화 |
 | **스크리닝 연동** | 스크리닝 결과를 전략에서 직접 조회하여 활용 |
 
-**예상 시간**: 20시간 (2.5일) - AnalyticsProvider 포함
+**예상 시간**: 50시간 (6일) (AnalyticsProvider 포함, 가장 복잡한 작업)
 
 ---
 
-### 4. TickSizeProvider trait
-
-**목적**: 거래소별 호가 단위 통합 관리 (StrategyContext.exchange_constraints에서 활용)
-
-**구현 항목**
-- [ ] `TickSizeProvider` trait 정의 (trader-core)
-  ```rust
-  pub trait TickSizeProvider: Send + Sync {
-      fn tick_size(&self, price: Decimal) -> Decimal;
-      fn round_to_tick(&self, price: Decimal, method: RoundMethod) -> Decimal;
-  }
-  ```
-- [ ] 거래소별 구현
-  - [ ] `KrxTickSize`: 7단계 호가 단위
-  - [ ] `UsEquityTickSize`: 고정 $0.01
-  - [ ] `BinanceTickSize`: 심볼별 설정
-- [ ] `round_to_tick()` 유틸리티 함수
-- [ ] 팩토리 함수 `get_tick_provider(exchange: Exchange)`
-
-**효과**:
-- 백테스트 정확도 향상 (실제 호가 단위 반영)
-- 주문 실행 시 가격 유효성 자동 검증
-- Global Score의 목표가/손절가 계산에 활용
+```
+순서 | 작업 | 시간 | 병렬 가능 여부 | 의존성
+-----|------|------|--------------|--------
+1    | 전략 레지스트리 | 28h | [P0.1] | -
+2    | TickSizeProvider | 4h | [P0.1] | -
+3    | 공통 로직 추출 | 25h | - | P0.1 완료 후
+4    | SDUI 자동 생성 | 50h | [P0.2] | -
+5    | Journal-Backtest | 15h | [P0.4] | -
+6    | StrategyContext | 50h | - | P0.4, P0.5 완료 후
+```
 
 **예상 시간**: 4시간 (0.5일)
-
----
-
-### 5. SDUI 스키마 자동 생성 시스템 ⭐ 확장
-
-**목적**: 전략 Config에서 UI 스키마를 자동 생성하고, 재사용 가능한 Fragment로 동적 UI 조합
-
-**현재 문제**:
-- 전략마다 수동으로 SDUI JSON 스키마 작성 필요
-- 동일한 지표/필터 설정이 여러 전략에 중복 정의
-- 전략 추가 시 프론트엔드 코드 수정 필요
-
-#### 5.1 Schema Fragment 시스템
-
-**구현 항목**
-- [ ] `SchemaFragment` 구조체 정의 (trader-core)
-  ```rust
-  /// 재사용 가능한 UI 스키마 조각
-  pub struct SchemaFragment {
-      pub id: String,           // "indicator.rsi", "filter.route_state"
-      pub name: String,         // "RSI 설정"
-      pub description: Option<String>,
-      pub category: FragmentCategory,
-      pub fields: Vec<FieldSchema>,
-      pub dependencies: Vec<String>,  // 다른 Fragment 의존성
-  }
-
-  pub enum FragmentCategory {
-      Indicator,    // 기술적 지표 (RSI, MACD, BB 등)
-      Filter,       // 필터 조건 (RouteState, MarketRegime 등)
-      RiskManagement,  // 리스크 관리 (손절, 익절, 트레일링)
-      PositionSizing,  // 포지션 크기 (고정, 켈리, ATR 기반)
-      Timing,       // 타이밍 (리밸런싱 주기, 거래 시간)
-      Asset,        // 자산 선택 (심볼, 유니버스)
-  }
-  ```
-
-- [ ] 기본 Fragment 정의 (26개 전략 공통 요소)
-  ```rust
-  // 지표 Fragment
-  pub static RSI_FRAGMENT: SchemaFragment = fragment! {
-      id: "indicator.rsi",
-      name: "RSI 설정",
-      category: Indicator,
-      fields: [
-          { name: "period", type: "integer", default: 14, min: 2, max: 100, label: "RSI 기간" },
-          { name: "overbought", type: "number", default: 70.0, min: 50, max: 100, label: "과매수 임계값" },
-          { name: "oversold", type: "number", default: 30.0, min: 0, max: 50, label: "과매도 임계값" },
-      ]
-  };
-
-  // 필터 Fragment
-  pub static ROUTE_STATE_FILTER: SchemaFragment = fragment! {
-      id: "filter.route_state",
-      name: "RouteState 필터",
-      category: Filter,
-      fields: [
-          { name: "enabled", type: "boolean", default: false, label: "RouteState 필터 활성화" },
-          { name: "allowed_states", type: "multi_select",
-            options: ["Attack", "Armed", "Wait", "Overheat", "Neutral"],
-            default: ["Attack", "Armed"], label: "허용 상태" },
-      ]
-  };
-
-  // 리스크 Fragment
-  pub static TRAILING_STOP_FRAGMENT: SchemaFragment = fragment! {
-      id: "risk.trailing_stop",
-      name: "트레일링 스탑",
-      category: RiskManagement,
-      fields: [
-          { name: "enabled", type: "boolean", default: false, label: "트레일링 스탑 활성화" },
-          { name: "trigger_pct", type: "number", default: 2.0, min: 0.1, max: 20,
-            label: "활성화 수익률 (%)", condition: "enabled == true" },
-          { name: "trail_pct", type: "number", default: 1.0, min: 0.1, max: 10,
-            label: "추적 비율 (%)", condition: "enabled == true" },
-      ]
-  };
-  ```
-
-#### 5.2 FragmentRegistry (Fragment 관리)
-
-- [ ] `FragmentRegistry` 구현
-  ```rust
-  pub struct FragmentRegistry {
-      fragments: HashMap<String, SchemaFragment>,
-  }
-
-  impl FragmentRegistry {
-      /// 빌트인 Fragment 자동 등록
-      pub fn with_builtins() -> Self;
-
-      /// Fragment 조회
-      pub fn get(&self, id: &str) -> Option<&SchemaFragment>;
-
-      /// 카테고리별 Fragment 목록
-      pub fn list_by_category(&self, category: FragmentCategory) -> Vec<&SchemaFragment>;
-
-      /// 의존성 포함 전체 Fragment 수집
-      pub fn resolve_with_dependencies(&self, ids: &[&str]) -> Vec<&SchemaFragment>;
-  }
-  ```
-
-- [ ] 빌트인 Fragment 카탈로그
-  | 카테고리 | Fragment ID | 설명 |
-  |----------|-------------|------|
-  | Indicator | `indicator.rsi` | RSI 설정 |
-  | Indicator | `indicator.macd` | MACD 설정 |
-  | Indicator | `indicator.bollinger` | 볼린저 밴드 설정 |
-  | Indicator | `indicator.ma` | 이동평균 설정 (SMA/EMA) |
-  | Indicator | `indicator.atr` | ATR 설정 |
-  | Filter | `filter.route_state` | RouteState 필터 |
-  | Filter | `filter.market_regime` | MarketRegime 필터 |
-  | Filter | `filter.volume` | 거래량 필터 |
-  | RiskManagement | `risk.stop_loss` | 손절 설정 |
-  | RiskManagement | `risk.take_profit` | 익절 설정 |
-  | RiskManagement | `risk.trailing_stop` | 트레일링 스탑 |
-  | PositionSizing | `sizing.fixed_ratio` | 고정 비율 |
-  | PositionSizing | `sizing.kelly` | 켈리 기준 |
-  | Timing | `timing.rebalance` | 리밸런싱 주기 |
-  | Asset | `asset.single` | 단일 심볼 |
-  | Asset | `asset.universe` | 심볼 유니버스 |
-
-#### 5.3 StrategyConfig Derive 매크로
-
-- [ ] `#[derive(StrategyConfig)]` 프로시저 매크로
-  ```rust
-  use trader_strategy_macro::StrategyConfig;
-
-  #[derive(StrategyConfig)]
-  #[strategy(
-      id = "rsi_mean_reversion",
-      name = "RSI 평균회귀",
-      description = "RSI 과매수/과매도 구간에서 평균회귀 매매",
-      category = "single_asset"
-  )]
-  pub struct RsiConfig {
-      // 기본 Fragment 사용
-      #[fragment("indicator.rsi")]
-      pub rsi: RsiIndicatorConfig,
-
-      // 선택적 Fragment
-      #[fragment("filter.route_state", optional)]
-      pub route_filter: Option<RouteStateFilterConfig>,
-
-      // 커스텀 필드
-      #[schema(label = "쿨다운 캔들 수", min = 0, max = 100)]
-      pub cooldown_candles: usize,
-  }
-  ```
-
-- [ ] 매크로가 생성하는 코드
-  ```rust
-  impl RsiConfig {
-      /// 전체 UI 스키마 생성
-      pub fn ui_schema() -> StrategyUISchema {
-          StrategyUISchema {
-              id: "rsi_mean_reversion".to_string(),
-              name: "RSI 평균회귀".to_string(),
-              description: Some("RSI 과매수/과매도 구간에서 평균회귀 매매".to_string()),
-              category: "single_asset".to_string(),
-              fragments: vec![
-                  FragmentRef { id: "indicator.rsi", required: true },
-                  FragmentRef { id: "filter.route_state", required: false },
-              ],
-              custom_fields: vec![
-                  FieldSchema {
-                      name: "cooldown_candles".to_string(),
-                      field_type: FieldType::Integer,
-                      label: "쿨다운 캔들 수".to_string(),
-                      min: Some(0.0), max: Some(100.0),
-                      ..Default::default()
-                  }
-              ],
-          }
-      }
-  }
-  ```
-
-#### 5.4 SchemaComposer (스키마 조합기)
-
-- [ ] `SchemaComposer` 구현
-  ```rust
-  pub struct SchemaComposer {
-      registry: Arc<FragmentRegistry>,
-  }
-
-  impl SchemaComposer {
-      /// 전략 스키마 + Fragment → 완성된 SDUI JSON
-      pub fn compose(&self, strategy_schema: &StrategyUISchema) -> serde_json::Value {
-          let mut sections = vec![];
-
-          // Fragment 섹션 추가
-          for frag_ref in &strategy_schema.fragments {
-              if let Some(fragment) = self.registry.get(&frag_ref.id) {
-                  sections.push(self.fragment_to_section(fragment, frag_ref.required));
-              }
-          }
-
-          // 커스텀 필드 섹션
-          if !strategy_schema.custom_fields.is_empty() {
-              sections.push(self.custom_fields_section(&strategy_schema.custom_fields));
-          }
-
-          json!({
-              "strategy_id": strategy_schema.id,
-              "name": strategy_schema.name,
-              "description": strategy_schema.description,
-              "sections": sections
-          })
-      }
-
-      fn fragment_to_section(&self, fragment: &SchemaFragment, required: bool) -> serde_json::Value {
-          json!({
-              "id": fragment.id,
-              "name": fragment.name,
-              "required": required,
-              "collapsible": !required,
-              "fields": fragment.fields.iter().map(|f| self.field_to_json(f)).collect::<Vec<_>>()
-          })
-      }
-  }
-  ```
-
-#### 5.5 API 엔드포인트
-
-- [ ] `GET /api/v1/strategies/meta` - 전략 목록 + 기본 메타데이터
-- [ ] `GET /api/v1/strategies/{id}/schema` - 완성된 SDUI JSON 스키마
-- [ ] `GET /api/v1/schema/fragments` - 사용 가능한 Fragment 목록
-- [ ] `GET /api/v1/schema/fragments/{category}` - 카테고리별 Fragment
-
-#### 5.6 프론트엔드 통합
-
-- [ ] `SDUIRenderer` 컴포넌트 (SolidJS)
-  - Fragment 기반 섹션 자동 렌더링
-  - 조건부 필드 표시/숨김 (`condition` 속성 처리)
-  - 실시간 유효성 검증
-
-**의존성**: 전략 레지스트리 패턴 (1번 항목)
-
-**효과**:
-| 항목 | 개선 |
-|------|------|
-| 전략 추가 UI 작업 | 2시간 → 0분 (자동 생성) |
-| Fragment 재사용 | 26개 전략에서 공통 설정 통합 |
-| 프론트엔드 수정 | 새 전략 추가 시 코드 변경 불필요 |
-| 일관성 | 모든 전략이 동일한 UI 패턴 사용 |
-
-**예상 시간**: 20시간 (2.5일)
-- FragmentRegistry + 빌트인: 8시간
-- Derive 매크로: 6시간
-- SchemaComposer + API: 4시간
-- 프론트엔드 통합: 2시간
-
----
-
-### 6. Journal-Backtest 공통 모듈 ⭐ 신규
-
-**목적**: 매매일지와 백테스트에서 중복되는 로직을 통합하여 일관성 확보
-
-**현재 문제**:
-- P&L 계산이 `journal.rs`와 `engine.rs`에서 각각 독립 구현됨
-- 승률, Profit Factor 등 통계 로직이 분산됨
-- `TradeExecutionRecord`(Journal)와 `RoundTrip`(Backtest) 타입이 별도 정의
-- 버그 수정 시 양쪽 모두 수정 필요
-
-**구현 항목**
-- [ ] `trader-core/domain/calculations.rs` - 공유 계산 함수
-  ```rust
-  pub mod calculations {
-      /// 비용기준 계산 (FIFO, 가중평균, 최종평가 지원)
-      pub fn cost_basis(entries: &[TradeEntry], method: CostMethod) -> Decimal;
-
-      /// 실현손익 계산
-      pub fn realized_pnl(entry: Decimal, exit: Decimal, qty: Decimal, side: Side) -> Decimal;
-
-      /// 수익률 계산
-      pub fn return_pct(pnl: Decimal, cost_basis: Decimal) -> Decimal;
-
-      /// 미실현손익 계산
-      pub fn unrealized_pnl(entry: Decimal, current: Decimal, qty: Decimal, side: Side) -> Decimal;
-  }
-  ```
-- [ ] `trader-core/domain/statistics.rs` - 통합 통계 모듈
-  ```rust
-  pub struct TradeStatistics {
-      pub total_trades: usize,
-      pub winning_trades: usize,
-      pub losing_trades: usize,
-      pub win_rate_pct: Decimal,
-      pub profit_factor: Decimal,
-      pub avg_win: Decimal,
-      pub avg_loss: Decimal,
-      pub largest_win: Decimal,
-      pub largest_loss: Decimal,
-      pub avg_holding_period: Duration,
-      pub expectancy: Decimal,  // 기대값 = 승률*평균이익 - 패률*평균손실
-  }
-
-  impl TradeStatistics {
-      pub fn from_round_trips(trades: &[RoundTrip]) -> Self;
-      pub fn from_journal_trades(trades: &[TradeExecutionRecord]) -> Self;
-  }
-  ```
-- [ ] `UnifiedTrade` trait 정의 (두 타입 간 변환)
-  ```rust
-  pub trait UnifiedTrade {
-      fn symbol(&self) -> &str;
-      fn side(&self) -> Side;
-      fn entry_price(&self) -> Decimal;
-      fn exit_price(&self) -> Option<Decimal>;
-      fn quantity(&self) -> Decimal;
-      fn pnl(&self) -> Option<Decimal>;
-      fn entry_time(&self) -> DateTime<Utc>;
-      fn exit_time(&self) -> Option<DateTime<Utc>>;
-  }
-
-  impl UnifiedTrade for RoundTrip { /* ... */ }
-  impl UnifiedTrade for TradeExecutionRecord { /* ... */ }
-  ```
-- [ ] 백테스트에서 Journal 통계 재사용
-  ```rust
-  // 백테스트 결과를 Journal 형식으로 내보내기
-  pub fn export_to_journal(report: &BacktestReport) -> Vec<TradeExecutionRecord>;
-
-  // Journal 데이터로 백테스트 비교 분석
-  pub fn compare_with_actual(backtest: &BacktestReport, journal: &[TradeExecutionRecord]) -> ComparisonReport;
-  ```
-
-**효과**:
-| 항목 | 개선 |
-|------|------|
-| 코드 중복 | 40-50% 감소 |
-| 버그 수정 범위 | 1곳으로 통합 |
-| 새 지표 추가 | 양쪽 자동 적용 |
-| 백테스트-실거래 비교 | 동일 기준으로 분석 가능 |
-
-**예상 시간**: 12시간 (1.5일)
+**총 예상 시간**: 172h → **188h** (16h 증가)
 
 ---
 
@@ -833,8 +857,10 @@ fn check_overheat_exit(&self, ctx: &StrategyContext) -> Vec<Signal> {
 > **의존성**: Phase 0 완료 후 시작
 > **예상 시간**: 2주
 
-### 1. 구조적 피처 (Structural Features)
+### Phase 1-A: 분석 엔진(1.5주, 선형 의존)
 
+#### 1. 구조적 피처 (Structural Features)
+**[의존성: P0.2 공통 로직]**
 **의존성**: `strategies/common/indicators.rs` 활용
 
 **목적**: "살아있는 횡보"와 "죽은 횡보"를 구분하여 돌파 가능성 예측
@@ -860,6 +886,7 @@ fn check_overheat_exit(&self, ctx: &StrategyContext) -> Vec<Signal> {
 ---
 
 ### 2. RouteState 상태 관리
+**[의존성: P1-A.1 완료 후]**
 
 **의존성**: StructuralFeatures 완료 후
 
