@@ -32,8 +32,11 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
   - **자산배분 전략**: 여러 심볼로 구성된 포트폴리오 리밸런싱 (HAA, XAA, All Weather 등)
 - 전략 인스턴스는 고유한 이름으로 저장되며, 동일 기본 전략에서 여러 인스턴스 생성 가능
 
-#### 2.1.2 파라미터 설정
+#### 2.1.2 파라미터 설정 (SDUI 자동 생성)
+
+##### 기본 동작
 - 각 전략은 SDUI(Server-Driven UI) 스키마를 통해 동적 파라미터 폼을 렌더링한다
+- **전략 Config 구조체에서 UI 스키마가 자동 생성**되어 수동 스키마 작성 불필요
 - 파라미터 유형:
   - **심볼**: 대상 종목 (자동완성 검색 지원)
   - **기술적 지표**: RSI 기간, 볼린저 밴드 표준편차, 이동평균 기간 등
@@ -43,6 +46,30 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
   - 숫자 범위 제한 (min/max)
   - 필수 값 검증
   - 타입 검증 (정수, 실수, 문자열, 배열)
+
+##### SDUI Fragment 시스템
+- **Schema Fragment**: 재사용 가능한 UI 스키마 조각
+  - 카테고리: Indicator, Filter, RiskManagement, PositionSizing, Timing, Asset
+  - 예: `indicator.rsi`, `filter.route_state`, `risk.trailing_stop`
+- **FragmentRegistry**: 빌트인 Fragment 관리 및 조회
+- **SchemaComposer**: Fragment + 커스텀 필드 → 완성된 SDUI JSON 조합
+
+##### 자동 생성 흐름
+1. 전략 Config에 `#[derive(StrategyConfig)]` 매크로 적용
+2. 사용할 Fragment를 `#[fragment("id")]` 속성으로 지정
+3. 커스텀 필드는 `#[schema(label, min, max)]` 속성으로 메타데이터 정의
+4. 런타임에 `SchemaComposer`가 완성된 SDUI JSON 반환
+5. 프론트엔드 `SDUIRenderer`가 JSON 기반으로 폼 렌더링
+
+##### 조건부 필드 표시
+- 특정 필드 값에 따라 다른 필드 표시/숨김 가능
+- 예: "트레일링 스탑 활성화" 체크 시에만 관련 설정 표시
+- `condition` 속성: `"enabled == true"`, `"mode == 'advanced'"` 등
+
+##### API 엔드포인트
+- `GET /api/v1/strategies/meta`: 전략 목록 및 기본 정보
+- `GET /api/v1/strategies/{id}/schema`: 해당 전략의 완성된 SDUI JSON
+- `GET /api/v1/schema/fragments`: 사용 가능한 Fragment 카탈로그
 
 #### 2.1.3 리스크 설정
 - 전략별 리스크 파라미터:
