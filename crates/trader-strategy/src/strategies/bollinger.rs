@@ -913,3 +913,18 @@ mod tests {
         // 핵심: 밴드 계산이 정상적으로 되고, 에러 없이 처리되는지 확인
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "bollinger_bands",
+    aliases: ["bollinger"],
+    name: "볼린저 밴드",
+    description: "볼린저 밴드 이탈 시 평균회귀를 노리는 전략입니다.",
+    timeframe: "15m",
+    symbols: [],
+    category: Intraday,
+    markets: [Crypto, KrStock, UsStock],
+    type: BollingerStrategy
+}

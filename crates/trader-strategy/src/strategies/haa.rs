@@ -915,3 +915,18 @@ mod tests {
         assert_eq!(state["current_mode"], "Offensive");
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "haa",
+    aliases: [],
+    name: "HAA",
+    description: "계층적 자산배분 (Hierarchical Asset Allocation) 전략입니다.",
+    timeframe: "1d",
+    symbols: ["TIP", "SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "PDBC", "VNQ", "BIL"],
+    category: Monthly,
+    markets: [UsStock],
+    type: HaaStrategy
+}

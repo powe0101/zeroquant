@@ -639,3 +639,18 @@ mod tests {
         assert!(sectors.contains(&"091160".to_string()));
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "sector_vb",
+    aliases: ["sector_volatility"],
+    name: "섹터 변동성 돌파",
+    description: "섹터별 변동성 돌파 전략입니다.",
+    timeframe: "1d",
+    symbols: ["091160", "091170", "091180", "091220", "091230"],
+    category: Daily,
+    markets: [KrStock],
+    type: SectorVbStrategy
+}

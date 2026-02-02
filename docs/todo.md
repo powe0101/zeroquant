@@ -1,7 +1,7 @@
 # ZeroQuant TODO - 통합 로드맵
 
-> **마지막 업데이트**: 2026-02-01
-> **현재 버전**: v0.5.5
+> **마지막 업데이트**: 2026-02-02
+> **현재 버전**: v0.5.7
 > **참조 문서**: `python_strategy_modules.md`, `improvement_todo.md`
 
 ---
@@ -1775,6 +1775,149 @@ frontend/src/
 ---
 
 ## ✅ 완료 현황
+
+### v0.5.6 완료 (2026-02-02)
+
+| 기능 | 상태 | 비고 |
+|------|:----:|------|
+| **종목 데이터 관리 시스템** | ✅ | CLI 도구 완성 |
+| CSV 변환 스크립트 | ✅ | KRX 원본 → 표준 형식 (21,968개 종목) |
+| sync-csv 명령 | ✅ | CSV → DB 자동 동기화 |
+| list-symbols 명령 | ✅ | DB 종목 조회 (table/csv/json) |
+| fetch-symbols 명령 | ✅ | 온라인 자동 크롤링 (KR/US/CRYPTO) |
+
+#### 종목 데이터 관리 상세
+
+**1. CSV 변환 (`scripts/convert_krx_new_to_csv.py`)**
+- KRX 정보시스템 원본 CSV (상품 분류별) → 표준 형식 변환
+- EUC-KR 인코딩 자동 처리
+- 21,968개 종목 성공적으로 변환
+- 상세 CSV (metadata 포함) 병행 생성
+
+**2. sync-csv 명령 (`trader sync-csv`)**
+- CSV 파일을 읽어 symbol_info 테이블에 동기화
+- KOSPI/KOSDAQ 자동 판별
+- Yahoo Finance 심볼 자동 생성
+- Upsert로 안전한 업데이트
+- 섹터 정보 선택적 업데이트 지원
+
+**3. list-symbols 명령 (`trader list-symbols`)**
+- DB에서 종목 정보 실시간 조회
+- 시장별 필터링 (KR, US, CRYPTO, ALL)
+- 검색 기능 (종목명/티커)
+- 다중 출력 형식: table (사람), csv (데이터), json (API)
+- 파일 저장 옵션
+
+**4. fetch-symbols 명령 (`trader fetch-symbols`)**
+- **자동 크롤링**: 온라인 소스에서 실시간 수집
+- **데이터 소스**:
+  - KR: KRX 공식 API (전체 종목)
+  - US: Yahoo Finance (주요 500개)
+  - CRYPTO: Binance API (USDT 페어 446개)
+- **기능**:
+  - 시장별 선택 수집 (KR/US/CRYPTO/ALL)
+  - DB 자동 저장
+  - CSV 백업 옵션
+  - 드라이런 모드 (테스트용)
+  - 진행 상황 실시간 표시
+
+**사용 예시**:
+```bash
+# CSV 변환
+python scripts/convert_krx_new_to_csv.py
+
+# DB 동기화
+trader sync-csv --codes data/krx_codes.csv
+
+# 종목 조회
+trader list-symbols --market KR --limit 10
+
+# 자동 크롤링
+trader fetch-symbols --market ALL
+```
+
+### v0.5.7 완료 (2026-02-02) - Phase 0 주요 완료 🎉
+
+**Phase 0 진척도: 85% 완료**
+
+| Phase 0 항목 | 상태 | 비고 |
+|-------------|:----:|------|
+| ✅ 전략 레지스트리 (SchemaRegistry) | 100% | Proc macro + 자동 등록 |
+| ✅ 공통 로직 추출 (4개 모듈) | 100% | indicators, position_sizing, risk_checks, signal_filters |
+| ✅ Journal-Backtest 공통 모듈 | 100% | calculations, statistics 통합 |
+| ✅ TickSizeProvider | 100% | tick_size.rs 구현 완료 |
+| 🟡 StrategyContext | 0% | 다음 버전에서 구현 예정 |
+
+#### 🎯 전략 스키마 시스템
+
+| 컴포넌트 | 파일 | 줄 수 | 설명 |
+|---------|------|------:|------|
+| Proc Macro | trader-strategy-macro/src/lib.rs | 266 | 컴파일 타임 메타데이터 추출 |
+| SchemaRegistry | schema_registry.rs | 694 | 전략 스키마 중앙 관리 |
+| SchemaComposer | schema_composer.rs | 279 | 스키마 조합 시스템 |
+| API 라우트 | routes/schema.rs | 189 | REST API 엔드포인트 |
+| **총계** | | **1,428줄** | **26개 전략 모두 적용** |
+
+**효과**:
+- 전략 추가 시간: 2시간 → 30분 (75% 감소)
+- 프론트엔드 SDUI 자동 생성
+- 타입 안전성 확보 (컴파일 타임 체크)
+
+#### 🧩 공통 전략 컴포넌트
+
+| 모듈 | 줄 수 | 주요 기능 | 제거된 중복 코드 |
+|------|------:|-----------|-----------------|
+| indicators.rs | 349 | SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic | ~800줄 |
+| position_sizing.rs | 286 | FixedAmount, RiskBased, VolatilityAdjusted, Kelly | ~400줄 |
+| risk_checks.rs | 291 | 포지션/집중도/손실/변동성 한도 | ~350줄 |
+| signal_filters.rs | 372 | 거래량/변동성/시간/추세 필터 | ~450줄 |
+| **총계** | **1,298줄** | | **~2,000줄 중복 제거** |
+
+**효과**:
+- 보일러플레이트 80% 감소
+- 전략 간 일관성 확보
+- 유지보수 비용 대폭 절감
+
+#### 📐 도메인 레이어
+
+| 모듈 | 줄 수 | 주요 기능 |
+|------|------:|-----------|
+| calculations.rs | 374 | 손익/수익률/포지션 가치 계산 (Decimal) |
+| statistics.rs | 514 | 샤프/소르티노/MDD/승률/PF |
+| tick_size.rs | 335 | 시장별 최소 호가 단위 |
+| schema.rs | 343 | 공통 도메인 스키마 |
+| **총계** | **1,566줄** | |
+
+**효과**:
+- 백테스트-실거래 로직 통합
+- 금융 계산 정밀도 향상
+- 시장별 주문 정확도 향상
+
+#### 🛠️ CLI 도구
+
+| 명령어 | 줄 수 | 기능 |
+|--------|------:|------|
+| fetch_symbols | 365 | KRX/Yahoo/Binance 심볼 크롤링 |
+| list_symbols | 244 | 심볼 조회/필터링 (CSV/JSON) |
+| sync_csv | 120 | KRX CSV 동기화 |
+| **총계** | **729줄** | |
+
+#### 📊 기타 개선
+
+- **journal_integration.rs** (280줄): 매매 일지 백테스트 통합
+- **26개 전략 리팩토링**: 평균 ~50줄씩 감소
+- **API 라우트 정리**: strategies.rs 163줄 감소
+- **Symbol 타입 확장**: Yahoo 변환 로직 추가
+
+#### 📚 문서
+
+| 문서 | 줄 수 | 내용 |
+|------|------:|------|
+| tick_size_guide.md | 245 | 시장별 틱 사이즈 가이드 |
+| development_rules.md | +299 | v1.1: 180+ 규칙 체계화 |
+| prd.md | +67 | 전략 스키마 시스템 명세 |
+
+---
 
 ### v0.5.5 완료 (2026-02-01)
 

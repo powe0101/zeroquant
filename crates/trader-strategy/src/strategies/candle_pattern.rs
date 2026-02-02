@@ -956,3 +956,18 @@ mod tests {
         assert_eq!(strategy.name(), "Candle Pattern");
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "candle_pattern",
+    aliases: [],
+    name: "캔들 패턴",
+    description: "캔들 패턴 인식으로 매매 신호를 생성합니다.",
+    timeframe: "15m",
+    symbols: [],
+    category: Intraday,
+    markets: [Crypto, KrStock, UsStock],
+    type: CandlePatternStrategy
+}

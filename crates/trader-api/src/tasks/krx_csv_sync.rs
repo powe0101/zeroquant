@@ -199,28 +199,7 @@ fn is_valid_krx_ticker(ticker: &str) -> bool {
 ///
 /// ## Returns
 /// ("KOSPI" | "KOSDAQ", ".KS" | ".KQ")
-fn determine_exchange(ticker: &str) -> (&'static str, &'static str) {
-    if ticker.is_empty() {
-        return ("KOSPI", ".KS");
-    }
-
-    let first_char = ticker.chars().next().unwrap();
-
-    match first_char {
-        '0' => ("KOSPI", ".KS"),
-        '1'..='4' => ("KOSDAQ", ".KQ"),
-        _ => ("KOSDAQ", ".KQ"), // 5~9로 시작하는 경우도 KOSDAQ일 가능성 높음
-    }
-}
-
-/// 6자리 숫자 티커를 Yahoo Finance 심볼로 변환.
-///
-/// - KOSPI (0으로 시작): .KS 접미사
-/// - KOSDAQ (1~4로 시작): .KQ 접미사
-fn to_yahoo_symbol(ticker: &str) -> String {
-    let (_, suffix) = determine_exchange(ticker);
-    format!("{}{}", ticker, suffix)
-}
+// 심볼 변환은 trader-core::YahooSymbolConverter 사용
 
 /// krx_codes.csv에서 심볼 정보를 읽어 DB에 동기화.
 ///
@@ -252,7 +231,8 @@ pub async fn sync_krx_from_csv<P: AsRef<Path>>(
     let new_symbols: Vec<NewSymbolInfo> = records
         .iter()
         .map(|r| {
-            let (exchange, _) = determine_exchange(&r.ticker);
+            use trader_core::YahooSymbolConverter;
+            let (exchange, _) = YahooSymbolConverter::determine_kr_exchange(&r.ticker);
             NewSymbolInfo {
                 ticker: r.ticker.clone(),
                 name: r.name.clone(),
@@ -260,7 +240,7 @@ pub async fn sync_krx_from_csv<P: AsRef<Path>>(
                 market: "KR".to_string(),
                 exchange: Some(exchange.to_string()), // KOSPI 또는 KOSDAQ
                 sector: None, // 별도 CSV에서 업데이트
-                yahoo_symbol: Some(to_yahoo_symbol(&r.ticker)),
+                yahoo_symbol: Some(YahooSymbolConverter::to_yahoo_symbol(&r.ticker, "KR")),
             }
         })
         .collect();
@@ -461,33 +441,5 @@ mod tests {
         assert!(!is_valid_krx_ticker("")); // 빈 문자열
     }
 
-    #[test]
-    fn test_to_yahoo_symbol() {
-        // KOSPI (0으로 시작)
-        assert_eq!(to_yahoo_symbol("005930"), "005930.KS"); // 삼성전자
-        assert_eq!(to_yahoo_symbol("000660"), "000660.KS"); // SK하이닉스
-
-        // KOSDAQ (1~4로 시작)
-        assert_eq!(to_yahoo_symbol("373220"), "373220.KQ"); // LG에너지솔루션
-        assert_eq!(to_yahoo_symbol("247540"), "247540.KQ"); // 에코프로비엠
-    }
-
-    #[test]
-    fn test_determine_exchange() {
-        // KOSPI - 0으로 시작
-        assert_eq!(determine_exchange("005930"), ("KOSPI", ".KS"));
-        assert_eq!(determine_exchange("000660"), ("KOSPI", ".KS"));
-        assert_eq!(determine_exchange("035420"), ("KOSPI", ".KS"));
-
-        // KOSDAQ - 1~4로 시작
-        assert_eq!(determine_exchange("112040"), ("KOSDAQ", ".KQ"));
-        assert_eq!(determine_exchange("247540"), ("KOSDAQ", ".KQ"));
-        assert_eq!(determine_exchange("373220"), ("KOSDAQ", ".KQ"));
-
-        // 5~9로 시작 → KOSDAQ 처리
-        assert_eq!(determine_exchange("550750"), ("KOSDAQ", ".KQ"));
-
-        // 빈 문자열 → 기본값 KOSPI
-        assert_eq!(determine_exchange(""), ("KOSPI", ".KS"));
-    }
+    // 테스트는 trader-core::YahooSymbolConverter에 있음
 }

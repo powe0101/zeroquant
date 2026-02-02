@@ -4,6 +4,7 @@ members = [
     "crates/trader-core",
     "crates/trader-exchange",
     "crates/trader-strategy",
+    "crates/trader-strategy-macro",
     "crates/trader-risk",
     "crates/trader-execution",
     "crates/trader-data",

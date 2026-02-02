@@ -756,3 +756,18 @@ mod tests {
         assert_eq!(state["version"], "2.0.0");
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "simple_power",
+    aliases: [],
+    name: "Simple Power",
+    description: "심플 파워 모멘텀 자산배분 전략입니다.",
+    timeframe: "1d",
+    symbols: ["TQQQ", "SCHD", "PFIX", "TMF"],
+    category: Monthly,
+    markets: [UsStock],
+    type: SimplePowerStrategy
+}

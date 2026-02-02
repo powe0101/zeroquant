@@ -10,9 +10,10 @@
 //!
 //! # 심볼 형식
 //!
-//! - 한국 주식: "005930" → "005930.KS" (코스피) 또는 "005930.KQ" (코스닥)
-//! - 미국 주식: "AAPL" → "AAPL"
-//! - ETF: "SPY" → "SPY"
+//! 모든 심볼은 Yahoo Finance 형식으로 전달되어야 합니다:
+//! - 한국 주식: "005930.KS" (코스피) 또는 "124560.KQ" (코스닥)
+//! - 미국 주식: "AAPL", "GOOGL"
+//! - ETF: "SPY", "QQQ"
 //!
 //! # 사용 예제
 //!
@@ -54,20 +55,7 @@ impl YahooFinanceProvider {
         Ok(Self { connector })
     }
 
-    /// 심볼을 Yahoo Finance 형식으로 변환.
-    ///
-    /// - 한국 주식 (6자리 숫자): ".KS" 접미사 추가 (코스피)
-    /// - 그 외: 그대로 사용
-    pub fn to_yahoo_symbol(symbol: &str) -> String {
-        // 6자리 숫자인 경우 한국 주식
-        if symbol.len() == 6 && symbol.chars().all(|c| c.is_ascii_digit()) {
-            // TODO: 코스닥(.KQ)과 코스피(.KS) 구분 로직 추가 필요
-            // 현재는 코스피로 기본 설정
-            format!("{}.KS", symbol)
-        } else {
-            symbol.to_string()
-        }
-    }
+    
 
     /// 타임프레임을 Yahoo Finance 간격 문자열로 변환.
     pub fn timeframe_to_interval(timeframe: Timeframe) -> &'static str {
@@ -240,7 +228,8 @@ impl HistoricalDataProvider for YahooFinanceProvider {
         timeframe: Timeframe,
         limit: usize,
     ) -> Result<Vec<Kline>, ExchangeError> {
-        let yahoo_symbol = Self::to_yahoo_symbol(symbol);
+        // symbol은 이미 Yahoo Finance 형식이어야 함 (예: "005930.KS", "AAPL")
+        let yahoo_symbol = symbol;
         let interval = Self::timeframe_to_interval(timeframe);
         let range = Self::calculate_range_string(timeframe, limit);
 
@@ -303,14 +292,6 @@ impl HistoricalDataProvider for YahooFinanceProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_to_yahoo_symbol() {
-        assert_eq!(YahooFinanceProvider::to_yahoo_symbol("005930"), "005930.KS");
-        assert_eq!(YahooFinanceProvider::to_yahoo_symbol("AAPL"), "AAPL");
-        assert_eq!(YahooFinanceProvider::to_yahoo_symbol("SPY"), "SPY");
-        assert_eq!(YahooFinanceProvider::to_yahoo_symbol("TQQQ"), "TQQQ");
-    }
 
     #[test]
     fn test_timeframe_to_interval() {

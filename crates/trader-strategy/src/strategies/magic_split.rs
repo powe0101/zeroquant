@@ -774,3 +774,18 @@ mod tests {
         assert_eq!(strategy.stats.total_sells, 2); // 둘 다 익절
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "magic_split",
+    aliases: ["split"],
+    name: "Magic Split",
+    description: "가격대별 분할 매수/매도 전략입니다.",
+    timeframe: "1m",
+    symbols: [],
+    category: Realtime,
+    markets: [Crypto, KrStock, UsStock],
+    type: MagicSplitStrategy
+}

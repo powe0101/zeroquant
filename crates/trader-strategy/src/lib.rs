@@ -31,12 +31,22 @@
 //! ```
 
 pub mod engine;
+pub mod macros;
 pub mod plugin;
+pub mod registry;
+pub mod schema_composer;
+pub mod schema_registry;
 pub mod strategies;
 pub mod traits;
 
 // 주요 타입 재내보내기
 pub use engine::{EngineConfig, EngineError, EngineStats, StrategyEngine, StrategyStats, StrategyStatus};
 pub use plugin::{BuiltinStrategyFactory, LoaderConfig, PluginError, PluginLoader, PluginMetadata};
+pub use registry::{StrategyCategory, StrategyMeta, StrategyRegistry};
+pub use schema_composer::SchemaComposer;
+pub use schema_registry::FragmentRegistry;
 pub use strategies::{GridConfig, GridStats, GridStrategy, RsiConfig, RsiStats, RsiStrategy};
 pub use traits::{Strategy, StrategyMetadata};
+
+// 프로시저 매크로 재내보내기
+pub use trader_strategy_macro::StrategyConfig;

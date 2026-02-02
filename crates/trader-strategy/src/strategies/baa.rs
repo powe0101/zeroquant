@@ -711,3 +711,18 @@ mod tests {
         assert!(asset.is_positive_momentum());
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "baa",
+    aliases: [],
+    name: "BAA",
+    description: "Bold Asset Allocation 공격적 자산배분 전략입니다.",
+    timeframe: "1d",
+    symbols: ["SPY", "VEA", "VWO", "BND", "QQQ", "IWM", "TIP", "DBC", "BIL", "IEF", "TLT"],
+    category: Monthly,
+    markets: [UsStock],
+    type: BaaStrategy
+}

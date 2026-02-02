@@ -664,3 +664,18 @@ mod tests {
         assert_eq!(strategy.assets.len(), 6);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "all_weather",
+    aliases: ["all_weather_us", "all_weather_kr"],
+    name: "올웨더",
+    description: "레이 달리오의 올웨더 포트폴리오 전략입니다.",
+    timeframe: "1d",
+    symbols: ["SPY", "TLT", "IEF", "GLD", "PDBC", "IYK"],
+    category: Monthly,
+    markets: [UsStock, KrStock],
+    type: AllWeatherStrategy
+}

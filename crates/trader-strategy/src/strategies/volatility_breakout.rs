@@ -783,3 +783,18 @@ mod tests {
         assert_eq!(tr3, dec!(15)); // max(10, 5, 15) = 15
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "volatility_breakout",
+    aliases: ["volatility"],
+    name: "변동성 돌파",
+    description: "전일 변동폭을 돌파할 때 진입하는 전략입니다.",
+    timeframe: "1d",
+    symbols: [],
+    category: Daily,
+    markets: [Crypto, KrStock, UsStock],
+    type: VolatilityBreakoutStrategy
+}

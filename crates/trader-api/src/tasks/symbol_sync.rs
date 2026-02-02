@@ -3,10 +3,16 @@
 //! KRX, Binance, Yahoo Finance 등에서 종목 목록을 자동으로 가져와
 //! symbol_info 테이블에 등록합니다.
 //!
-//! ## 지원 데이터 소스
-//! - **KRX**: 한국거래소 (KOSPI, KOSDAQ) 전 종목
-//! - **Binance**: USDT 거래 페어 암호화폐
-//! - **Yahoo Finance**: 미국 주식 (S&P 500, NASDAQ 등 주요 지수 종목)
+//! ## 지원 데이터 소스 (권위 있는 소스 원칙)
+//!
+//! 각 시장별로 "권위 있는 소스(Authoritative Source)"를 정의하고,
+//! 해당 소스에서 종목이 없으면 다른 소스에서도 찾지 않습니다.
+//!
+//! | 시장 | 권위 있는 소스 | 설명 |
+//! |------|--------------|------|
+//! | **KR** | KRX | KRX에 없으면 Yahoo에서도 찾지 않음 |
+//! | **CRYPTO** | Binance | Binance에 없으면 비활성화 |
+//! | **US** | Yahoo Finance | Yahoo에서 상장폐지면 비활성화 |
 //!
 //! Fundamental 데이터 수집 전에 호출하여 수집 대상 심볼이 항상 존재하도록 보장합니다.
 
@@ -165,6 +171,9 @@ pub async fn sync_symbols(
 }
 
 /// KRX 종목 동기화.
+///
+/// KRX는 KR 시장의 권위 있는 소스입니다.
+/// KRX에서 조회된 종목만 활성화되고, KRX에 없는 KR 종목은 비활성화됩니다.
 async fn sync_krx_symbols(pool: &PgPool) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     info!("KRX 종목 목록 조회 중...");
 
@@ -178,19 +187,37 @@ async fn sync_krx_symbols(pool: &PgPool) -> Result<usize, Box<dyn std::error::Er
 
     info!(count = symbols.len(), "KRX 종목 목록 조회 완료");
 
+    // KRX에서 가져온 티커 목록 (권위 있는 소스)
+    let krx_tickers: std::collections::HashSet<String> = symbols
+        .iter()
+        .map(|s| s.ticker.clone())
+        .collect();
+
     // SymbolMetadata → NewSymbolInfo 변환
     let new_symbols: Vec<NewSymbolInfo> = symbols
         .into_iter()
         .map(|s| convert_metadata_to_new_symbol(s))
         .collect();
 
-    // 일괄 upsert
+    // 일괄 upsert (활성화)
     let inserted = SymbolInfoRepository::upsert_batch(pool, &new_symbols).await?;
+
+    // KRX에 없는 KR 종목 비활성화 (권위 있는 소스 원칙)
+    let deactivated = deactivate_missing_symbols(pool, "KR", &krx_tickers).await?;
+    if deactivated > 0 {
+        info!(
+            count = deactivated,
+            "KRX에 없는 종목 비활성화 (상장폐지 추정)"
+        );
+    }
 
     Ok(inserted)
 }
 
 /// Binance 종목 동기화.
+///
+/// Binance는 CRYPTO 시장의 권위 있는 소스입니다.
+/// Binance에서 조회된 종목만 활성화되고, Binance에 없는 CRYPTO 종목은 비활성화됩니다.
 async fn sync_binance_symbols(pool: &PgPool) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     info!("Binance 종목 목록 조회 중...");
 
@@ -222,7 +249,7 @@ async fn sync_binance_symbols(pool: &PgPool) -> Result<usize, Box<dyn std::error
     // Yahoo Finance는 암호화폐를 지원하지 않으므로 yahoo_symbol은 None
     let usdt_pairs: Vec<NewSymbolInfo> = exchange_info
         .symbols
-        .into_iter()
+        .iter()
         .filter(|s| s.quote_asset == "USDT" && s.status == "TRADING")
         .map(|s| NewSymbolInfo {
             ticker: format!("{}/USDT", s.base_asset), // 정규화된 형식
@@ -235,6 +262,12 @@ async fn sync_binance_symbols(pool: &PgPool) -> Result<usize, Box<dyn std::error
         })
         .collect();
 
+    // Binance에서 가져온 티커 목록 (권위 있는 소스)
+    let binance_tickers: std::collections::HashSet<String> = usdt_pairs
+        .iter()
+        .map(|s| s.ticker.clone())
+        .collect();
+
     if usdt_pairs.is_empty() {
         warn!("Binance에서 USDT 페어를 가져오지 못함");
         return Ok(0);
@@ -242,8 +275,17 @@ async fn sync_binance_symbols(pool: &PgPool) -> Result<usize, Box<dyn std::error
 
     info!(count = usdt_pairs.len(), "Binance USDT 페어 조회 완료");
 
-    // 일괄 upsert
+    // 일괄 upsert (활성화)
     let inserted = SymbolInfoRepository::upsert_batch(pool, &usdt_pairs).await?;
+
+    // Binance에 없는 CRYPTO 종목 비활성화 (권위 있는 소스 원칙)
+    let deactivated = deactivate_missing_symbols(pool, "CRYPTO", &binance_tickers).await?;
+    if deactivated > 0 {
+        info!(
+            count = deactivated,
+            "Binance에 없는 종목 비활성화 (상장폐지 추정)"
+        );
+    }
 
     Ok(inserted)
 }
@@ -285,6 +327,58 @@ fn convert_metadata_to_new_symbol(metadata: SymbolMetadata) -> NewSymbolInfo {
         sector: metadata.sector,
         yahoo_symbol: metadata.yahoo_symbol,
     }
+}
+
+/// 권위 있는 소스에 없는 종목 비활성화.
+///
+/// 해당 시장의 권위 있는 소스(KRX, Binance 등)에서 조회되지 않은 종목을
+/// 비활성화합니다. 이는 상장폐지되거나 거래 중단된 종목입니다.
+///
+/// # Arguments
+/// * `pool` - DB 연결 풀
+/// * `market` - 시장 코드 ("KR", "CRYPTO" 등)
+/// * `valid_tickers` - 권위 있는 소스에서 조회된 유효한 티커 목록
+///
+/// # Returns
+/// 비활성화된 종목 수
+async fn deactivate_missing_symbols(
+    pool: &PgPool,
+    market: &str,
+    valid_tickers: &std::collections::HashSet<String>,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    // 현재 활성화된 해당 시장 종목 조회
+    let active_symbols = SymbolInfoRepository::get_active_by_market(pool, market).await?;
+
+    let mut deactivated_count = 0;
+
+    for symbol in active_symbols {
+        if !valid_tickers.contains(&symbol.ticker) {
+            // 권위 있는 소스에 없음 → 비활성화
+            match SymbolInfoRepository::deactivate_symbol(
+                pool,
+                symbol.id,
+                &format!("{}에서 조회되지 않음 (상장폐지 추정)", market),
+            ).await {
+                Ok(_) => {
+                    deactivated_count += 1;
+                    debug!(
+                        ticker = %symbol.ticker,
+                        market = %market,
+                        "종목 비활성화됨 (권위 있는 소스에 없음)"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        ticker = %symbol.ticker,
+                        error = %e,
+                        "종목 비활성화 실패"
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(deactivated_count)
 }
 
 #[cfg(test)]

@@ -31,19 +31,7 @@ use validator::Validate;
 use crate::repository::{StrategyRepository, strategies::CreateStrategyInput};
 use crate::state::AppState;
 use crate::websocket::{ServerMessage, StrategyUpdateData};
-use trader_strategy::{
-    strategies::{
-        AllWeatherStrategy, BaaStrategy, BollingerStrategy, CandlePatternStrategy,
-        DualMomentumStrategy, GridStrategy, HaaStrategy, InfinityBotStrategy,
-        KosdaqFireRainStrategy, KospiBothSideStrategy, MagicSplitStrategy,
-        MarketCapTopStrategy, MarketInterestDayStrategy, PensionBotStrategy,
-        RsiStrategy, SectorMomentumStrategy, SectorVbStrategy, SimplePowerStrategy,
-        SmallCapQuantStrategy, SmaStrategy, SnowStrategy, StockGuganStrategy,
-        StockRotationStrategy, Us3xLeverageStrategy,
-        VolatilityBreakoutStrategy, XaaStrategy,
-    },
-    EngineError, EngineStats, Strategy, StrategyStatus,
-};
+use trader_strategy::{EngineError, EngineStats, Strategy, StrategyStatus};
 
 // ==================== 응답 타입 ====================
 
@@ -296,150 +284,37 @@ impl ApiError {
 // ==================== 전략 팩토리 ====================
 
 /// 전략 타입에 따라 전략 인스턴스를 생성.
+///
+/// StrategyRegistry를 통해 등록된 전략의 인스턴스를 생성합니다.
 fn create_strategy_instance(strategy_type: &str) -> Result<Box<dyn Strategy>, String> {
-    match strategy_type {
-        // 단일 종목 전략
-        "rsi" | "rsi_mean_reversion" => Ok(Box::new(RsiStrategy::new())),
-        "grid" | "grid_trading" => Ok(Box::new(GridStrategy::new())),
-        "bollinger" | "bollinger_bands" => Ok(Box::new(BollingerStrategy::new())),
-        "volatility_breakout" | "volatility" => Ok(Box::new(VolatilityBreakoutStrategy::new())),
-        "magic_split" | "split" => Ok(Box::new(MagicSplitStrategy::new())),
-        "sma" | "sma_crossover" | "ma_crossover" => Ok(Box::new(SmaStrategy::new())),
-        "candle_pattern" => Ok(Box::new(CandlePatternStrategy::new())),
-        "infinity_bot" => Ok(Box::new(InfinityBotStrategy::new())),
-        "market_interest_day" => Ok(Box::new(MarketInterestDayStrategy::new())),
-        // 자산배분 전략
-        "simple_power" => Ok(Box::new(SimplePowerStrategy::new())),
-        "haa" => Ok(Box::new(HaaStrategy::new())),
-        "xaa" => Ok(Box::new(XaaStrategy::new())),
-        "stock_rotation" | "rotation" => Ok(Box::new(StockRotationStrategy::new())),
-        "all_weather" | "all_weather_us" | "all_weather_kr" => Ok(Box::new(AllWeatherStrategy::new())),
-        "snow" | "snow_us" | "snow_kr" => Ok(Box::new(SnowStrategy::new())),
-        "market_cap_top" => Ok(Box::new(MarketCapTopStrategy::new())),
-        // 3차 전략
-        "baa" => Ok(Box::new(BaaStrategy::new())),
-        "sector_momentum" => Ok(Box::new(SectorMomentumStrategy::new())),
-        "dual_momentum" => Ok(Box::new(DualMomentumStrategy::new())),
-        "small_cap_quant" => Ok(Box::new(SmallCapQuantStrategy::new())),
-        "pension_bot" | "pension" => Ok(Box::new(PensionBotStrategy::new())),
-        "sector_vb" | "sector_volatility" => Ok(Box::new(SectorVbStrategy::new())),
-        "kospi_bothside" | "kospi_both" => Ok(Box::new(KospiBothSideStrategy::new())),
-        "kosdaq_fire_rain" | "kosdaq_surge" => Ok(Box::new(KosdaqFireRainStrategy::new())),
-        "us_3x_leverage" | "us_leverage" => Ok(Box::new(Us3xLeverageStrategy::new())),
-        "stock_gugan" | "gugan" => Ok(Box::new(StockGuganStrategy::new())),
-        _ => Err(format!("Unknown strategy type: {}", strategy_type)),
-    }
+    trader_strategy::StrategyRegistry::create_instance(strategy_type)
 }
 
 /// 전략 타입에서 기본 이름 가져오기.
+///
+/// StrategyRegistry를 통해 등록된 전략의 이름을 조회합니다.
 fn get_strategy_default_name(strategy_type: &str) -> &'static str {
-    match strategy_type {
-        // 단일 종목 전략
-        "rsi" | "rsi_mean_reversion" => "RSI 평균회귀",
-        "grid" | "grid_trading" => "그리드 트레이딩",
-        "bollinger" | "bollinger_bands" => "볼린저 밴드",
-        "volatility_breakout" | "volatility" => "변동성 돌파",
-        "magic_split" | "split" => "Magic Split",
-        "sma" | "sma_crossover" | "ma_crossover" => "이동평균 크로스오버",
-        "candle_pattern" => "캔들 패턴",
-        "infinity_bot" => "무한매수",
-        "market_interest_day" => "단타 시장관심",
-        // 자산배분 전략
-        "simple_power" => "Simple Power",
-        "haa" => "HAA",
-        "xaa" => "XAA",
-        "stock_rotation" | "rotation" => "종목 갈아타기",
-        "all_weather" | "all_weather_us" | "all_weather_kr" => "올웨더",
-        "snow" | "snow_us" | "snow_kr" => "스노우",
-        "market_cap_top" => "시총 TOP",
-        // 3차 전략
-        "baa" => "BAA",
-        "sector_momentum" => "섹터 모멘텀",
-        "dual_momentum" => "듀얼 모멘텀",
-        "small_cap_quant" => "소형주 퀀트",
-        "pension_bot" | "pension" => "연금 자동화",
-        "sector_vb" | "sector_volatility" => "섹터 변동성 돌파",
-        "kospi_bothside" | "kospi_both" => "코스피 양방향",
-        "kosdaq_fire_rain" | "kosdaq_surge" => "코스닥 급등주",
-        "us_3x_leverage" | "us_leverage" => "미국 3배 레버리지",
-        "stock_gugan" | "gugan" => "주식 구간 매매",
-        _ => "Unknown Strategy",
-    }
+    trader_strategy::StrategyRegistry::find(strategy_type)
+        .map(|meta| meta.name)
+        .unwrap_or("Unknown Strategy")
 }
 
 /// 전략 타입에서 기본 타임프레임 가져오기.
+///
+/// StrategyRegistry를 통해 등록된 전략의 기본 타임프레임을 조회합니다.
 fn get_strategy_default_timeframe(strategy_type: &str) -> &'static str {
-    match strategy_type {
-        // 실시간 전략: 1m
-        "grid" | "grid_trading" => "1m",
-        "magic_split" | "split" => "1m",
-        "infinity_bot" => "1m",
-        "stock_gugan" | "gugan" => "1m",
-        // 분봉 전략: 15m
-        "rsi" | "rsi_mean_reversion" => "15m",
-        "bollinger" | "bollinger_bands" => "15m",
-        "sma" | "sma_crossover" | "ma_crossover" => "15m",
-        "candle_pattern" => "15m",
-        "kospi_bothside" | "kospi_both" => "15m",
-        "kosdaq_fire_rain" | "kosdaq_surge" => "15m",
-        // 일봉 전략: 1d
-        "volatility_breakout" | "volatility" => "1d",
-        "snow" | "snow_us" | "snow_kr" => "1d",
-        "stock_rotation" | "rotation" => "1d",
-        "market_interest_day" => "1d",
-        "sector_vb" | "sector_volatility" => "1d",
-        "us_3x_leverage" | "us_leverage" => "1d",
-        // 자산배분 전략 (월 리밸런싱이지만 일봉 데이터 사용): 1d
-        "simple_power" => "1d",
-        "haa" => "1d",
-        "xaa" => "1d",
-        "all_weather" | "all_weather_us" | "all_weather_kr" => "1d",
-        "market_cap_top" => "1d",
-        "baa" => "1d",
-        "sector_momentum" => "1d",
-        "dual_momentum" => "1d",
-        "small_cap_quant" => "1d",
-        "pension_bot" | "pension" => "1d",
-        _ => "1d",
-    }
+    trader_strategy::StrategyRegistry::find(strategy_type)
+        .map(|meta| meta.default_timeframe)
+        .unwrap_or("1d")
 }
 
 /// 전략 타입에서 권장 심볼 가져오기.
+///
+/// StrategyRegistry를 통해 등록된 전략의 권장 심볼 목록을 조회합니다.
 fn get_strategy_default_symbols(strategy_type: &str) -> Vec<String> {
-    match strategy_type {
-        // 단일 종목 전략: 빈 배열 (사용자가 지정)
-        "rsi" | "rsi_mean_reversion" => vec![],
-        "grid" | "grid_trading" => vec![],
-        "bollinger" | "bollinger_bands" => vec![],
-        "volatility_breakout" | "volatility" => vec![],
-        "magic_split" | "split" => vec![],
-        "sma" | "sma_crossover" | "ma_crossover" => vec![],
-        "candle_pattern" => vec![],
-        "infinity_bot" => vec![],
-        "market_interest_day" => vec![],
-        "stock_gugan" | "gugan" => vec![],
-        // 자산배분 전략: 권장 심볼 목록
-        "simple_power" => vec!["TQQQ", "SCHD", "PFIX", "TMF"].iter().map(|s| s.to_string()).collect(),
-        "haa" => vec!["TIP", "SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "PDBC", "VNQ", "BIL"].iter().map(|s| s.to_string()).collect(),
-        "xaa" => vec!["VWO", "BND", "SPY", "EFA", "EEM", "TLT", "IEF", "LQD", "BIL"].iter().map(|s| s.to_string()).collect(),
-        "stock_rotation" | "rotation" => vec!["005930", "000660", "035420", "051910", "006400"].iter().map(|s| s.to_string()).collect(),
-        "all_weather" | "all_weather_us" => vec!["SPY", "TLT", "IEF", "GLD", "PDBC", "IYK"].iter().map(|s| s.to_string()).collect(),
-        "all_weather_kr" => vec!["069500", "148070", "139260", "132030", "130730", "143850"].iter().map(|s| s.to_string()).collect(),
-        "snow" | "snow_us" => vec!["TIP", "UPRO", "TLT", "BIL"].iter().map(|s| s.to_string()).collect(),
-        "snow_kr" => vec!["140700", "122630", "148070", "272580"].iter().map(|s| s.to_string()).collect(),
-        "market_cap_top" => vec!["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "JPM", "V"].iter().map(|s| s.to_string()).collect(),
-        // 3차 전략
-        "baa" => vec!["SPY", "VEA", "VWO", "BND", "QQQ", "IWM", "TIP", "DBC", "BIL", "IEF", "TLT"].iter().map(|s| s.to_string()).collect(),
-        "sector_momentum" => vec!["XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE"].iter().map(|s| s.to_string()).collect(),
-        "dual_momentum" => vec!["069500", "122630", "IEF", "TLT"].iter().map(|s| s.to_string()).collect(),
-        "small_cap_quant" => vec![],  // 동적으로 선정
-        "pension_bot" | "pension" => vec!["SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "TIP", "BIL"].iter().map(|s| s.to_string()).collect(),
-        "sector_vb" | "sector_volatility" => vec!["091160", "091170", "091180", "091220", "091230"].iter().map(|s| s.to_string()).collect(),
-        "kospi_bothside" | "kospi_both" => vec!["122630", "252670"].iter().map(|s| s.to_string()).collect(),
-        "kosdaq_fire_rain" | "kosdaq_surge" => vec!["122630", "252670", "233740", "251340"].iter().map(|s| s.to_string()).collect(),
-        "us_3x_leverage" | "us_leverage" => vec!["TQQQ", "SQQQ", "UPRO", "SPXU", "TMF", "TMV"].iter().map(|s| s.to_string()).collect(),
-        _ => vec![],
-    }
+    trader_strategy::StrategyRegistry::find(strategy_type)
+        .map(|meta| meta.default_symbols.iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default()
 }
 
 // ==================== 에러 처리 ====================

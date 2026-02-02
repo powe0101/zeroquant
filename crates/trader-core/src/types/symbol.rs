@@ -109,6 +109,74 @@ impl fmt::Display for Symbol {
     }
 }
 
+/// Yahoo Finance 심볼 변환 유틸리티.
+pub struct YahooSymbolConverter;
+
+impl YahooSymbolConverter {
+    /// 한국 거래소 판별 (KOSPI/KOSDAQ).
+    ///
+    /// 종목 코드 첫 글자로 판별:
+    /// - `0`: KOSPI
+    /// - `1~4`: KOSDAQ
+    /// - 기타: KOSDAQ (기본값)
+    ///
+    /// # Returns
+    /// (거래소명, Yahoo 접미사)
+    pub fn determine_kr_exchange(ticker: &str) -> (&'static str, &'static str) {
+        if ticker.is_empty() {
+            return ("KOSPI", ".KS");
+        }
+
+        let first_char = ticker.chars().next().unwrap();
+        match first_char {
+            '0' => ("KOSPI", ".KS"),
+            '1'..='4' => ("KOSDAQ", ".KQ"),
+            _ => ("KOSDAQ", ".KQ"),
+        }
+    }
+
+    /// Canonical ticker를 Yahoo Finance 심볼로 변환.
+    ///
+    /// 시장별 변환 규칙:
+    /// - **KR**: 첫 글자로 KOSPI(.KS) / KOSDAQ(.KQ) 판별
+    /// - **US**: 그대로 사용
+    /// - **CRYPTO**: 그대로 사용 (Yahoo는 암호화폐 미지원)
+    /// - **기타**: 그대로 사용
+    ///
+    /// # Arguments
+    /// * `ticker` - Canonical ticker (예: "005930", "AAPL", "BTC/USDT")
+    /// * `market` - 시장 코드 (예: "KR", "US", "CRYPTO")
+    ///
+    /// # Returns
+    /// Yahoo Finance 심볼 (예: "005930.KS", "AAPL", "BTC/USDT")
+    ///
+    /// # Note
+    /// 이 함수는 fallback 용도로만 사용하세요.
+    /// **DB의 `symbol_info.yahoo_symbol` 컬럼을 최우선으로 사용**해야 합니다.
+    pub fn to_yahoo_symbol(ticker: &str, market: &str) -> String {
+        // 이미 Yahoo 접미사가 있으면 그대로 반환
+        if ticker.ends_with(".KS")
+            || ticker.ends_with(".KQ")
+            || ticker.ends_with(".AX")
+            || ticker.ends_with(".L")
+            || ticker.ends_with(".T")
+            || ticker.ends_with(".HK")
+            || ticker.ends_with(".SI")
+            || ticker.ends_with(".TO")
+        {
+            return ticker.to_string();
+        }
+
+        match market.to_uppercase().as_str() {
+            "KR" => {
+                let (_, suffix) = Self::determine_kr_exchange(ticker);
+                format!("{}{}", ticker, suffix)
+            }
+            _ => ticker.to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +200,44 @@ mod tests {
         let symbol = Symbol::from_string("ETH/USDT", MarketType::Crypto).unwrap();
         assert_eq!(symbol.base, "ETH");
         assert_eq!(symbol.quote, "USDT");
+    }
+
+    #[test]
+    fn test_determine_kr_exchange() {
+        // KOSPI (0으로 시작)
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange("005930"), ("KOSPI", ".KS"));
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange("000660"), ("KOSPI", ".KS"));
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange("03473K"), ("KOSPI", ".KS"));
+
+        // KOSDAQ (1~4로 시작)
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange("124560"), ("KOSDAQ", ".KQ"));
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange("209640"), ("KOSDAQ", ".KQ"));
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange("340930"), ("KOSDAQ", ".KQ"));
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange("413390"), ("KOSDAQ", ".KQ"));
+
+        // 빈 문자열 (기본값: KOSPI)
+        assert_eq!(YahooSymbolConverter::determine_kr_exchange(""), ("KOSPI", ".KS"));
+    }
+
+    #[test]
+    fn test_to_yahoo_symbol() {
+        // KR 시장 - KOSPI
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("005930", "KR"), "005930.KS");
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("03473K", "KR"), "03473K.KS");
+
+        // KR 시장 - KOSDAQ
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("124560", "KR"), "124560.KQ");
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("209640", "KR"), "209640.KQ");
+
+        // 이미 접미사가 있는 경우 (그대로 반환)
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("005930.KS", "KR"), "005930.KS");
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("124560.KQ", "KR"), "124560.KQ");
+
+        // US 시장 (그대로 반환)
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("AAPL", "US"), "AAPL");
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("GOOGL", "US"), "GOOGL");
+
+        // CRYPTO 시장 (그대로 반환)
+        assert_eq!(YahooSymbolConverter::to_yahoo_symbol("BTC/USDT", "CRYPTO"), "BTC/USDT");
     }
 }

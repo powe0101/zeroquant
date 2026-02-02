@@ -672,3 +672,18 @@ mod tests {
         assert_eq!(strategy.state.completed_cycles, 0);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "infinity_bot",
+    aliases: [],
+    name: "무한매수",
+    description: "가격 하락 시 자동으로 분할 매수하는 물타기 전략입니다.",
+    timeframe: "1m",
+    symbols: [],
+    category: Realtime,
+    markets: [Crypto],
+    type: InfinityBotStrategy
+}

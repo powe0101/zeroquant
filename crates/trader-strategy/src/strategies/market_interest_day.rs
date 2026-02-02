@@ -696,3 +696,18 @@ mod tests {
         assert_eq!(strategy.state.trades_today, 0);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "market_interest_day",
+    aliases: [],
+    name: "단타 시장관심",
+    description: "시장 관심 종목을 대상으로 단기 매매를 수행합니다.",
+    timeframe: "1d",
+    symbols: [],
+    category: Daily,
+    markets: [KrStock],
+    type: MarketInterestDayStrategy
+}

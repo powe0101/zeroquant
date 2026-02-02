@@ -622,3 +622,18 @@ mod tests {
         assert!(index.is_above_ma(20).unwrap());
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "small_cap_quant",
+    aliases: [],
+    name: "소형주 퀀트",
+    description: "소형주 대상 퀀트 전략입니다.",
+    timeframe: "1d",
+    symbols: [],
+    category: Daily,
+    markets: [KrStock],
+    type: SmallCapQuantStrategy
+}

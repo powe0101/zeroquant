@@ -433,11 +433,20 @@ mod tests {
     use uuid::Uuid;
 
     fn create_filled_order(symbol: &str, side: Side, qty: Decimal, price: Decimal) -> Order {
+        // 테스트용 심볼 파싱 (예: "BTCUSDT" -> BTC/USDT)
+        let (base, quote) = if symbol.ends_with("USDT") {
+            (symbol.strip_suffix("USDT").unwrap(), "USDT")
+        } else if symbol.ends_with("USD") {
+            (symbol.strip_suffix("USD").unwrap(), "USD")
+        } else {
+            (symbol, "USD")
+        };
+        
         Order {
             id: Uuid::new_v4(),
             exchange: "test".to_string(),
             exchange_order_id: Some("123".to_string()),
-            symbol: Symbol::new(symbol, "test"),
+            symbol: Symbol::new(base, quote, trader_core::MarketType::Crypto),
             side,
             order_type: OrderType::Market,
             quantity: qty,
@@ -451,6 +460,7 @@ mod tests {
             strategy_id: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            metadata: serde_json::Value::Null,
         }
     }
 
@@ -539,7 +549,7 @@ mod tests {
 
     #[test]
     fn test_symbol_filter() {
-        let mut sync = PositionSync::new().with_symbol(Symbol::new("BTCUSDT", "test"));
+        let mut sync = PositionSync::new().with_symbol(Symbol::crypto("BTC", "USDT"));
 
         // 다른 심볼 주문은 무시
         let eth_order = create_filled_order("ETHUSDT", Side::Buy, dec!(10), dec!(3000));

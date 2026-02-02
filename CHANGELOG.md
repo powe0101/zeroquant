@@ -5,6 +5,137 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [0.5.7] - 2026-02-02
+
+### Added
+
+#### 🎯 전략 스키마 시스템 (Major Feature)
+- **Proc Macro 기반 메타데이터 추출** (`trader-strategy-macro`)
+  - `#[strategy_metadata]` 매크로로 컴파일 타임 스키마 생성
+  - 런타임 리플렉션 없이 타입 안전성 확보
+  - 266줄의 proc macro 구현
+- **SchemaRegistry** (`schema_registry.rs` - 694줄)
+  - 전략별 파라미터 스키마 중앙 관리
+  - JSON Schema 자동 생성
+  - 프론트엔드 SDUI(Server-Driven UI) 지원
+- **SchemaComposer** (`schema_composer.rs` - 279줄)
+  - 공통 컴포넌트 조합으로 스키마 구성
+  - 재사용 가능한 스키마 프래그먼트
+- **API 엔드포인트** (`routes/schema.rs` - 189줄)
+  - `GET /api/strategies/schema` - 전체 전략 스키마 조회
+  - `GET /api/strategies/:name/schema` - 개별 전략 스키마
+  - 26개 전략 모두 스키마 자동 등록
+
+#### 🧩 공통 전략 컴포넌트 추출
+- **indicators.rs** (349줄) - 기술 지표 계산
+  - SMA, EMA, RSI, MACD, Bollinger Bands
+  - ATR, Stochastic, ADX, CCI
+  - 26개 전략에서 중복 제거
+- **position_sizing.rs** (286줄) - 포지션 사이징
+  - FixedAmount, FixedRatio, RiskBased
+  - VolatilityAdjusted, KellyFraction
+  - 일관된 포지션 계산 로직
+- **risk_checks.rs** (291줄) - 리스크 관리
+  - `check_max_position_size()` - 최대 포지션 검증
+  - `check_concentration_limit()` - 집중도 한도
+  - `check_loss_limit()` - 손실 한도
+  - `check_volatility_limit()` - 변동성 필터
+- **signal_filters.rs** (372줄) - 신호 필터링
+  - 거래량, 변동성, 시간, 추세 필터
+  - 중복 신호 제거 로직
+  - 전략 간 일관성 확보
+
+#### 📐 도메인 레이어 강화
+- **calculations.rs** (374줄) - 금융 계산
+  - `calculate_returns()` - 수익률 계산
+  - `calculate_pnl()` - 손익 계산
+  - `calculate_position_value()` - 포지션 가치
+  - `calculate_commission()` - 수수료 계산
+  - Decimal 타입으로 정밀 계산
+- **statistics.rs** (514줄) - 통계 함수
+  - 샤프 비율, 소르티노 비율, 최대 낙폭
+  - 승률, Profit Factor, Calmar Ratio
+  - 백테스트와 실거래 공통 사용
+- **tick_size.rs** (335줄) - 틱 사이즈 관리
+  - 시장별 최소 호가 단위 정의
+  - `round_to_tick_size()` - 주문가 보정
+  - KRX, 미국 주식, 선물/옵션 지원
+- **schema.rs** (343줄) - 도메인 스키마
+  - 공통 데이터 구조 정의
+  - DTO와 도메인 모델 분리
+
+#### 🛠️ CLI 도구 확장
+- **fetch_symbols** (365줄)
+  - 거래소별 심볼 목록 가져오기
+  - `--exchange krx|binance|yahoo` 옵션
+  - DB 직접 저장 지원
+- **list_symbols** (244줄)
+  - 심볼 목록 조회 및 필터링
+  - `--market`, `--active`, `--format` 옵션
+  - CSV/JSON 출력 지원
+- **sync_csv** (120줄)
+  - KRX CSV 파일 동기화
+  - 증분 업데이트 지원
+
+#### 📊 Analytics 확장
+- **journal_integration.rs** (280줄)
+  - 매매 일지와 백테스트 통합
+  - 실거래 결과 자동 기록
+  - 성과 비교 분석 지원
+
+### Changed
+
+#### 전략 리팩토링 (26개 전략)
+- **공통 로직 제거**: 모든 전략에서 중복 코드 제거
+- **모듈 임포트 통합**: `use super::common::*` 패턴 적용
+- **스키마 어노테이션**: 모든 전략에 `#[strategy_metadata]` 추가
+- **코드 감소**: 평균 전략당 ~50줄 감소
+
+#### API 라우트 리팩토링
+- **strategies.rs**: 163줄 감소
+  - 스키마 로직을 `schema.rs`로 분리
+  - 라우트 구조 단순화
+- **dataset.rs**: 62줄 수정
+  - 불필요한 import 제거
+  - 타입 정리
+
+#### Symbol 타입 확장
+- **Yahoo 심볼 변환 로직** (`symbol.rs` - 107줄 추가)
+  - `to_yahoo_symbol()` 메서드
+  - KRX 심볼 자동 변환 (.KS/.KQ 접미사)
+  - 캐싱 및 폴백 처리
+
+#### 매칭 엔진 개선
+- **틱 사이즈 적용** (`matching_engine.rs`)
+  - 주문 가격을 시장별 틱 사이즈로 보정
+  - 실거래와 동일한 체결 로직
+
+### Documentation
+
+- **tick_size_guide.md** (245줄)
+  - 시장별 틱 사이즈 가이드
+  - 코드 예시 및 주의사항
+- **development_rules.md** (299줄 추가)
+  - v1.1 업데이트: 180+ 규칙 체계화
+  - 레거시 코드 제거 정책
+  - 금융 계산 규칙 (Decimal 필수)
+  - 에러 처리 규칙 (unwrap 금지)
+- **prd.md** (67줄 추가)
+  - 전략 스키마 시스템 명세
+  - CLI 도구 문서화
+- **CLAUDE.md** 업데이트
+  - 버전 v0.5.7 반영
+  - 핵심 규칙 요약 확장
+
+### Technical Debt Removed
+
+- **지표 계산 중복**: 26개 전략 → indicators 모듈로 통합
+- **포지션 사이징 중복**: 개별 구현 → position_sizing 모듈로 통합
+- **리스크 체크 산재**: 불일치하는 로직 → risk_checks 모듈로 표준화
+- **스키마 수동 관리**: 하드코딩된 스키마 → Proc macro 자동 생성
+
+---
+
 ## [0.5.5] - 2026-02-01
 
 ### Added

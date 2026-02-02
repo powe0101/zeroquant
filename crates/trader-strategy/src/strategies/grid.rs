@@ -934,3 +934,18 @@ mod tests {
         assert!(!config.trend_filter);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "grid_trading",
+    aliases: ["grid"],
+    name: "그리드 트레이딩",
+    description: "가격 구간을 나눠 자동 매수/매도 주문을 배치하는 시장 중립 전략입니다.",
+    timeframe: "1m",
+    symbols: [],
+    category: Realtime,
+    markets: [Crypto, KrStock, UsStock],
+    type: GridStrategy
+}

@@ -432,26 +432,7 @@ impl FundamentalFetcher {
         Ok(quote)
     }
 
-    /// 심볼을 Yahoo Finance 형식으로 변환.
-    ///
-    /// - 한국 주식 (6자리 숫자): 005930 → 005930.KS
-    /// - 미국 주식: AAPL → AAPL
-    pub fn to_yahoo_symbol(ticker: &str, market: &str) -> String {
-        match market.to_uppercase().as_str() {
-            "KR" => {
-                // 이미 .KS/.KQ가 붙어있으면 그대로 반환
-                if ticker.ends_with(".KS") || ticker.ends_with(".KQ") {
-                    ticker.to_string()
-                } else if ticker.chars().all(|c| c.is_ascii_digit()) && ticker.len() == 6 {
-                    // KOSPI 종목은 .KS 접미사
-                    format!("{}.KS", ticker)
-                } else {
-                    ticker.to_string()
-                }
-            }
-            _ => ticker.to_string(),
-        }
-    }
+
 }
 
 /// 최신 시세 및 Fundamental 정보.
@@ -689,14 +670,5 @@ impl FundamentalFetcher {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_to_yahoo_symbol() {
-        // 한국 주식
-        assert_eq!(FundamentalFetcher::to_yahoo_symbol("005930", "KR"), "005930.KS");
-        assert_eq!(FundamentalFetcher::to_yahoo_symbol("005930.KS", "KR"), "005930.KS");
 
-        // 미국 주식
-        assert_eq!(FundamentalFetcher::to_yahoo_symbol("AAPL", "US"), "AAPL");
-        assert_eq!(FundamentalFetcher::to_yahoo_symbol("MSFT", "US"), "MSFT");
-    }
 }

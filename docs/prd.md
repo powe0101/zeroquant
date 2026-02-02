@@ -281,6 +281,8 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
   - 표시 이름: "티커(종목명)" 형식
 
 #### 2.5.4 심볼 자동 동기화
+
+##### 자동 동기화 (백그라운드)
 - **목적**: 스크리닝 수집기 가동 시 자동으로 전체 종목 목록을 수집하여 symbol_info 테이블에 등록
 - **데이터 소스**:
   - **KRX (한국거래소)**: KOSPI/KOSDAQ 전 종목 (~2,500개)
@@ -297,6 +299,71 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
   | `SYMBOL_SYNC_YAHOO` | true | Yahoo Finance 동기화 활성화 |
   | `SYMBOL_SYNC_YAHOO_MAX` | 500 | Yahoo 최대 수집 수 |
   | `SYMBOL_SYNC_MIN_COUNT` | 100 | 최소 심볼 수 기준 |
+
+##### CLI 도구 (수동 관리) ✅ v0.5.6
+- **목적**: 종목 데이터의 수동 관리 및 유지보수를 위한 CLI 명령어 제공
+
+**1. CSV 변환 (`scripts/convert_krx_new_to_csv.py`)**
+- KRX 정보시스템 원본 CSV → 표준 형식 변환
+- 상품 분류별 파일 (ETF, 주식, 파생상품 등) 통합 처리
+- EUC-KR/CP949 인코딩 자동 감지
+- 출력: `data/krx_codes.csv` (종목코드, 종목명)
+```bash
+python scripts/convert_krx_new_to_csv.py --input-dir data/new --output-dir data
+```
+
+**2. CSV 동기화 (`trader sync-csv`)**
+- CSV 파일 → symbol_info 테이블 동기화
+- KOSPI/KOSDAQ 자동 판별
+- Yahoo Finance 심볼 자동 생성
+- Upsert 방식으로 안전한 업데이트
+- 섹터 정보 선택적 업데이트
+```bash
+trader sync-csv --codes data/krx_codes.csv [--sectors data/krx_sector_map.csv]
+```
+
+**3. 종목 조회 (`trader list-symbols`)**
+- DB에서 종목 정보 실시간 조회
+- 필터: 시장(KR/US/CRYPTO/ALL), 활성 여부, 검색 키워드
+- 출력 형식: table (사람), csv (데이터 분석), json (API 연동)
+- 파일 저장 옵션
+```bash
+trader list-symbols --market KR --limit 100 --format csv --output symbols.csv
+```
+
+**4. 온라인 자동 크롤링 (`trader fetch-symbols`) ⭐**
+- 온라인 소스에서 실시간 종목 정보 수집 및 DB 저장
+- **데이터 소스**:
+  - KR: KRX 공식 API (전체 종목, ~2,500개)
+  - US: Yahoo Finance (주요 500개, 확장 가능)
+  - CRYPTO: Binance API (USDT 페어 ~446개)
+- **기능**:
+  - 시장별 선택 수집 (KR/US/CRYPTO/ALL)
+  - CSV 백업 옵션 (`--save-csv`)
+  - 드라이런 모드 (`--dry-run`, 테스트용)
+  - 진행 상황 실시간 표시
+```bash
+# 전체 시장 수집
+trader fetch-symbols --market ALL
+
+# 특정 시장만
+trader fetch-symbols --market KR --save-csv
+```
+
+**워크플로우**:
+```
+방법 1: 온라인 자동 수집 (권장)
+  trader fetch-symbols --market ALL
+  ↓
+  DB에 직접 저장 완료
+
+방법 2: 수동 CSV 관리
+  KRX 사이트에서 CSV 다운로드
+  ↓
+  python scripts/convert_krx_new_to_csv.py
+  ↓
+  trader sync-csv --codes data/krx_codes.csv
+```
 
 #### 2.5.5 Fundamental 데이터 백그라운드 수집
 - **목적**: 서버 실행 중 백그라운드에서 Fundamental 데이터를 주기적으로 배치 수집

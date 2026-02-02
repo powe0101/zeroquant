@@ -706,3 +706,18 @@ mod tests {
         assert_eq!(strategy.active_symbols.len(), 3);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "market_cap_top",
+    aliases: [],
+    name: "시총 TOP",
+    description: "시가총액 상위 종목에 투자하는 전략입니다.",
+    timeframe: "1d",
+    symbols: ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "JPM", "V"],
+    category: Daily,
+    markets: [KrStock, UsStock],
+    type: MarketCapTopStrategy
+}

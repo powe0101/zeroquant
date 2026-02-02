@@ -828,3 +828,18 @@ mod tests {
         assert!(ma5.is_some());
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "kosdaq_fire_rain",
+    aliases: ["kosdaq_surge"],
+    name: "코스닥 급등주",
+    description: "코스닥 급등 종목 포착 전략입니다.",
+    timeframe: "15m",
+    symbols: ["122630", "252670", "233740", "251340"],
+    category: Intraday,
+    markets: [KrStock],
+    type: KosdaqFireRainStrategy
+}

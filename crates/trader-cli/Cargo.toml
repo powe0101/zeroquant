@@ -16,14 +16,19 @@ trader-exchange = { path = "../trader-exchange" }
 trader-strategy = { path = "../trader-strategy" }
 trader-data = { path = "../trader-data" }
 trader-analytics = { path = "../trader-analytics" }
+trader-api = { path = "../trader-api" }
 
 # Async runtime
 tokio = { workspace = true }
+
+# Database
+sqlx = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+csv = "1.3"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

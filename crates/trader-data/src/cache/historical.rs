@@ -110,7 +110,7 @@ impl CachedHistoricalDataProvider {
         limit: usize,
     ) -> Result<Vec<Kline>> {
         // SymbolResolver를 통해 데이터 소스 심볼 조회
-        let (source_symbol, quote_currency, market_type) = self.resolve_symbol(symbol).await;
+        let (source_symbol, quote_currency, market_type) = self.resolve_symbol(symbol).await?;
         let lock_key = format!("{}:{}", source_symbol, timeframe_to_string(timeframe));
 
         // 1. 동시성 제어: Lock 획득
@@ -193,40 +193,33 @@ impl CachedHistoricalDataProvider {
 
     /// 심볼을 데이터 소스 형식으로 변환.
     ///
-    /// SymbolResolver를 통해 DB에서 조회하고, 없으면 기본 변환 규칙 적용.
-    async fn resolve_symbol(&self, canonical: &str) -> (String, String, MarketType) {
-        // 1. DB에서 심볼 정보 조회 시도
-        if let Ok(Some(info)) = self.symbol_resolver.get_symbol_info(canonical).await {
-            let source_symbol = info.yahoo_symbol.unwrap_or_else(|| canonical.to_string());
-            let quote = match info.market.as_str() {
-                "KR" => "KRW".to_string(),
-                "CRYPTO" => "USDT".to_string(),
-                _ => "USD".to_string(),
-            };
-            let market_type = match info.market.as_str() {
-                "KR" => MarketType::KrStock,
-                "US" => MarketType::UsStock,
-                "CRYPTO" => MarketType::Crypto,
-                _ => MarketType::Stock,
-            };
-            return (source_symbol, quote, market_type);
-        }
+    /// DB의 symbol_info 테이블에서 조회하여 yahoo_symbol 반환 (Single Source of Truth).
+    /// DB에 없거나 yahoo_symbol이 설정되지 않은 경우 에러 반환.
+    async fn resolve_symbol(&self, canonical: &str) -> Result<(String, String, MarketType)> {
+        // DB에서 심볼 정보 조회 (필수)
+        let info = self.symbol_resolver
+            .get_symbol_info(canonical)
+            .await
+            .map_err(|e| DataError::QueryError(format!("DB 조회 실패: {}", e)))?
+            .ok_or_else(|| DataError::NotFound(format!("심볼을 찾을 수 없습니다: {}", canonical)))?;
 
-        // 2. 기본 변환 규칙 (DB에 정보가 없는 경우)
-        // 6자리 숫자 → 한국 주식
-        if canonical.len() == 6 && canonical.chars().all(|c| c.is_ascii_digit()) {
-            return (format!("{}.KS", canonical), "KRW".to_string(), MarketType::KrStock);
-        }
+        // yahoo_symbol 필수
+        let source_symbol = info.yahoo_symbol
+            .ok_or_else(|| DataError::NotFound(format!("Yahoo Finance 심볼이 설정되지 않음: {}", canonical)))?;
 
-        // "/" 포함 → 암호화폐
-        if canonical.contains('/') {
-            let parts: Vec<&str> = canonical.split('/').collect();
-            let quote = parts.get(1).map(|s| s.to_string()).unwrap_or_else(|| "USDT".to_string());
-            return (canonical.replace("/", "-"), quote, MarketType::Crypto);
-        }
+        let quote = match info.market.as_str() {
+            "KR" => "KRW".to_string(),
+            "CRYPTO" => "USDT".to_string(),
+            _ => "USD".to_string(),
+        };
+        let market_type = match info.market.as_str() {
+            "KR" => MarketType::KrStock,
+            "US" => MarketType::UsStock,
+            "CRYPTO" => MarketType::Crypto,
+            _ => MarketType::Stock,
+        };
 
-        // 기본: 미국 주식
-        (canonical.to_string(), "USD".to_string(), MarketType::UsStock)
+        Ok((source_symbol, quote, market_type))
     }
 
     /// 날짜 범위로 캔들 데이터 조회.
@@ -251,7 +244,7 @@ impl CachedHistoricalDataProvider {
         end_date: NaiveDate,
     ) -> Result<Vec<Kline>> {
         // SymbolResolver를 통해 데이터 소스 심볼 조회
-        let (source_symbol, quote_currency, market_type) = self.resolve_symbol(symbol).await;
+        let (source_symbol, quote_currency, market_type) = self.resolve_symbol(symbol).await?;
         let lock_key = format!("{}:{}:range", source_symbol, timeframe_to_string(timeframe));
 
         info!(
@@ -699,7 +692,7 @@ impl CachedHistoricalDataProvider {
     /// # 인자
     /// - `symbol`: canonical 심볼 (예: "005930", "AAPL")
     pub async fn clear_cache(&self, symbol: &str) -> Result<u64> {
-        let (source_symbol, _, _) = self.resolve_symbol(symbol).await;
+        let (source_symbol, _, _) = self.resolve_symbol(symbol).await?;
         self.cache.clear_symbol_cache(&source_symbol).await
     }
 

@@ -952,3 +952,21 @@ mod tests {
         assert!(config.use_ema_smoothing);
     }
 }
+
+// ============================================================================
+// 전략 레지스트리 등록
+// ============================================================================
+
+use crate::register_strategy;
+
+register_strategy! {
+    id: "rsi_mean_reversion",
+    aliases: ["rsi"],
+    name: "RSI 평균회귀",
+    description: "RSI 지표를 사용하여 과매수/과매도 구간에서 평균회귀 매매를 수행합니다. RSI가 과매도 구간(기본값 30 이하)에 도달하면 매수, 과매수 구간(기본값 70 이상)에 도달하면 매도 신호를 생성합니다.",
+    timeframe: "15m",
+    symbols: [],
+    category: Intraday,
+    markets: [Crypto, KrStock, UsStock],
+    type: RsiStrategy
+}

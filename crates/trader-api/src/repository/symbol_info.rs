@@ -821,6 +821,73 @@ impl SymbolInfoRepository {
 
         Ok(result.rows_affected())
     }
+
+    /// 특정 시장의 활성 종목 목록 조회.
+    ///
+    /// 권위 있는 소스 동기화 시 비교 대상으로 사용됩니다.
+    ///
+    /// # Arguments
+    /// * `pool` - DB 연결 풀
+    /// * `market` - 시장 코드 ("KR", "CRYPTO", "US" 등)
+    pub async fn get_active_by_market(
+        pool: &PgPool,
+        market: &str,
+    ) -> Result<Vec<SymbolInfo>, sqlx::Error> {
+        sqlx::query_as::<_, SymbolInfo>(
+            r#"
+            SELECT *
+            FROM symbol_info
+            WHERE market = $1 AND is_active = TRUE
+            "#,
+        )
+        .bind(market)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// 심볼 비활성화 (권위 있는 소스에서 삭제됨).
+    ///
+    /// 권위 있는 소스(KRX, Binance 등)에서 더 이상 조회되지 않는 종목을
+    /// 비활성화하고 사유를 기록합니다.
+    ///
+    /// # Arguments
+    /// * `pool` - DB 연결 풀
+    /// * `symbol_info_id` - 심볼 정보 ID
+    /// * `reason` - 비활성화 사유 (예: "KRX에서 조회되지 않음 (상장폐지 추정)")
+    pub async fn deactivate_symbol(
+        pool: &PgPool,
+        symbol_info_id: Uuid,
+        reason: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE symbol_info
+            SET is_active = FALSE,
+                last_fetch_error = $2,
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(symbol_info_id)
+        .bind(reason)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// 시장별 권위 있는 소스 확인.
+    ///
+    /// 각 시장의 권위 있는 소스를 반환합니다.
+    /// 권위 있는 소스에서 종목이 없으면 다른 소스에서도 찾지 않습니다.
+    pub fn authoritative_source_for_market(market: &str) -> &'static str {
+        match market.to_uppercase().as_str() {
+            "KR" => "KRX",
+            "CRYPTO" => "BINANCE",
+            "US" => "YAHOO",
+            _ => "YAHOO", // 기본값
+        }
+    }
 }
 
 /// 실패한 심볼 정보.

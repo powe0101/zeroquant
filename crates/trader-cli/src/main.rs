@@ -130,6 +130,75 @@ enum Commands {
         db_url: Option<String>,
     },
 
+    /// CSV 파일에서 종목 정보 동기화
+    SyncCsv {
+        /// 종목 코드 CSV 파일 경로 (예: data/krx_codes.csv)
+        #[arg(long, default_value = "data/krx_codes.csv")]
+        codes: String,
+
+        /// 섹터 매핑 CSV 파일 경로 (선택적)
+        #[arg(long)]
+        sectors: Option<String>,
+
+        /// 데이터베이스 URL (기본: DATABASE_URL 환경변수)
+        #[arg(long)]
+        db_url: Option<String>,
+    },
+
+    /// DB에서 종목 목록 조회
+    ListSymbols {
+        /// 시장 필터 (KR, US, CRYPTO, ALL 등)
+        #[arg(short, long, default_value = "ALL")]
+        market: String,
+
+        /// 활성화된 종목만 조회
+        #[arg(long, default_value = "true")]
+        active_only: bool,
+
+        /// 출력 형식 (table, csv, json)
+        #[arg(short, long, default_value = "table")]
+        format: String,
+
+        /// 출력 파일 경로 (지정하지 않으면 stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// 검색 키워드 (종목명 또는 티커)
+        #[arg(short, long)]
+        search: Option<String>,
+
+        /// 최대 결과 수 (0 = 무제한)
+        #[arg(long, default_value = "0")]
+        limit: usize,
+
+        /// 데이터베이스 URL (기본: DATABASE_URL 환경변수)
+        #[arg(long)]
+        db_url: Option<String>,
+    },
+
+    /// 온라인 소스에서 종목 정보 자동 수집 및 DB 동기화
+    FetchSymbols {
+        /// 시장 유형 (KR: 한국, US: 미국, CRYPTO: 암호화폐, ALL: 전체)
+        #[arg(short, long, default_value = "ALL")]
+        market: String,
+
+        /// CSV 파일로도 저장 (선택적)
+        #[arg(long)]
+        save_csv: bool,
+
+        /// CSV 출력 디렉토리 (기본: data)
+        #[arg(long, default_value = "data")]
+        csv_dir: String,
+
+        /// 데이터베이스 URL (기본: DATABASE_URL 환경변수)
+        #[arg(long)]
+        db_url: Option<String>,
+
+        /// 드라이런 모드 (DB에 저장하지 않음)
+        #[arg(long, default_value = "false")]
+        dry_run: bool,
+    },
+
     /// 백테스트 실행
     Backtest {
         /// 전략 설정 파일 (TOML 또는 JSON)
@@ -404,6 +473,109 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     error!("Import to database failed: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+
+        Commands::SyncCsv {
+            codes,
+            sectors,
+            db_url,
+        } => {
+            use commands::sync_csv::{sync_csv, SyncCsvConfig};
+
+            println!("\n📊 CSV 파일에서 종목 정보 동기화 중...");
+            println!("종목 CSV: {}", codes);
+            if let Some(ref sectors_csv) = sectors {
+                println!("섹터 CSV: {}", sectors_csv);
+            }
+
+            let config = SyncCsvConfig {
+                codes_csv: codes.clone(),
+                sectors_csv: sectors.clone(),
+                db_url: db_url.clone(),
+            };
+
+            match sync_csv(config).await {
+                Ok((symbol_count, sector_count)) => {
+                    info!(
+                        "✅ CSV sync completed: {} symbols, {} sectors",
+                        symbol_count, sector_count
+                    );
+                    println!("\n✅ 동기화 완료!");
+                    println!("   종목: {}개", symbol_count);
+                    if sector_count > 0 {
+                        println!("   섹터: {}개", sector_count);
+                    }
+                }
+                Err(e) => {
+                    error!("CSV sync failed: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+
+        Commands::ListSymbols {
+            market,
+            active_only,
+            format,
+            output,
+            search,
+            limit,
+            db_url,
+        } => {
+            use commands::list_symbols::{list_symbols, ListSymbolsConfig, OutputFormat};
+
+            let output_format = OutputFormat::from_str(&format)?;
+
+            let config = ListSymbolsConfig {
+                market: market.clone(),
+                active_only,
+                format: output_format,
+                output: output.clone(),
+                search: search.clone(),
+                limit,
+                db_url: db_url.clone(),
+            };
+
+            match list_symbols(config).await {
+                Ok(count) => {
+                    info!("✅ Listed {} symbols", count);
+                }
+                Err(e) => {
+                    error!("List symbols failed: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+
+        Commands::FetchSymbols {
+            market,
+            save_csv,
+            csv_dir,
+            db_url,
+            dry_run,
+        } => {
+            use commands::fetch_symbols::{fetch_symbols, FetchSymbolsConfig};
+
+            let config = FetchSymbolsConfig {
+                market: market.clone(),
+                save_csv,
+                csv_dir: csv_dir.clone(),
+                db_url: db_url.clone(),
+                dry_run,
+            };
+
+            match fetch_symbols(config).await {
+                Ok(result) => {
+                    info!(
+                        "✅ Fetched symbols: KR={}, US={}, CRYPTO={}, Total={}",
+                        result.kr_count, result.us_count, result.crypto_count, result.total
+                    );
+                }
+                Err(e) => {
+                    error!("Fetch symbols failed: {}", e);
                     return Err(e.into());
                 }
             }

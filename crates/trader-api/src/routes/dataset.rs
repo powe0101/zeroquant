@@ -524,8 +524,28 @@ pub async fn get_candles(
         )
     })?;
 
-    // 심볼 변환 (6자리 숫자는 .KS 추가)
-    let yahoo_symbol = to_yahoo_symbol(&symbol);
+    // DB에서 yahoo_symbol 조회 (Single Source of Truth)
+    let symbol_info = SymbolInfoRepository::get_by_ticker(pool, &symbol, None)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", &format!("심볼 조회 실패: {}", e))),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiError::new("SYMBOL_NOT_FOUND", &format!("심볼을 찾을 수 없습니다: {}", symbol))),
+            )
+        })?;
+
+    let yahoo_symbol = symbol_info.yahoo_symbol.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("NO_YAHOO_SYMBOL", &format!("Yahoo Finance 심볼이 설정되지 않음: {}", symbol))),
+        )
+    })?;
     let tf_str = timeframe_to_db_string(&query.timeframe);
 
     // 정렬 조건이 기본값(time desc)이 아닌 경우 DB 직접 쿼리
@@ -705,8 +725,28 @@ pub async fn delete_dataset(
         )
     })?;
 
-    // 심볼 변환 (6자리 숫자는 .KS 추가)
-    let yahoo_symbol = to_yahoo_symbol(&symbol);
+    // DB에서 yahoo_symbol 조회 (Single Source of Truth)
+    let symbol_info = SymbolInfoRepository::get_by_ticker(pool, &symbol, None)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", &format!("심볼 조회 실패: {}", e))),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiError::new("SYMBOL_NOT_FOUND", &format!("심볼을 찾을 수 없습니다: {}", symbol))),
+            )
+        })?;
+
+    let yahoo_symbol = symbol_info.yahoo_symbol.ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("NO_YAHOO_SYMBOL", &format!("Yahoo Finance 심볼이 설정되지 않음: {}", symbol))),
+        )
+    })?;
 
     info!(
         symbol = %yahoo_symbol,
@@ -763,12 +803,6 @@ pub async fn delete_dataset(
             .await;
     }
 
-    info!(
-        symbol = %yahoo_symbol,
-        deleted = deleted,
-        "데이터셋 삭제 완료"
-    );
-
     Ok(Json(serde_json::json!({
         "success": true,
         "symbol": symbol,
@@ -801,14 +835,6 @@ fn parse_timeframe(tf: &str) -> Timeframe {
     }
 }
 
-/// 심볼을 Yahoo Finance 형식으로 변환.
-fn to_yahoo_symbol(symbol: &str) -> String {
-    if symbol.len() == 6 && symbol.chars().all(|c| c.is_ascii_digit()) {
-        format!("{}.KS", symbol)
-    } else {
-        symbol.to_string()
-    }
-}
 
 /// 타임프레임 문자열을 DB 저장 형식으로 변환.
 fn timeframe_to_db_string(tf: &str) -> String {

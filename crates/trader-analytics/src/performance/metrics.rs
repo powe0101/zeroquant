@@ -33,7 +33,7 @@ use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use trader_core::Side;
+use trader_core::{Side, TradeInfo, TradeStatistics, realized_pnl, net_pnl};
 use uuid::Uuid;
 
 /// 연간 거래일 수 (연율화 계산에 사용)
@@ -141,7 +141,9 @@ impl RoundTrip {
         entry_time: DateTime<Utc>,
         exit_time: DateTime<Utc>,
     ) -> Self {
-        let pnl = Self::calculate_pnl(side, entry_price, exit_price, quantity, fees);
+        // 공통 계산 모듈 사용 (레거시 제거)
+        let gross_pnl = realized_pnl(entry_price, exit_price, quantity, side);
+        let pnl = net_pnl(gross_pnl, fees);
         let return_pct = Self::calculate_return_pct(side, entry_price, exit_price);
 
         Self {
@@ -169,34 +171,6 @@ impl RoundTrip {
     pub fn with_strategy(mut self, strategy_id: impl Into<String>) -> Self {
         self.strategy_id = Some(strategy_id.into());
         self
-    }
-
-    /// 라운드트립의 PnL(손익)을 계산합니다.
-    ///
-    /// ## 계산 공식
-    ///
-    /// - **롱 포지션 (Buy)**: (청산가 - 진입가) × 수량 - 수수료
-    /// - **숏 포지션 (Sell)**: (진입가 - 청산가) × 수량 - 수수료
-    ///
-    /// ## 예시
-    ///
-    /// - 롱: 50,000에 진입, 52,000에 청산, 0.1 BTC, 수수료 10
-    ///   → (52000 - 50000) × 0.1 - 10 = 190 USDT 수익
-    ///
-    /// - 숏: 3,000에 진입(공매도), 2,800에 청산, 1 ETH, 수수료 5
-    ///   → (3000 - 2800) × 1 - 5 = 195 USDT 수익
-    fn calculate_pnl(
-        side: Side,
-        entry_price: Decimal,
-        exit_price: Decimal,
-        quantity: Decimal,
-        fees: Decimal,
-    ) -> Decimal {
-        let gross_pnl = match side {
-            Side::Buy => (exit_price - entry_price) * quantity,  // 롱: 가격 상승 시 수익
-            Side::Sell => (entry_price - exit_price) * quantity, // 숏: 가격 하락 시 수익
-        };
-        gross_pnl - fees
     }
 
     /// 수익률을 백분율로 계산합니다.
@@ -254,6 +228,30 @@ impl RoundTrip {
     /// 실제 투자된 금액의 크기를 나타냅니다.
     pub fn entry_notional(&self) -> Decimal {
         self.entry_price * self.quantity
+    }
+}
+
+/// TradeInfo trait 구현 (공통 통계 계산용)
+impl TradeInfo for RoundTrip {
+    fn symbol(&self) -> &str {
+        &self.symbol
+    }
+
+    fn pnl(&self) -> Option<Decimal> {
+        // RoundTrip은 항상 청산 완료된 거래
+        Some(self.pnl)
+    }
+
+    fn fees(&self) -> Decimal {
+        self.fees
+    }
+
+    fn entry_time(&self) -> DateTime<Utc> {
+        self.entry_time
+    }
+
+    fn exit_time(&self) -> Option<DateTime<Utc>> {
+        Some(self.exit_time)
     }
 }
 
@@ -460,75 +458,29 @@ impl PerformanceMetrics {
 
         let rf_rate = risk_free_rate.unwrap_or(DEFAULT_RISK_FREE_RATE);
 
-        // === 기본 통계 수집 ===
-        let mut winning_trades = 0usize;
-        let mut losing_trades = 0usize;
+        // === 공통 통계 모듈 사용 ===
+        let stats = TradeStatistics::from_trades(round_trips);
+
+        // === PerformanceMetrics 전용 데이터 수집 ===
         let mut gross_profit = Decimal::ZERO;
         let mut gross_loss = Decimal::ZERO;
-        let mut total_fees = Decimal::ZERO;
-        let mut largest_win = Decimal::ZERO;
-        let mut largest_loss = Decimal::ZERO;
-        let mut total_holding_hours = Decimal::ZERO;
         let mut returns: Vec<Decimal> = Vec::with_capacity(round_trips.len());
 
         for rt in round_trips {
             returns.push(rt.return_pct);
-            total_fees += rt.fees;
-            total_holding_hours += rt.holding_hours();
 
             if rt.pnl > Decimal::ZERO {
-                winning_trades += 1;
                 gross_profit += rt.pnl;
-                if rt.pnl > largest_win {
-                    largest_win = rt.pnl;
-                }
             } else if rt.pnl < Decimal::ZERO {
-                losing_trades += 1;
                 gross_loss += rt.pnl.abs();
-                if rt.pnl.abs() > largest_loss {
-                    largest_loss = rt.pnl.abs();
-                }
             }
         }
 
-        let total_trades = round_trips.len();
         let net_profit = gross_profit - gross_loss;
 
-        // === 승률 계산 ===
-        let win_rate_pct = if total_trades > 0 {
-            Decimal::from(winning_trades) / Decimal::from(total_trades) * Decimal::from(100)
-        } else {
-            Decimal::ZERO
-        };
-
-        // === 프로핏 팩터 계산 ===
-        let profit_factor = if gross_loss > Decimal::ZERO {
-            gross_profit / gross_loss
-        } else if gross_profit > Decimal::ZERO {
-            Decimal::MAX // 손실 없이 수익만 있으면 무한대
-        } else {
-            Decimal::ZERO
-        };
-
-        // === 평균 수익/손실 계산 ===
-        let avg_win = if winning_trades > 0 {
-            gross_profit / Decimal::from(winning_trades)
-        } else {
-            Decimal::ZERO
-        };
-
-        let avg_loss = if losing_trades > 0 {
-            gross_loss / Decimal::from(losing_trades)
-        } else {
-            Decimal::ZERO
-        };
-
-        // === 평균 보유 기간 ===
-        let avg_holding_hours = if total_trades > 0 {
-            total_holding_hours / Decimal::from(total_trades)
-        } else {
-            Decimal::ZERO
-        };
+        // TradeStatistics의 Duration을 Decimal hours로 변환
+        let avg_holding_hours = Decimal::from(stats.avg_holding_period.num_hours())
+            + Decimal::from(stats.avg_holding_period.num_minutes() % 60) / Decimal::from(60);
 
         // === 총 수익률 ===
         let total_return_pct = if initial_capital > Decimal::ZERO {
@@ -576,17 +528,11 @@ impl PerformanceMetrics {
         };
 
         // === 거래당 평균 수익률 ===
-        let avg_return_per_trade = if total_trades > 0 {
-            returns.iter().copied().sum::<Decimal>() / Decimal::from(total_trades)
+        let avg_return_per_trade = if stats.total_trades > 0 {
+            returns.iter().copied().sum::<Decimal>() / Decimal::from(stats.total_trades)
         } else {
             Decimal::ZERO
         };
-
-        // === 기대값 (Expectancy) ===
-        // 공식: (승률 × 평균 수익) - (패률 × 평균 손실)
-        let win_prob = Decimal::from(winning_trades) / Decimal::from(total_trades.max(1));
-        let loss_prob = Decimal::from(losing_trades) / Decimal::from(total_trades.max(1));
-        let expectancy = (win_prob * avg_win) - (loss_prob * avg_loss);
 
         Self {
             total_return_pct,
@@ -594,24 +540,24 @@ impl PerformanceMetrics {
             sharpe_ratio,
             sortino_ratio,
             max_drawdown_pct,
-            win_rate_pct,
-            profit_factor,
-            total_trades,
-            winning_trades,
-            losing_trades,
-            avg_win,
-            avg_loss,
-            largest_win,
-            largest_loss,
+            win_rate_pct: stats.win_rate_pct,
+            profit_factor: stats.profit_factor,
+            total_trades: stats.total_trades,
+            winning_trades: stats.winning_trades,
+            losing_trades: stats.losing_trades,
+            avg_win: stats.avg_win,
+            avg_loss: stats.avg_loss,
+            largest_win: stats.largest_win,
+            largest_loss: stats.largest_loss,
             avg_holding_hours,
             gross_profit,
             gross_loss,
-            total_fees,
+            total_fees: stats.total_fees,
             net_profit,
             calmar_ratio,
             recovery_factor,
             avg_return_per_trade,
-            expectancy,
+            expectancy: stats.expectancy,
         }
     }
 

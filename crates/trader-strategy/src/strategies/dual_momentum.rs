@@ -599,3 +599,18 @@ mod tests {
         assert_eq!(us.len(), 3);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "dual_momentum",
+    aliases: [],
+    name: "듀얼 모멘텀",
+    description: "절대 모멘텀과 상대 모멘텀을 결합한 전략입니다.",
+    timeframe: "1d",
+    symbols: ["069500", "122630", "IEF", "TLT"],
+    category: Daily,
+    markets: [KrStock, UsStock],
+    type: DualMomentumStrategy
+}

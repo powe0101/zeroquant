@@ -38,6 +38,7 @@ pub mod orders;
 pub mod patterns;
 pub mod portfolio;
 pub mod positions;
+pub mod schema;
 pub mod screening;
 pub mod simulation;
 pub mod strategies;
@@ -58,6 +59,7 @@ pub use orders::{orders_router, OrdersListResponse, OrderResponse, CancelOrderRe
 pub use patterns::{patterns_router, PatternTypesResponse, CandlestickPatternsResponse, ChartPatternsResponse};
 pub use portfolio::{portfolio_router, PortfolioSummaryResponse, BalanceResponse, HoldingsResponse};
 pub use positions::{positions_router, PositionsListResponse, PositionResponse, PositionSummaryResponse};
+pub use schema::schema_router;
 pub use screening::{screening_router, ScreeningRequest, ScreeningResponse, MomentumResponse};
 pub use simulation::{simulation_router, SimulationStartRequest, SimulationStatusResponse, SimulationOrderRequest};
 pub use strategies::{strategies_router, ApiError, StrategiesListResponse, StrategyDetailResponse};
@@ -92,6 +94,7 @@ pub fn create_api_router() -> Router<Arc<AppState>> {
         .nest("/api/v1/ml", ml_router())
         .nest("/api/v1/dataset", dataset_router())
         .nest("/api/v1/journal", journal_router())
+        .nest("/api/v1/schema", schema_router())
         .nest("/api/v1/screening", screening_router())
         .nest("/api/v1/monitoring", monitoring_router());
 

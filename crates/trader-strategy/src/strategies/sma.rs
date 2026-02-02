@@ -352,3 +352,18 @@ mod tests {
         }
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "sma_crossover",
+    aliases: ["sma", "ma_crossover"],
+    name: "이동평균 크로스오버",
+    description: "단기/장기 이동평균선 교차로 매매 신호를 생성합니다.",
+    timeframe: "15m",
+    symbols: [],
+    category: Intraday,
+    markets: [Crypto, KrStock, UsStock],
+    type: SmaStrategy
+}

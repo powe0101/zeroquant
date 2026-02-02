@@ -679,3 +679,18 @@ mod tests {
         assert!(cash_count > 0, "현금 자산이 있어야 함");
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "pension_bot",
+    aliases: ["pension"],
+    name: "연금 자동화",
+    description: "장기 연금 계좌 운용 전략입니다.",
+    timeframe: "1d",
+    symbols: ["SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "TIP", "BIL"],
+    category: Monthly,
+    markets: [UsStock],
+    type: PensionBotStrategy
+}

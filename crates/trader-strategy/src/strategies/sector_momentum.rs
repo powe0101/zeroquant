@@ -636,3 +636,18 @@ mod tests {
         assert_eq!(sectors.len(), 11);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "sector_momentum",
+    aliases: [],
+    name: "섹터 모멘텀",
+    description: "섹터별 모멘텀 분석으로 상위 섹터에 투자합니다.",
+    timeframe: "1d",
+    symbols: ["XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE"],
+    category: Daily,
+    markets: [KrStock, UsStock],
+    type: SectorMomentumStrategy
+}

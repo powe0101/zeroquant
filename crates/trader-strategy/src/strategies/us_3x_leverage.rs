@@ -748,3 +748,18 @@ mod tests {
         assert!((total_ratio - 1.0).abs() < 0.01);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "us_3x_leverage",
+    aliases: ["us_leverage"],
+    name: "미국 3배 레버리지",
+    description: "미국 3배 레버리지 ETF 전략입니다.",
+    timeframe: "1d",
+    symbols: ["TQQQ", "SQQQ", "UPRO", "SPXU", "TMF", "TMV"],
+    category: Daily,
+    markets: [UsStock],
+    type: Us3xLeverageStrategy
+}

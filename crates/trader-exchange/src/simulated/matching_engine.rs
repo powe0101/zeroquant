@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
-use trader_core::{Kline, OrderRequest, OrderType, Side, Symbol};
+use std::sync::Arc;
+use trader_core::{Kline, OrderRequest, OrderType, RoundMethod, Side, Symbol, TickSizeProvider};
 
 /// 주문 체결 유형.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +68,8 @@ pub struct MatchingEngine {
     fee_rate: Decimal,
     /// 슬리피지율 (예: 0.05%의 경우 0.0005)
     slippage_rate: Decimal,
+    /// 호가 단위 제공자 (옵션)
+    tick_size_provider: Option<Arc<dyn TickSizeProvider>>,
     /// 주문 ID 카운터
     next_order_id: u64,
 }
@@ -78,7 +81,26 @@ impl MatchingEngine {
             pending_orders: HashMap::new(),
             fee_rate,
             slippage_rate,
+            tick_size_provider: None,
             next_order_id: 1,
+        }
+    }
+
+    /// 호가 단위 제공자를 설정합니다.
+    pub fn with_tick_size_provider(
+        mut self,
+        provider: Arc<dyn TickSizeProvider>,
+    ) -> Self {
+        self.tick_size_provider = Some(provider);
+        self
+    }
+
+    /// 가격을 호가 단위로 라운딩합니다.
+    fn round_price(&self, price: Decimal, method: RoundMethod) -> Decimal {
+        if let Some(provider) = &self.tick_size_provider {
+            provider.round_to_tick(price, method)
+        } else {
+            price
         }
     }
 
@@ -103,9 +125,15 @@ impl MatchingEngine {
             OrderType::Market => {
                 // 시장가 주문은 슬리피지와 함께 즉시 체결됩니다
                 let slippage = current_price * self.slippage_rate;
-                let fill_price = match request.side {
+                let raw_fill_price = match request.side {
                     Side::Buy => current_price + slippage,
                     Side::Sell => current_price - slippage,
+                };
+
+                // 호가 단위로 라운딩 (매수는 올림, 매도는 내림)
+                let fill_price = match request.side {
+                    Side::Buy => self.round_price(raw_fill_price, RoundMethod::Ceil),
+                    Side::Sell => self.round_price(raw_fill_price, RoundMethod::Floor),
                 };
 
                 let commission = request.quantity * fill_price * self.fee_rate;
@@ -123,7 +151,13 @@ impl MatchingEngine {
             }
             OrderType::Limit => {
                 // 지정가 주문: 즉시 체결 가능 여부 확인
-                let limit_price = request.price.unwrap_or(current_price);
+                let raw_limit_price = request.price.unwrap_or(current_price);
+                
+                // 지정가를 호가 단위로 라운딩 (매수는 내림, 매도는 올림)
+                let limit_price = match request.side {
+                    Side::Buy => self.round_price(raw_limit_price, RoundMethod::Floor),
+                    Side::Sell => self.round_price(raw_limit_price, RoundMethod::Ceil),
+                };
 
                 let can_fill = match request.side {
                     Side::Buy => current_price <= limit_price,

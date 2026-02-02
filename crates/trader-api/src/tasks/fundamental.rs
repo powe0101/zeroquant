@@ -1,6 +1,23 @@
 //! Fundamental 데이터 백그라운드 수집기.
 //!
-//! 서버 실행 중 주기적으로 Yahoo Finance에서 펀더멘털 데이터를 수집합니다.
+//! 서버 실행 중 주기적으로 펀더멘털 데이터를 수집합니다.
+//!
+//! ## 권위 있는 소스(Authoritative Source) 원칙
+//!
+//! 각 시장별로 "권위 있는 소스"를 정의하고, 해당 소스에서 종목이 없으면
+//! 다른 소스에서도 찾지 않습니다.
+//!
+//! | 시장 | 권위 있는 소스 | Fundamental 소스 |
+//! |------|--------------|-----------------|
+//! | **KR** | KRX | Yahoo Finance (fallback, 실패해도 비활성화 안 함) |
+//! | **CRYPTO** | Binance | N/A (Fundamental 수집 안 함) |
+//! | **US** | Yahoo Finance | Yahoo Finance (실패 시 비활성화) |
+//!
+//! - KR 종목: KRX에서 종목 존재 확인, Fundamental은 Yahoo에서 수집 (실패해도 유지)
+//! - CRYPTO 종목: Binance에서 종목 존재 확인, Fundamental 수집 안 함
+//! - US 종목: Yahoo가 권위 있는 소스이므로 실패 시 비활성화
+//!
+//! ## 주요 기능
 //! - 오래된 데이터(7일 이상)를 가진 심볼을 찾아 업데이트
 //! - 새로 등록된 심볼(fundamental 데이터 없음)도 수집
 //! - Rate limiting: 요청 간 딜레이로 API 제한 방지
@@ -246,11 +263,23 @@ async fn run_collection_batch(
     let mut error_count = 0;
     let mut ohlcv_count = 0;
 
-    for (symbol_info_id, ticker, market) in stale_symbols {
+    for (symbol_info_id, ticker, market, yahoo_symbol_db) in stale_symbols {
         // 참고: CRYPTO 심볼은 쿼리 단계에서 이미 제외됨 (get_stale_symbols)
 
-        // Yahoo Finance 심볼 형식으로 변환
-        let yahoo_symbol = FundamentalFetcher::to_yahoo_symbol(&ticker, &market);
+        // DB에 저장된 yahoo_symbol 사용 (Single Source of Truth)
+        let yahoo_symbol = match yahoo_symbol_db.as_deref().filter(|s| !s.is_empty()) {
+            Some(s) => s.to_string(),
+            None => {
+                // yahoo_symbol이 없으면 스킵 (동기화 필요)
+                error_count += 1;
+                warn!(
+                    ticker = %ticker,
+                    market = %market,
+                    "yahoo_symbol이 DB에 없음. 심볼 동기화 필요"
+                );
+                continue;
+            }
+        };
 
         debug!(
             ticker = %ticker,
@@ -340,8 +369,12 @@ async fn run_collection_batch(
                         "Yahoo Finance 통합 수집 실패"
                     );
 
-                    // 심볼 없음/상장폐지 오류인 경우 실패 기록
-                    if is_symbol_not_found_error(&error_msg) {
+                    // 권위 있는 소스 원칙 적용:
+                    // - KR/CRYPTO: Yahoo 실패해도 비활성화하지 않음 (권위 있는 소스가 다름)
+                    // - US: Yahoo가 권위 있는 소스이므로 실패 시 비활성화
+                    let should_record_failure = should_record_yahoo_failure(&market);
+
+                    if should_record_failure && is_symbol_not_found_error(&error_msg) {
                         match SymbolInfoRepository::record_fetch_failure(
                             pool,
                             symbol_info_id,
@@ -366,6 +399,14 @@ async fn run_collection_batch(
                                 warn!(ticker = %ticker, error = %db_err, "실패 기록 저장 실패");
                             }
                         }
+                    } else if !should_record_failure {
+                        // KR/CRYPTO 종목은 Yahoo 실패해도 유지
+                        debug!(
+                            ticker = %ticker,
+                            market = %market,
+                            "Yahoo 실패했으나 권위 있는 소스가 다르므로 유지 ({})",
+                            SymbolInfoRepository::authoritative_source_for_market(&market)
+                        );
                     }
                 }
             }
@@ -395,8 +436,12 @@ async fn run_collection_batch(
                         "Yahoo Finance 데이터 수집 실패"
                     );
 
-                    // 심볼 없음/상장폐지 오류인 경우 실패 기록
-                    if is_symbol_not_found_error(&error_msg) {
+                    // 권위 있는 소스 원칙 적용:
+                    // - KR/CRYPTO: Yahoo 실패해도 비활성화하지 않음 (권위 있는 소스가 다름)
+                    // - US: Yahoo가 권위 있는 소스이므로 실패 시 비활성화
+                    let should_record_failure = should_record_yahoo_failure(&market);
+
+                    if should_record_failure && is_symbol_not_found_error(&error_msg) {
                         match SymbolInfoRepository::record_fetch_failure(
                             pool,
                             symbol_info_id,
@@ -421,6 +466,14 @@ async fn run_collection_batch(
                                 warn!(ticker = %ticker, error = %db_err, "실패 기록 저장 실패");
                             }
                         }
+                    } else if !should_record_failure {
+                        // KR/CRYPTO 종목은 Yahoo 실패해도 유지
+                        debug!(
+                            ticker = %ticker,
+                            market = %market,
+                            "Yahoo 실패했으나 권위 있는 소스가 다르므로 유지 ({})",
+                            SymbolInfoRepository::authoritative_source_for_market(&market)
+                        );
                     }
                 }
             }
@@ -516,6 +569,22 @@ fn is_symbol_not_found_error(error_msg: &str) -> bool {
         .any(|pattern| lower.contains(&pattern.to_lowercase()))
 }
 
+/// Yahoo Finance 실패를 기록할지 결정.
+///
+/// 권위 있는 소스 원칙에 따라 결정합니다:
+/// - **US 시장**: Yahoo가 권위 있는 소스 → 실패 기록 (비활성화 가능)
+/// - **KR 시장**: KRX가 권위 있는 소스 → Yahoo 실패 무시 (유지)
+/// - **CRYPTO 시장**: Binance가 권위 있는 소스 → Yahoo 실패 무시 (유지)
+///
+/// KR/CRYPTO 종목은 각각 KRX/Binance 동기화 시 비활성화 여부가 결정됩니다.
+fn should_record_yahoo_failure(market: &str) -> bool {
+    match market.to_uppercase().as_str() {
+        "KR" => false,     // KRX가 권위 있는 소스
+        "CRYPTO" => false, // Binance가 권위 있는 소스
+        _ => true,         // US 등 기타 시장은 Yahoo가 권위 있는 소스
+    }
+}
+
 /// 종목명 업데이트 (symbol_info 테이블).
 ///
 /// 종목명이 비어있거나 티커와 동일한 경우에만 업데이트합니다.
@@ -557,5 +626,38 @@ mod tests {
         assert_eq!(config.batch_size, 50);
         assert_eq!(config.request_delay.as_millis(), 2000);
         assert!(config.update_ohlcv);
+    }
+
+    #[test]
+    fn test_should_record_yahoo_failure() {
+        // KR 시장: KRX가 권위 있는 소스 → Yahoo 실패 기록 안 함
+        assert!(!should_record_yahoo_failure("KR"));
+        assert!(!should_record_yahoo_failure("kr"));
+
+        // CRYPTO 시장: Binance가 권위 있는 소스 → Yahoo 실패 기록 안 함
+        assert!(!should_record_yahoo_failure("CRYPTO"));
+        assert!(!should_record_yahoo_failure("crypto"));
+
+        // US 시장: Yahoo가 권위 있는 소스 → Yahoo 실패 기록함
+        assert!(should_record_yahoo_failure("US"));
+        assert!(should_record_yahoo_failure("us"));
+
+        // 기타 시장: Yahoo가 기본 → 실패 기록함
+        assert!(should_record_yahoo_failure("OTHER"));
+        assert!(should_record_yahoo_failure(""));
+    }
+
+    #[test]
+    fn test_is_symbol_not_found_error() {
+        // 심볼 없음 패턴
+        assert!(is_symbol_not_found_error("No data found"));
+        assert!(is_symbol_not_found_error("symbol may be delisted"));
+        assert!(is_symbol_not_found_error("Symbol not found: AAPL"));
+        assert!(is_symbol_not_found_error("Invalid symbol provided"));
+
+        // 기타 에러 (비활성화 안 함)
+        assert!(!is_symbol_not_found_error("Network timeout"));
+        assert!(!is_symbol_not_found_error("Rate limit exceeded"));
+        assert!(!is_symbol_not_found_error("Internal server error"));
     }
 }

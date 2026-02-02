@@ -866,3 +866,18 @@ mod tests {
         assert_eq!(state["holdings_count"], 2);
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "stock_rotation",
+    aliases: ["rotation"],
+    name: "종목 갈아타기",
+    description: "모멘텀 기반 종목 회전 전략입니다.",
+    timeframe: "1d",
+    symbols: ["005930", "000660", "035420", "051910", "006400"],
+    category: Daily,
+    markets: [KrStock, UsStock],
+    type: StockRotationStrategy
+}

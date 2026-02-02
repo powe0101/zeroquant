@@ -567,6 +567,7 @@ impl Strategy for StockGuganStrategy {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
+    use rust_decimal_macros::dec;
     use trader_core::{Kline, Timeframe};
 
     fn create_daily_kline(symbol: &Symbol, high: Decimal, low: Decimal, close: Decimal, day: u32) -> MarketData {
@@ -651,4 +652,19 @@ mod tests {
         // 가격 109 → 구간 10
         assert_eq!(strategy.get_current_zone(dec!(109)), Some(10));
     }
+}
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "stock_gugan",
+    aliases: ["gugan"],
+    name: "주식 구간 매매",
+    description: "가격 구간별 매매 전략입니다.",
+    timeframe: "1m",
+    symbols: [],
+    category: Realtime,
+    markets: [KrStock, UsStock],
+    type: StockGuganStrategy
 }

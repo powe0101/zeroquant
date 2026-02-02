@@ -698,10 +698,10 @@ export function Screening() {
         {/* 펀더멘털 결과 테이블 (프리셋/커스텀) */}
         <Show when={!isLoading() && activeTab() !== 'momentum' && currentResults().length > 0}>
           <div class="overflow-auto flex-1">
-            <table class="w-full text-sm">
+            <table class="w-full text-sm table-fixed">
               <thead class="sticky top-0 bg-[var(--color-surface-light)]">
                 <tr>
-                  <th class="px-4 py-3 text-left font-medium text-[var(--color-text-muted)]">
+                  <th class="w-[10%] px-4 py-3 text-left font-medium text-[var(--color-text-muted)]">
                     <button onClick={() => handleSort('ticker')} class="flex items-center gap-1 hover:text-[var(--color-text)]">
                       티커
                       <Show when={sortField() === 'ticker'}>
@@ -709,7 +709,7 @@ export function Screening() {
                       </Show>
                     </button>
                   </th>
-                  <th class="px-4 py-3 text-left font-medium text-[var(--color-text-muted)]">
+                  <th class="w-[20%] px-4 py-3 text-left font-medium text-[var(--color-text-muted)]">
                     <button onClick={() => handleSort('name')} class="flex items-center gap-1 hover:text-[var(--color-text)]">
                       종목명
                       <Show when={sortField() === 'name'}>
@@ -717,7 +717,7 @@ export function Screening() {
                       </Show>
                     </button>
                   </th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
+                  <th class="w-[10%] px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
                     <button onClick={() => handleSort('market_cap')} class="flex items-center gap-1 justify-end hover:text-[var(--color-text)]">
                       시가총액
                       <Show when={sortField() === 'market_cap'}>
@@ -725,7 +725,7 @@ export function Screening() {
                       </Show>
                     </button>
                   </th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
+                  <th class="w-[8%] px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
                     <button onClick={() => handleSort('per')} class="flex items-center gap-1 justify-end hover:text-[var(--color-text)]">
                       PER
                       <Show when={sortField() === 'per'}>
@@ -733,7 +733,7 @@ export function Screening() {
                       </Show>
                     </button>
                   </th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
+                  <th class="w-[8%] px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
                     <button onClick={() => handleSort('pbr')} class="flex items-center gap-1 justify-end hover:text-[var(--color-text)]">
                       PBR
                       <Show when={sortField() === 'pbr'}>
@@ -741,7 +741,7 @@ export function Screening() {
                       </Show>
                     </button>
                   </th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
+                  <th class="w-[10%] px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
                     <button onClick={() => handleSort('roe')} class="flex items-center gap-1 justify-end hover:text-[var(--color-text)]">
                       ROE
                       <Show when={sortField() === 'roe'}>
@@ -749,7 +749,7 @@ export function Screening() {
                       </Show>
                     </button>
                   </th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
+                  <th class="w-[10%] px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">
                     <button onClick={() => handleSort('dividend_yield')} class="flex items-center gap-1 justify-end hover:text-[var(--color-text)]">
                       배당률
                       <Show when={sortField() === 'dividend_yield'}>
@@ -757,8 +757,8 @@ export function Screening() {
                       </Show>
                     </button>
                   </th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">영업이익률</th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">부채비율</th>
+                  <th class="w-[12%] px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">영업이익률</th>
+                  <th class="w-[12%] px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">부채비율</th>
                 </tr>
               </thead>
               <tbody>
@@ -766,7 +766,7 @@ export function Screening() {
                   {(result, idx) => (
                     <tr class={`border-t border-[var(--color-surface-light)] hover:bg-[var(--color-surface-light)]/50 transition
                                 ${idx() % 2 === 0 ? '' : 'bg-[var(--color-surface-light)]/20'}`}>
-                      <td class="px-4 py-3">
+                      <td class="w-[10%] px-4 py-3">
                         <div class="flex items-center gap-2">
                           <span class="font-mono font-medium text-[var(--color-text)]">{result.ticker}</span>
                           <span class="text-xs px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
@@ -774,8 +774,8 @@ export function Screening() {
                           </span>
                         </div>
                       </td>
-                      <td class="px-4 py-3 text-[var(--color-text)]">{result.name}</td>
-                      <td class="px-4 py-3 text-right font-mono text-[var(--color-text)]">
+                      <td class="w-[20%] px-4 py-3 text-[var(--color-text)] truncate">{result.name}</td>
+                      <td class="w-[10%] px-4 py-3 text-right font-mono text-[var(--color-text)]">
                         {formatMarketCap(result.market_cap)}
                       </td>
                       <td class="px-4 py-3 text-right font-mono text-[var(--color-text)]">
@@ -843,18 +843,18 @@ export function Screening() {
         {/* 모멘텀 결과 테이블 */}
         <Show when={!isLoading() && activeTab() === 'momentum' && (momentumQuery.data?.results?.length || 0) > 0}>
           <div class="overflow-auto flex-1">
-            <table class="w-full text-sm">
+            <table class="w-full text-sm" style={{ "table-layout": "fixed" }}>
               <thead class="sticky top-0 bg-[var(--color-surface-light)]">
                 <tr>
-                  <th class="px-4 py-3 text-left font-medium text-[var(--color-text-muted)]">티커</th>
-                  <th class="px-4 py-3 text-left font-medium text-[var(--color-text-muted)]">종목명</th>
-                  <th class="px-4 py-3 text-center font-medium text-[var(--color-text-muted)]">시장</th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">시작가</th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">종가</th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">변동률</th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">평균거래량</th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">현재거래량</th>
-                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]">거래량 배율</th>
+                  <th class="px-4 py-3 text-left font-medium text-[var(--color-text-muted)]" style={{ width: "10%" }}>티커</th>
+                  <th class="px-4 py-3 text-left font-medium text-[var(--color-text-muted)]" style={{ width: "18%" }}>종목명</th>
+                  <th class="px-4 py-3 text-center font-medium text-[var(--color-text-muted)]" style={{ width: "8%" }}>시장</th>
+                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]" style={{ width: "10%" }}>시작가</th>
+                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]" style={{ width: "10%" }}>종가</th>
+                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]" style={{ width: "10%" }}>변동률</th>
+                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]" style={{ width: "12%" }}>평균거래량</th>
+                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]" style={{ width: "12%" }}>현재거래량</th>
+                  <th class="px-4 py-3 text-right font-medium text-[var(--color-text-muted)]" style={{ width: "10%" }}>거래량 배율</th>
                 </tr>
               </thead>
               <tbody>

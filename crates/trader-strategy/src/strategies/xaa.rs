@@ -1101,3 +1101,18 @@ mod tests {
         assert_eq!(state["current_mode"], "Offensive");
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "xaa",
+    aliases: [],
+    name: "XAA",
+    description: "확장 자산배분 (eXtended Asset Allocation) 전략입니다.",
+    timeframe: "1d",
+    symbols: ["VWO", "BND", "SPY", "EFA", "EEM", "TLT", "IEF", "LQD", "BIL"],
+    category: Monthly,
+    markets: [UsStock],
+    type: XaaStrategy
+}

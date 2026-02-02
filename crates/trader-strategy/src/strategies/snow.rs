@@ -530,3 +530,18 @@ mod tests {
         assert_eq!(assets.safe, "TLT");
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "snow",
+    aliases: ["snow_us", "snow_kr"],
+    name: "스노우",
+    description: "스노우 모멘텀 자산배분 전략입니다.",
+    timeframe: "1d",
+    symbols: ["TIP", "UPRO", "TLT", "BIL"],
+    category: Monthly,
+    markets: [UsStock, KrStock],
+    type: SnowStrategy
+}

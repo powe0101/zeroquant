@@ -837,3 +837,18 @@ mod tests {
         assert!(rsi.unwrap() > dec!(50));
     }
 }
+
+// 전략 레지스트리에 자동 등록
+use crate::register_strategy;
+
+register_strategy! {
+    id: "kospi_bothside",
+    aliases: ["kospi_both"],
+    name: "코스피 양방향",
+    description: "코스피 지수 양방향 매매 전략입니다.",
+    timeframe: "15m",
+    symbols: ["122630", "252670"],
+    category: Intraday,
+    markets: [KrStock],
+    type: KospiBothSideStrategy
+}

@@ -15,6 +15,7 @@
 
 pub mod backtest;
 pub mod indicators;
+pub mod journal_integration;
 #[cfg(feature = "ml")]
 pub mod ml;
 pub mod performance;
@@ -29,6 +30,9 @@ pub use performance::tracker::{PerformanceEvent, PerformanceThresholds, Performa
 // Portfolio 모듈 re-exports
 pub use portfolio::charts::{ChartPoint, MonthlyReturnCell, PeriodPerformance, PerformanceSummary, PortfolioCharts};
 pub use portfolio::equity_curve::{DrawdownPeriod, EquityCurve, EquityCurveBuilder, EquityPoint, TimeFrame};
+
+// Journal Integration 모듈 re-exports
+pub use journal_integration::{export_backtest_to_journal, export_backtest_trades, JournalTradeInput};
 
 // Indicators 모듈 re-exports
 pub use indicators::{

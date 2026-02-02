@@ -422,16 +422,18 @@ impl SymbolFundamentalRepository {
     ///
     /// fetched_at이 지정된 시간보다 오래된 경우.
     /// CRYPTO 심볼은 Yahoo Finance에서 지원하지 않으므로 제외.
+    /// 
+    /// 반환 값: (symbol_info_id, ticker, market, yahoo_symbol)
     pub async fn get_stale_symbols(
         pool: &PgPool,
         older_than: DateTime<Utc>,
         limit: i64,
-    ) -> Result<Vec<(Uuid, String, String)>, sqlx::Error> {
-        // (symbol_info_id, ticker, market)
+    ) -> Result<Vec<(Uuid, String, String, Option<String>)>, sqlx::Error> {
+        // (symbol_info_id, ticker, market, yahoo_symbol)
         // CRYPTO 심볼 제외: Yahoo Finance가 암호화폐 Fundamental 데이터를 제공하지 않음
-        sqlx::query_as::<_, (Uuid, String, String)>(
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
             r#"
-            SELECT si.id, si.ticker, si.market
+            SELECT si.id, si.ticker, si.market, si.yahoo_symbol
             FROM symbol_info si
             LEFT JOIN symbol_fundamental sf ON si.id = sf.symbol_info_id
             WHERE si.is_active = true
