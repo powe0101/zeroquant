@@ -1368,7 +1368,149 @@ pub mod candle_patterns; // 캔들 패턴 감지
 
 ---
 
-### 1.4.2. 전략 연계 (스크리닝 활용)
+#### 1.4.2 Multiple KLine Period (다중 타임프레임) ⭐ 신규
+
+**[병렬 가능: P1-C 완료 후]**
+
+**목적**: 단일 전략에서 여러 타임프레임의 캔들 데이터를 동시에 활용하여 더 정교한 매매 신호 생성
+
+**참조 문서**: `docs/multiple_kline_period_requirements.md` (상세 요구사항 및 구현 방법론)
+
+**현재 한계**:
+- 전략은 생성 시 지정한 단일 Timeframe만 사용 가능
+- 멀티 타임프레임 분석(MTF Analysis) 불가능
+- 장기 추세 + 단기 진입 타이밍 조합 불가
+
+**구현 단계** (총 6 Phase, 7주):
+
+##### Phase 1: 데이터 모델 확장 (1주)
+- [ ] `MultiTimeframeConfig` 구조체 정의
+  ```rust
+  pub struct MultiTimeframeConfig {
+      pub primary: Timeframe,              // 주 실행 주기
+      pub secondary: Vec<Timeframe>,       // 추가 분석용 (최대 2개)
+      pub lookback_periods: HashMap<Timeframe, usize>,  // TF별 캔들 개수
+  }
+  ```
+- [ ] `StrategyConfig`에 `multi_timeframe` 필드 추가
+- [ ] DB 스키마 확장 (`strategies.secondary_timeframes` 컬럼)
+- [ ] 유효성 검증 (Secondary는 Primary보다 큰 TF만 허용)
+
+##### Phase 2: 데이터 조회 API (1주)
+- [ ] `OhlcvCache::get_multi_timeframe_klines()` 구현
+  ```rust
+  pub async fn get_multi_timeframe_klines(
+      &self,
+      symbol: &Symbol,
+      timeframes: &[Timeframe],
+      limit: usize,
+  ) -> Result<HashMap<Timeframe, Vec<Kline>>>
+  ```
+- [ ] Redis 멀티키 조회 최적화 (병렬 GET)
+- [ ] PostgreSQL 단일 쿼리 최적화 (UNION ALL)
+- [ ] 타임프레임별 차등 TTL 설정
+- [ ] 성능 테스트 (목표: 3 TF 조회 < 50ms)
+
+##### Phase 3: Context Layer 통합 (1주)
+- [ ] `StrategyContext`에 `klines_by_timeframe` 필드 추가
+  ```rust
+  pub struct StrategyContext {
+      pub klines_by_timeframe: HashMap<Timeframe, Vec<Kline>>,
+      // ... 기존 필드
+  }
+  
+  impl StrategyContext {
+      pub fn get_klines(&self, tf: Timeframe) -> Result<&[Kline]>;
+      pub fn primary_klines(&self) -> Result<&[Kline]>;
+      pub fn latest_kline(&self, tf: Timeframe) -> Result<&Kline>;
+  }
+  ```
+- [ ] Timeframe Alignment 로직 (미래 데이터 누출 방지)
+- [ ] `StrategyExecutor`에서 멀티 데이터 자동 로드
+
+##### Phase 4: 전략 예제 작성 (1주)
+- [ ] `RsiMultiTimeframeStrategy` 구현
+  - 일봉 RSI > 50 (상승 추세 확인)
+  - 1시간봉 RSI < 30 (과매도 진입)
+  - 5분봉 RSI 반등 (실제 진입 타이밍)
+- [ ] `MovingAverageCascadeStrategy` 구현
+  - 주봉 200MA, 일봉 50MA, 1시간 20MA 계층 분석
+- [ ] 헬퍼 함수 작성 (`analyze_trend`, `combine_signals` 등)
+- [ ] 유닛/통합 테스트
+
+##### Phase 5: SDUI 및 API (1.5주)
+- [ ] SDUI 스키마에 멀티 타임프레임 선택 UI 추가
+  ```json
+  {
+    "type": "multi-select",
+    "id": "secondary_timeframes",
+    "label": "보조 타임프레임 (최대 2개)",
+    "validation": "larger_than_primary"
+  }
+  ```
+- [ ] API 엔드포인트 수정
+  - `POST /api/v1/strategies`: `multi_timeframe_config` 필드
+  - `GET /api/v1/strategies/{id}/timeframes`: TF 설정 조회
+  - `GET /api/v1/klines/multi`: 멀티 TF 데이터 조회 (디버깅용)
+- [ ] 프론트엔드 `MultiTimeframeSelector.tsx` 컴포넌트
+
+##### Phase 6: 백테스트/실시간 통합 (1.5주)
+- [ ] 백테스트 엔진에서 타임스탬프별 Secondary 데이터 정렬
+- [ ] 히스토리 캐싱으로 성능 최적화
+- [ ] WebSocket 멀티 스트림 구독
+  ```rust
+  let streams = vec![
+      format!("{}@kline_5m", symbol),
+      format!("{}@kline_1h", symbol),
+      format!("{}@kline_1d", symbol),
+  ];
+  ```
+- [ ] Primary TF 완료 시에만 전략 재평가
+- [ ] 통합 테스트 및 부하 테스트
+
+**사용 예시**:
+```rust
+// RSI 멀티 타임프레임 전략
+impl Strategy for RsiMultiTimeframeStrategy {
+    async fn analyze(&self, ctx: &StrategyContext) -> Result<Signal> {
+        // Primary (5분)
+        let klines_5m = ctx.primary_klines()?;
+        let rsi_5m = calculate_rsi(klines_5m, 14);
+        
+        // Secondary (1시간)
+        let klines_1h = ctx.get_klines(Timeframe::H1)?;
+        let rsi_1h = calculate_rsi(klines_1h, 14);
+        
+        // Secondary (일봉)
+        let klines_1d = ctx.get_klines(Timeframe::D1)?;
+        let rsi_1d = calculate_rsi(klines_1d, 14);
+        
+        // 계층적 필터링
+        if rsi_1d > 50.0 && rsi_1h < 30.0 && rsi_5m < 30.0 {
+            return Ok(Signal::Buy);  // 일봉 상승 + 시간/분봉 과매도
+        }
+        
+        Ok(Signal::Hold)
+    }
+}
+```
+
+**성능 목표**:
+- 3개 타임프레임 조회: < 50ms (캐시 히트)
+- 메모리 사용: < 10MB/전략
+- 백테스트 정확도: 100% (실시간과 일치)
+
+**효과**:
+- 신호 신뢰도 향상 (장기 추세 + 단기 타이밍)
+- 허위 신호 필터링 (멀티 TF 합의 필요)
+- 전문적인 MTF 분석 기법 적용
+- 전략 다양성 확대
+
+**예상 시간**: 7주 (Phase 1-4: 4주 MVP, Phase 5-6: 3주 개선)
+
+---
+
+### 1.4.3. 전략 연계 (스크리닝 활용)
 
 **[의존성: P1-A,P1-B,P1-C 완료 후]**
 
