@@ -42,6 +42,10 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
   - **기술적 지표**: RSI 기간, 볼린저 밴드 표준편차, 이동평균 기간 등
   - **거래 조건**: 진입/청산 임계값, 포지션 크기 비율
   - **타임프레임**: 1분, 5분, 15분, 30분, 1시간, 4시간, 일봉
+  - **다중 타임프레임 (선택)**: Primary 타임프레임 외에 Secondary 타임프레임 추가 (최대 2개)
+    - 예: Primary=5분, Secondary=[1시간, 1일]
+    - 멀티 타임프레임 분석(MTF Analysis)을 통한 정교한 신호 생성
+    - Secondary는 Primary보다 큰 타임프레임만 허용
 - 파라미터 유효성 검증:
   - 숫자 범위 제한 (min/max)
   - 필수 값 검증
@@ -322,7 +326,218 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
 
 ---
 
-### 2.6 매매 일지 (Trading Journal)
+### 2.6 다중 타임프레임 (Multiple KLine Period) ⭐
+
+> **참조 문서**: `docs/multiple_kline_period_requirements.md` (상세 요구사항 및 구현 방법론)
+
+#### 2.6.1 개요
+
+**Multiple KLine Period**는 단일 전략에서 여러 타임프레임의 캔들 데이터를 동시에 활용하여 더 정교한 매매 신호를 생성하는 기능입니다.
+
+**핵심 개념**:
+- **Primary Timeframe**: 전략의 주 실행 주기 (예: 5분)
+- **Secondary Timeframe(s)**: 추가 분석용 타임프레임 (예: 1시간, 1일) - 최대 2개
+- **멀티 타임프레임 분석 (MTF Analysis)**: 장기 추세 확인 + 중기 모멘텀 + 단기 진입 타이밍
+
+**사용 예시**:
+```
+RSI 멀티 타임프레임 전략:
+├─ 일봉 RSI > 50 → 상승 추세 확인 (Long 포지션만 허용)
+├─ 1시간 RSI < 30 → 과매도 구간 (진입 신호 생성)
+└─ 5분 RSI 반등 → 실제 진입 타이밍 결정
+```
+
+#### 2.6.2 전략 설정
+
+전략 생성 시 다중 타임프레임을 다음과 같이 설정합니다:
+
+```json
+{
+  "name": "RSI Multi Timeframe",
+  "strategy_type": "RsiMultiTimeframe",
+  "multi_timeframe_config": {
+    "primary": "5m",
+    "secondary": ["1h", "1d"],
+    "lookback_periods": {
+      "5m": 100,
+      "1h": 50,
+      "1d": 30
+    }
+  },
+  "parameters": {
+    "symbol": "BTCUSDT",
+    "rsi_period_5m": 14,
+    "rsi_period_1h": 14,
+    "rsi_period_1d": 14,
+    "oversold_threshold": 30,
+    "overbought_threshold": 70
+  }
+}
+```
+
+**설정 제약**:
+- Secondary 타임프레임은 Primary보다 **큰 타임프레임만 허용**
+- 최대 3개 타임프레임 (Primary 1개 + Secondary 2개)
+- 예: Primary=5m일 때, Secondary는 1h, 4h, 1d, 1w 등만 가능 (1m, 3m은 불가)
+
+#### 2.6.3 데이터 조회
+
+시스템은 전략 실행 시 필요한 모든 타임프레임 데이터를 자동으로 로드합니다:
+
+**조회 방식**:
+- **Redis 캐시 우선 조회** (멀티키 병렬 GET)
+- **캐시 미스 시 PostgreSQL 조회** (단일 UNION ALL 쿼리)
+- **타임프레임별 차등 TTL**:
+  - 분봉: 60초
+  - 시간봉: 300초
+  - 일봉: 3600초
+
+**성능 목표**:
+- 3개 타임프레임 동시 조회: < 50ms (캐시 히트)
+- DB 직접 조회: < 200ms
+
+#### 2.6.4 전략 코드 작성
+
+전략 코드에서 `StrategyContext`를 통해 타임프레임별 데이터에 접근합니다:
+
+```rust
+impl Strategy for RsiMultiTimeframeStrategy {
+    async fn analyze(&self, ctx: &StrategyContext) -> Result<Signal> {
+        // Primary Timeframe (5분)
+        let klines_5m = ctx.primary_klines()?;
+        let rsi_5m = calculate_rsi(klines_5m, self.config.rsi_period_5m);
+        
+        // Secondary Timeframes
+        let klines_1h = ctx.get_klines(Timeframe::H1)?;
+        let rsi_1h = calculate_rsi(klines_1h, self.config.rsi_period_1h);
+        
+        let klines_1d = ctx.get_klines(Timeframe::D1)?;
+        let rsi_1d = calculate_rsi(klines_1d, self.config.rsi_period_1d);
+        
+        // 계층적 분석
+        if rsi_1d > 50.0 && rsi_1h < 30.0 && rsi_5m < 30.0 {
+            return Ok(Signal::Buy);
+        }
+        
+        Ok(Signal::Hold)
+    }
+}
+```
+
+#### 2.6.5 Timeframe Alignment (시간 정렬)
+
+시스템은 미래 데이터 누출을 방지하기 위해 타임프레임을 자동으로 정렬합니다:
+
+**정렬 규칙**:
+- Primary의 `open_time`을 기준으로 Secondary 데이터 필터링
+- Secondary는 Primary의 `open_time` **이전** 데이터만 제공
+
+**예시**:
+```
+Primary (5분봉): 2026-02-02 10:25:00 캔들
+   ↓
+Secondary (1시간봉): 2026-02-02 10:00:00 캔들 ✅ 사용 가능
+                     2026-02-02 11:00:00 캔들 ❌ 미래 데이터 (제외)
+   ↓
+Secondary (일봉): 2026-02-02 00:00:00 캔들 ✅ 사용 가능
+```
+
+#### 2.6.6 백테스트 지원
+
+백테스트 엔진은 히스토리 데이터에서 멀티 타임프레임 전략을 정확히 재현합니다:
+
+- 각 타임스탬프마다 올바른 Secondary 데이터 로드
+- 히스토리 캐싱으로 반복 쿼리 최소화
+- 테스트 결과에 타임프레임별 신호 상세 기록 (디버깅용)
+
+#### 2.6.7 실시간 거래
+
+실시간 거래 시 WebSocket에서 여러 타임프레임을 동시에 구독합니다:
+
+```rust
+// 예: BTCUSDT 5분/1시간/일봉 동시 구독
+let streams = vec![
+    "btcusdt@kline_5m",
+    "btcusdt@kline_1h",
+    "btcusdt@kline_1d",
+];
+```
+
+**업데이트 정책**:
+- Primary 타임프레임 완료 시에만 전략 재평가
+- Secondary 업데이트는 Context에 반영만 하고 즉시 실행하지 않음
+
+#### 2.6.8 API 엔드포인트
+
+**전략 타임프레임 설정 조회**:
+```
+GET /api/v1/strategies/{id}/timeframes
+```
+
+**응답**:
+```json
+{
+  "strategy_id": 123,
+  "primary": {
+    "timeframe": "5m",
+    "description": "5분봉",
+    "last_update": "2026-02-02T10:25:00Z"
+  },
+  "secondary": [
+    {
+      "timeframe": "1h",
+      "description": "1시간봉",
+      "last_update": "2026-02-02T10:00:00Z"
+    },
+    {
+      "timeframe": "1d",
+      "description": "일봉",
+      "last_update": "2026-02-02T00:00:00Z"
+    }
+  ]
+}
+```
+
+**멀티 타임프레임 캔들 데이터 조회** (디버깅용):
+```
+GET /api/v1/klines/multi?symbol=BTCUSDT&timeframes=5m,1h,1d&limit=50
+```
+
+#### 2.6.9 UI/UX
+
+**SDUI 스키마**에서 멀티 타임프레임 선택 UI:
+
+```json
+{
+  "type": "multi-select",
+  "id": "secondary_timeframes",
+  "label": "보조 타임프레임 (최대 2개)",
+  "options": [
+    {"value": "1h", "label": "1시간"},
+    {"value": "4h", "label": "4시간"},
+    {"value": "1d", "label": "1일"},
+    {"value": "1w", "label": "1주"}
+  ],
+  "max_selections": 2,
+  "validation": "larger_than_primary"
+}
+```
+
+**프론트엔드 컴포넌트**: `MultiTimeframeSelector.tsx`
+
+#### 2.6.10 기대 효과
+
+| 효과 | 설명 |
+|------|------|
+| **신호 신뢰도 향상** | 장기 추세 + 단기 타이밍 조합으로 정확도 증가 |
+| **허위 신호 필터링** | 여러 타임프레임 합의 필요 → 노이즈 감소 |
+| **전문적 분석** | 기관/전문가가 사용하는 MTF 기법 적용 |
+| **전략 다양성** | 새로운 유형의 전략 개발 가능 |
+| **리스크 관리** | 상위 타임프레임 추세 역행 시 진입 금지 |
+
+---
+
+### 2.7 매매 일지 (Trading Journal)
 
 #### 2.6.1 체결 내역 동기화
 - 거래소에서 체결 내역 자동 동기화:
@@ -361,7 +576,7 @@ Rust 기반 고성능 다중 시장 자동화 트레이딩 시스템. 국내/해
 
 ---
 
-### 2.7 ML 예측
+### 2.8 ML 예측
 
 #### 2.7.1 모델 훈련
 - 지원 알고리즘:
