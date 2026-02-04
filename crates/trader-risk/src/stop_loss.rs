@@ -10,7 +10,7 @@ use crate::config::RiskConfig;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use trader_core::{OrderRequest, OrderType, Position, Side, Symbol, TimeInForce};
+use trader_core::{OrderRequest, OrderType, Position, Side, TimeInForce};
 
 /// 정수 연산을 사용하여 가격에 백분율 조정을 적용.
 /// 예시: apply_pct(50000, -2.0) = 49000 (2% 감소)
@@ -42,7 +42,7 @@ pub struct StopOrder {
     /// 스탑 주문 유형
     pub stop_type: StopType,
     /// 스탑 주문 심볼
-    pub symbol: Symbol,
+    pub symbol: String,
     /// 방향 (청산 시 포지션 방향의 반대)
     pub side: Side,
     /// 청산 수량
@@ -62,7 +62,7 @@ pub struct StopOrder {
 impl StopOrder {
     /// 새 손절매 주문 생성.
     pub fn stop_loss(
-        symbol: Symbol,
+        symbol: String,
         position_side: Side,
         quantity: Decimal,
         trigger_price: Decimal,
@@ -83,7 +83,7 @@ impl StopOrder {
 
     /// 새 이익실현 주문 생성.
     pub fn take_profit(
-        symbol: Symbol,
+        symbol: String,
         position_side: Side,
         quantity: Decimal,
         trigger_price: Decimal,
@@ -104,7 +104,7 @@ impl StopOrder {
 
     /// 추적 손절매 주문 생성.
     pub fn trailing_stop(
-        symbol: Symbol,
+        symbol: String,
         position_side: Side,
         quantity: Decimal,
         trigger_price: Decimal,
@@ -139,7 +139,7 @@ impl StopOrder {
     pub fn to_order_request(&self) -> OrderRequest {
         match self.limit_price {
             Some(limit) => OrderRequest {
-                symbol: self.symbol.clone(),
+                ticker: self.symbol.clone(),
                 side: self.side,
                 order_type: OrderType::StopLossLimit,
                 quantity: self.quantity,
@@ -150,7 +150,7 @@ impl StopOrder {
                 strategy_id: None,
             },
             None => OrderRequest {
-                symbol: self.symbol.clone(),
+                ticker: self.symbol.clone(),
                 side: self.side,
                 order_type: OrderType::StopLoss,
                 quantity: self.quantity,
@@ -305,8 +305,8 @@ impl StopOrderGenerator {
     /// * `position` - 보호할 포지션
     /// * `stop_loss_pct` - 선택적 사용자 정의 손절매 백분율 (None이면 설정 기본값 사용)
     pub fn generate_stop_loss(&self, position: &Position, stop_loss_pct: Option<f64>) -> StopOrder {
-        let symbol_str = position.symbol.to_string();
-        let pct = stop_loss_pct.unwrap_or_else(|| self.config.get_stop_loss_pct(&symbol_str));
+        let symbol_str = &position.ticker;
+        let pct = stop_loss_pct.unwrap_or_else(|| self.config.get_stop_loss_pct(symbol_str));
 
         let trigger_price = match position.side {
             Side::Buy => {
@@ -320,7 +320,7 @@ impl StopOrderGenerator {
         };
 
         StopOrder::stop_loss(
-            position.symbol.clone(),
+            position.ticker.clone(),
             position.side,
             position.quantity,
             trigger_price,
@@ -338,8 +338,8 @@ impl StopOrderGenerator {
         position: &Position,
         take_profit_pct: Option<f64>,
     ) -> StopOrder {
-        let symbol_str = position.symbol.to_string();
-        let pct = take_profit_pct.unwrap_or_else(|| self.config.get_take_profit_pct(&symbol_str));
+        let symbol_str = &position.ticker;
+        let pct = take_profit_pct.unwrap_or_else(|| self.config.get_take_profit_pct(symbol_str));
 
         let trigger_price = match position.side {
             Side::Buy => {
@@ -353,7 +353,7 @@ impl StopOrderGenerator {
         };
 
         StopOrder::take_profit(
-            position.symbol.clone(),
+            position.ticker.clone(),
             position.side,
             position.quantity,
             trigger_price,
@@ -391,7 +391,7 @@ impl StopOrderGenerator {
         };
 
         let order = StopOrder::trailing_stop(
-            position.symbol.clone(),
+            position.ticker.clone(),
             position.side,
             position.quantity,
             trigger_price,
@@ -445,7 +445,7 @@ impl StopOrderGenerator {
         let trigger_price = self.calculate_atr_stop(position.entry_price, atr, mult, position.side);
 
         let mut order = StopOrder::stop_loss(
-            position.symbol.clone(),
+            position.ticker.clone(),
             position.side,
             position.quantity,
             trigger_price,
@@ -484,16 +484,16 @@ impl StopOrderGenerator {
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
-    use trader_core::MarketType;
+    use trader_core::Symbol;
 
     fn create_test_position(side: Side, quantity: Decimal, entry_price: Decimal) -> Position {
-        let symbol = Symbol::new("BTC", "USDT", MarketType::Crypto);
+        let symbol = "BTC/USDT".to_string();
         Position::new("test_exchange", symbol, side, quantity, entry_price)
     }
 
     #[test]
     fn test_stop_loss_order_creation() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let order = StopOrder::stop_loss(
             symbol.clone(),
             Side::Buy,
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_take_profit_order_creation() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let order = StopOrder::take_profit(
             symbol.clone(),
             Side::Buy,
@@ -518,7 +518,7 @@ mod tests {
             dec!(55000),
             dec!(50000),
         );
-
+        
         assert_eq!(order.stop_type, StopType::FixedTakeProfit);
         assert_eq!(order.side, Side::Sell);
         assert_eq!(order.trigger_price, dec!(55000));
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn test_stop_order_pnl_calculation() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
 
         // 롱 포지션 손절매
         let sl = StopOrder::stop_loss(
@@ -685,8 +685,9 @@ mod tests {
     #[test]
     fn test_stop_order_to_order_request() {
         let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol_str = symbol.to_string();
         let order = StopOrder::stop_loss(
-            symbol.clone(),
+            symbol_str.clone(),
             Side::Buy,
             dec!(0.1),
             dec!(49000),
@@ -695,7 +696,7 @@ mod tests {
 
         let request = order.to_order_request();
 
-        assert_eq!(request.symbol, symbol);
+        assert_eq!(request.ticker, symbol_str);
         assert_eq!(request.side, Side::Sell);
         assert_eq!(request.quantity, dec!(0.1));
     }

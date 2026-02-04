@@ -37,7 +37,7 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 자산 클래스.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,34 +53,34 @@ pub enum DualAssetClass {
 /// 자산 정보.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DualAsset {
-    pub symbol: String,
+    pub ticker:  String,
     pub name: String,
     pub asset_class: DualAssetClass,
     pub market: String, // "KR" or "US"
 }
 
 impl DualAsset {
-    pub fn kr_stock(symbol: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn kr_stock(ticker: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             name: name.into(),
             asset_class: DualAssetClass::Stock,
             market: "KR".to_string(),
         }
     }
 
-    pub fn us_bond(symbol: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn us_bond(ticker: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             name: name.into(),
             asset_class: DualAssetClass::UsBond,
             market: "US".to_string(),
         }
     }
 
-    pub fn safe(symbol: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn safe(ticker: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             name: name.into(),
             asset_class: DualAssetClass::Safe,
             market: "US".to_string(),
@@ -194,7 +194,7 @@ impl DualMomentumConfig {
 /// 자산별 데이터.
 #[derive(Debug, Clone)]
 struct AssetData {
-    symbol: String,
+    ticker:  String,
     asset_class: DualAssetClass,
     market: String,
     current_price: Decimal,
@@ -204,9 +204,9 @@ struct AssetData {
 }
 
 impl AssetData {
-    fn new(symbol: String, asset_class: DualAssetClass, market: String) -> Self {
+    fn new(ticker:  String, asset_class: DualAssetClass, market: String) -> Self {
         Self {
-            symbol,
+            ticker,
             asset_class,
             market,
             current_price: Decimal::ZERO,
@@ -239,7 +239,7 @@ impl AssetData {
 /// 듀얼 모멘텀 전략.
 pub struct DualMomentumStrategy {
     config: Option<DualMomentumConfig>,
-    symbols: Vec<Symbol>,
+    tickers: Vec<String>,
     asset_data: HashMap<String, AssetData>,
 
     /// 현재 선택된 자산 클래스
@@ -262,7 +262,7 @@ impl DualMomentumStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             asset_data: HashMap::new(),
             selected_class: None,
             last_rebalance_month: None,
@@ -338,7 +338,7 @@ impl DualMomentumStrategy {
             .values()
             .filter(|a| a.asset_class == class)
             .max_by(|a, b| a.momentum.cmp(&b.momentum))
-            .map(|a| a.symbol.clone())
+            .map(|a| a.ticker.clone())
     }
 
     /// 상대 모멘텀으로 자산 클래스 선택.
@@ -398,8 +398,8 @@ impl DualMomentumStrategy {
         let mut allocations = Vec::new();
 
         // 선택된 클래스 내 최고 모멘텀 자산 선택
-        if let Some(symbol) = self.select_best_in_class(selected_class) {
-            allocations.push(TargetAllocation::new(symbol, dec!(1.0)));
+        if let Some(ticker) = self.select_best_in_class(selected_class) {
+            allocations.push(TargetAllocation::new(ticker, dec!(1.0)));
         }
 
         allocations
@@ -442,7 +442,7 @@ impl DualMomentumStrategy {
             .asset_data
             .values()
             .filter(|d| d.current_holdings > Decimal::ZERO)
-            .map(|d| PortfolioPosition::new(&d.symbol, d.current_holdings, d.current_price))
+            .map(|d| PortfolioPosition::new(&d.ticker, d.current_holdings, d.current_price))
             .collect();
 
         // 현금 포지션 추가 (기본적으로 USD 사용)
@@ -464,11 +464,11 @@ impl DualMomentumStrategy {
             // 자산에 맞는 통화 결정
             let quote = self
                 .asset_data
-                .get(&order.symbol)
+                .get(&order.ticker)
                 .map(|a| if a.market == "KR" { "KRW" } else { "USD" })
                 .unwrap_or("USD");
-
-            let symbol = Symbol::stock(&order.symbol, quote);
+            // String Resolver
+            let ticker = order.ticker.clone();
 
             let side = match order.side {
                 RebalanceOrderSide::Buy => Side::Buy,
@@ -484,16 +484,16 @@ impl DualMomentumStrategy {
 
             let signal = if order.side == RebalanceOrderSide::Buy {
                 // BUY 신호 전에 RouteState/GlobalScore 확인
-                if !self.can_enter(&order.symbol) {
-                    debug!(symbol = %order.symbol, "Skipping BUY due to RouteState/GlobalScore");
+                if !self.can_enter(&order.ticker) {
+                    debug!(ticker = %order.ticker, "Skipping BUY due to RouteState/GlobalScore");
                     continue;
                 }
-                Signal::entry("dual_momentum", symbol, side)
+                Signal::entry("dual_momentum", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
             } else {
-                Signal::exit("dual_momentum", symbol, side)
+                Signal::exit("dual_momentum", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
@@ -550,12 +550,12 @@ impl Strategy for DualMomentumStrategy {
 
         for asset in dm_config.get_all_assets() {
             let quote = if asset.market == "KR" { "KRW" } else { "USD" };
-            let symbol = Symbol::stock(&asset.symbol, quote);
-            self.symbols.push(symbol);
+            let ticker = format!("{}/{}", asset.ticker, quote);
+            self.tickers.push(ticker);
 
             self.asset_data.insert(
-                asset.symbol.clone(),
-                AssetData::new(asset.symbol, asset.asset_class, asset.market.clone()),
+                asset.ticker.clone(),
+                AssetData::new(asset.ticker, asset.asset_class, asset.market.clone()),
             );
         }
 
@@ -574,9 +574,9 @@ impl Strategy for DualMomentumStrategy {
         }
 
         // base 심볼만 추출 (SPY/USD -> SPY)
-        let symbol_str = data.symbol.base.clone();
+        let ticker_str = data.ticker.clone();
 
-        if !self.asset_data.contains_key(&symbol_str) {
+        if !self.asset_data.contains_key(&ticker_str) {
             return Ok(vec![]);
         }
 
@@ -585,7 +585,7 @@ impl Strategy for DualMomentumStrategy {
             _ => return Ok(vec![]),
         };
 
-        if let Some(asset) = self.asset_data.get_mut(&symbol_str) {
+        if let Some(asset) = self.asset_data.get_mut(&ticker_str) {
             asset.add_price(close);
         }
 
@@ -605,9 +605,9 @@ impl Strategy for DualMomentumStrategy {
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // base 심볼만 추출 (SPY/USD -> SPY)
-        let symbol_str = order.symbol.base.clone();
+        let ticker_str = order.ticker.clone();
 
-        if let Some(asset) = self.asset_data.get_mut(&symbol_str) {
+        if let Some(asset) = self.asset_data.get_mut(&ticker_str) {
             match order.side {
                 Side::Buy => asset.current_holdings += order.quantity,
                 Side::Sell => {
@@ -694,7 +694,7 @@ register_strategy! {
     name: "듀얼 모멘텀",
     description: "절대 모멘텀과 상대 모멘텀을 결합한 전략입니다.",
     timeframe: "1d",
-    symbols: ["069500", "122630", "IEF", "TLT"],
+    tickers: ["069500", "122630", "IEF", "TLT"],
     category: Daily,
     markets: [Stock, Stock],
     type: DualMomentumStrategy

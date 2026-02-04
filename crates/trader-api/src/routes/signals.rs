@@ -134,7 +134,7 @@ impl From<SignalMarker> for SignalMarkerDto {
     fn from(marker: SignalMarker) -> Self {
         Self {
             id: marker.id.to_string(),
-            symbol: marker.symbol.to_string(),
+            symbol: marker.ticker.to_string(),
             timestamp: marker.timestamp,
             signal_type: marker.signal_type.to_string(),
             side: marker.side.map(|s| s.to_string()),

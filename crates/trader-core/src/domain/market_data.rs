@@ -8,7 +8,7 @@
 //! - `MarketData` - 통합 시장 데이터
 
 use crate::domain::order::Side;
-use crate::types::{Price, Quantity, Symbol, Timeframe};
+use crate::types::{Price, Quantity, Timeframe};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Kline {
     /// 거래 심볼
-    pub symbol: Symbol,
+    pub ticker: String,
     /// 타임프레임
     pub timeframe: Timeframe,
     /// 캔들 시작 시간
@@ -46,7 +46,7 @@ impl Kline {
     /// 새 캔들을 생성합니다.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        symbol: Symbol,
+        ticker: String,
         timeframe: Timeframe,
         open_time: DateTime<Utc>,
         open: Price,
@@ -57,7 +57,7 @@ impl Kline {
         close_time: DateTime<Utc>,
     ) -> Self {
         Self {
-            symbol,
+            ticker,
             timeframe,
             open_time,
             open,
@@ -108,8 +108,8 @@ impl Kline {
 /// 실시간 시세 데이터.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticker {
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 심볼 (ticker)
+    pub ticker: String,
     /// 최우선 매수 호가
     pub bid: Price,
     /// 최우선 매도 호가
@@ -162,8 +162,8 @@ pub struct OrderBookLevel {
 /// 호가창 데이터.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderBook {
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 심볼 (ticker)
+    pub ticker: String,
     /// 매수 호가 - 가격 내림차순 정렬
     pub bids: Vec<OrderBookLevel>,
     /// 매도 호가 - 가격 오름차순 정렬
@@ -231,8 +231,8 @@ impl OrderBook {
 /// 체결 틱 데이터.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeTick {
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 심볼 (ticker)
+    pub ticker: String,
     /// 체결 ID
     pub id: String,
     /// 가격
@@ -264,8 +264,8 @@ pub enum MarketDataType {
 pub struct MarketData {
     /// 거래소 이름
     pub exchange: String,
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 ticker
+    pub ticker: String,
     /// 데이터 타임스탬프
     pub timestamp: DateTime<Utc>,
     /// 데이터 내용
@@ -277,7 +277,7 @@ impl MarketData {
     pub fn from_kline(exchange: impl Into<String>, kline: Kline) -> Self {
         Self {
             exchange: exchange.into(),
-            symbol: kline.symbol.clone(),
+            ticker: kline.ticker.clone(),
             timestamp: kline.open_time,
             data: MarketDataType::Kline(kline),
         }
@@ -287,7 +287,7 @@ impl MarketData {
     pub fn from_ticker(exchange: impl Into<String>, ticker: Ticker) -> Self {
         Self {
             exchange: exchange.into(),
-            symbol: ticker.symbol.clone(),
+            ticker: ticker.ticker.clone(),
             timestamp: ticker.timestamp,
             data: MarketDataType::Ticker(ticker),
         }
@@ -297,7 +297,7 @@ impl MarketData {
     pub fn from_order_book(exchange: impl Into<String>, order_book: OrderBook) -> Self {
         Self {
             exchange: exchange.into(),
-            symbol: order_book.symbol.clone(),
+            ticker: order_book.ticker.clone(),
             timestamp: order_book.timestamp,
             data: MarketDataType::OrderBook(order_book),
         }
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_kline() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let now = Utc::now();
         let kline = Kline::new(
             symbol,
@@ -342,9 +342,9 @@ mod tests {
 
     #[test]
     fn test_order_book() {
-        let symbol = Symbol::crypto("ETH", "USDT");
+        let ticker = "ETH/USDT".to_string();
         let ob = OrderBook {
-            symbol,
+            ticker,
             bids: vec![
                 OrderBookLevel {
                     price: dec!(2000),
@@ -376,9 +376,9 @@ mod tests {
 
     #[test]
     fn test_ticker_spread() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker_str = "BTC/USDT".to_string();
         let ticker = Ticker {
-            symbol,
+            ticker: ticker_str,
             bid: dec!(50000),
             ask: dec!(50010),
             last: dec!(50005),

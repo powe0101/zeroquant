@@ -109,6 +109,32 @@ pub enum NotificationEvent {
     },
     /// 사용자 정의 알림
     Custom { title: String, message: String },
+    /// RouteState 변경 알림 (Attack 진입 등)
+    RouteStateChanged {
+        symbol: String,
+        symbol_name: Option<String>,
+        previous_state: String,
+        new_state: String,
+        /// 매크로 환경 정보 (선택)
+        macro_risk: Option<String>,
+        macro_summary: Option<String>,
+    },
+    /// 매크로 환경 경고 알림
+    MacroAlert {
+        risk_level: String,
+        usd_krw: String,
+        usd_change_pct: String,
+        nasdaq_change_pct: String,
+        recommendation: String,
+    },
+    /// 시장 온도 알림
+    MarketBreadthAlert {
+        temperature: String,
+        all_ratio: String,
+        kospi_ratio: String,
+        kosdaq_ratio: String,
+        recommendation: String,
+    },
 }
 
 /// 알림 메시지.

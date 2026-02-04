@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tracing::{debug, info};
 use trader_core::{
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// 올웨더 시장 타입
@@ -53,7 +53,7 @@ pub enum AssetClass {
 /// 자산 정보
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetInfo {
-    pub symbol: String,
+    pub ticker:  String,
     pub name: String,
     pub asset_class: AssetClass,
     pub base_weight: Decimal,
@@ -146,37 +146,37 @@ impl AllWeatherConfig {
         match self.market {
             AllWeatherMarket::US => vec![
                 AssetInfo {
-                    symbol: "SPY".to_string(),
+                    ticker: "SPY".to_string(),
                     name: "S&P 500".to_string(),
                     asset_class: AssetClass::Stock,
                     base_weight: dec!(20),
                 },
                 AssetInfo {
-                    symbol: "TLT".to_string(),
+                    ticker: "TLT".to_string(),
                     name: "20+ Year Treasury".to_string(),
                     asset_class: AssetClass::Bond,
                     base_weight: dec!(27),
                 },
                 AssetInfo {
-                    symbol: "IEF".to_string(),
+                    ticker: "IEF".to_string(),
                     name: "7-10 Year Treasury".to_string(),
                     asset_class: AssetClass::Bond,
                     base_weight: dec!(15),
                 },
                 AssetInfo {
-                    symbol: "GLD".to_string(),
+                    ticker: "GLD".to_string(),
                     name: "Gold".to_string(),
                     asset_class: AssetClass::Gold,
                     base_weight: dec!(8),
                 },
                 AssetInfo {
-                    symbol: "PDBC".to_string(),
+                    ticker: "PDBC".to_string(),
                     name: "Commodities".to_string(),
                     asset_class: AssetClass::Commodity,
                     base_weight: dec!(8),
                 },
                 AssetInfo {
-                    symbol: "IYK".to_string(),
+                    ticker: "IYK".to_string(),
                     name: "Consumer Staples".to_string(),
                     asset_class: AssetClass::Stock,
                     base_weight: dec!(22),
@@ -184,37 +184,37 @@ impl AllWeatherConfig {
             ],
             AllWeatherMarket::KR => vec![
                 AssetInfo {
-                    symbol: "360750".to_string(),
+                    ticker: "360750".to_string(),
                     name: "TIGER 미국S&P500".to_string(),
                     asset_class: AssetClass::Stock,
                     base_weight: dec!(20),
                 },
                 AssetInfo {
-                    symbol: "294400".to_string(),
+                    ticker: "294400".to_string(),
                     name: "KOSEF 200TR".to_string(),
                     asset_class: AssetClass::Stock,
                     base_weight: dec!(20),
                 },
                 AssetInfo {
-                    symbol: "148070".to_string(),
+                    ticker: "148070".to_string(),
                     name: "KOSEF 국고채10년".to_string(),
                     asset_class: AssetClass::Bond,
                     base_weight: dec!(15),
                 },
                 AssetInfo {
-                    symbol: "305080".to_string(),
+                    ticker: "305080".to_string(),
                     name: "TIGER 미국채10년선물".to_string(),
                     asset_class: AssetClass::Bond,
                     base_weight: dec!(15),
                 },
                 AssetInfo {
-                    symbol: "319640".to_string(),
+                    ticker: "319640".to_string(),
                     name: "TIGER 골드선물(H)".to_string(),
                     asset_class: AssetClass::Gold,
                     base_weight: dec!(15),
                 },
                 AssetInfo {
-                    symbol: "261240".to_string(),
+                    ticker: "261240".to_string(),
                     name: "TIGER 미국달러단기채권".to_string(),
                     asset_class: AssetClass::Cash,
                     base_weight: dec!(15),
@@ -227,7 +227,7 @@ impl AllWeatherConfig {
 /// 자산별 상태
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AssetState {
-    symbol: String,
+    ticker:  String,
     current_weight: Decimal,
     target_weight: Decimal,
     quantity: Decimal,
@@ -264,8 +264,8 @@ impl AllWeatherStrategy {
     }
 
     /// MA 기반 비중 조정 계수 계산
-    fn calculate_ma_adjustment(&self, symbol: &str, current_price: Decimal) -> Decimal {
-        let Some(state) = self.asset_states.get(symbol) else {
+    fn calculate_ma_adjustment(&self, ticker: &str, current_price: Decimal) -> Decimal {
+        let Some(state) = self.asset_states.get(ticker) else {
             return dec!(1);
         };
 
@@ -310,12 +310,12 @@ impl AllWeatherStrategy {
             }
 
             // MA 조정
-            if let Some(state) = self.asset_states.get(&asset.symbol) {
-                let ma_adj = self.calculate_ma_adjustment(&asset.symbol, state.last_price);
+            if let Some(state) = self.asset_states.get(&asset.ticker) {
+                let ma_adj = self.calculate_ma_adjustment(&asset.ticker, state.last_price);
                 target *= ma_adj;
             }
 
-            weights.insert(asset.symbol.clone(), target);
+            weights.insert(asset.ticker.clone(), target);
         }
 
         // 비중 정규화 (합 = 100%)
@@ -330,8 +330,8 @@ impl AllWeatherStrategy {
     }
 
     /// MA 계산
-    fn calculate_ma(&self, symbol: &str, period: usize) -> Option<Decimal> {
-        let history = self.price_history.get(symbol)?;
+    fn calculate_ma(&self, ticker: &str, period: usize) -> Option<Decimal> {
+        let history = self.price_history.get(ticker)?;
         if history.len() < period {
             return None;
         }
@@ -356,8 +356,8 @@ impl AllWeatherStrategy {
 
         // 비중 편차 확인
         let target_weights = self.calculate_target_weights(now);
-        for (symbol, state) in &self.asset_states {
-            if let Some(&target) = target_weights.get(symbol) {
+        for (ticker, state) in &self.asset_states {
+            if let Some(&target) = target_weights.get(ticker) {
                 let diff = (state.current_weight - target).abs();
                 if diff >= config.rebalance_threshold {
                     return true;
@@ -378,10 +378,10 @@ impl AllWeatherStrategy {
         let target_weights = self.calculate_target_weights(now);
         let mut signals = Vec::new();
 
-        for (symbol, &target_weight) in &target_weights {
+        for (ticker, &target_weight) in &target_weights {
             let current_weight = self
                 .asset_states
-                .get(symbol)
+                .get(ticker)
                 .map(|s| s.current_weight)
                 .unwrap_or(dec!(0));
 
@@ -392,12 +392,12 @@ impl AllWeatherStrategy {
                 continue; // 1% 미만 차이는 무시
             }
 
-            let (market_type, quote_currency) = match config.market {
-                AllWeatherMarket::US => (MarketType::Stock, "USD"),
-                AllWeatherMarket::KR => (MarketType::Stock, "KRW"),
+            let quote_currency = match config.market {
+                AllWeatherMarket::US => "USD",
+                AllWeatherMarket::KR => "KRW",
             };
 
-            let sym = Symbol::new(symbol, quote_currency, market_type);
+            let sym = format!("{}/{}", ticker, quote_currency);
 
             if diff > dec!(0) {
                 // 매수
@@ -490,11 +490,11 @@ impl Strategy for AllWeatherStrategy {
         };
 
         // base 심볼만 추출 (SPY/USD -> SPY)
-        let symbol = data.symbol.base.clone();
+        let ticker = data.ticker.clone();
         let now = data.timestamp;
 
         // 이 전략의 자산인지 확인
-        if !self.assets.iter().any(|a| a.symbol == symbol) {
+        if !self.assets.iter().any(|a| a.ticker == ticker) {
             return Ok(vec![]);
         }
 
@@ -508,12 +508,12 @@ impl Strategy for AllWeatherStrategy {
 
         // 가격 히스토리 업데이트
         self.price_history
-            .entry(symbol.clone())
+            .entry(ticker.clone())
             .or_insert_with(Vec::new)
             .push(close);
 
         // 최대 250개 유지
-        if let Some(history) = self.price_history.get_mut(&symbol) {
+        if let Some(history) = self.price_history.get_mut(&ticker) {
             if history.len() > 250 {
                 history.remove(0);
             }
@@ -522,7 +522,7 @@ impl Strategy for AllWeatherStrategy {
         // MA 업데이트
         let mut ma_values = HashMap::new();
         for &period in &config.ma_periods {
-            if let Some(ma) = self.calculate_ma(&symbol, period) {
+            if let Some(ma) = self.calculate_ma(&ticker, period) {
                 ma_values.insert(period, ma);
             }
         }
@@ -530,9 +530,9 @@ impl Strategy for AllWeatherStrategy {
         // 자산 상태 업데이트
         let state = self
             .asset_states
-            .entry(symbol.clone())
+            .entry(ticker.clone())
             .or_insert(AssetState {
-                symbol: symbol.clone(),
+                ticker: ticker.clone(),
                 current_weight: dec!(0),
                 target_weight: dec!(0),
                 quantity: dec!(0),
@@ -546,7 +546,7 @@ impl Strategy for AllWeatherStrategy {
         if !self.is_initialized {
             let all_initialized = self.assets.iter().all(|a| {
                 self.price_history
-                    .get(&a.symbol)
+                    .get(&a.ticker)
                     .map(|h| h.len() >= 50)
                     .unwrap_or(false)
             });
@@ -582,9 +582,9 @@ impl Strategy for AllWeatherStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol = order.symbol.to_string();
+        let ticker = order.ticker.to_string();
 
-        if let Some(state) = self.asset_states.get_mut(&symbol) {
+        if let Some(state) = self.asset_states.get_mut(&ticker) {
             match order.side {
                 Side::Buy => state.quantity += order.quantity,
                 Side::Sell => state.quantity -= order.quantity,
@@ -605,7 +605,7 @@ impl Strategy for AllWeatherStrategy {
 
             info!(
                 "[AllWeather] 주문 체결: {} {:?} {} @ {:?}",
-                symbol, order.side, order.quantity, order.average_fill_price
+                ticker, order.side, order.quantity, order.average_fill_price
             );
         }
 
@@ -617,7 +617,7 @@ impl Strategy for AllWeatherStrategy {
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         debug!(
-            symbol = %position.symbol,
+            ticker = %position.ticker,
             quantity = %position.quantity,
             "Position updated"
         );
@@ -711,7 +711,7 @@ register_strategy! {
     name: "올웨더",
     description: "레이 달리오의 올웨더 포트폴리오 전략입니다.",
     timeframe: "1d",
-    symbols: ["SPY", "TLT", "IEF", "GLD", "PDBC", "IYK"],
+    tickers: ["SPY", "TLT", "IEF", "GLD", "PDBC", "IYK"],
     category: Monthly,
     markets: [Stock, Stock],
     type: AllWeatherStrategy

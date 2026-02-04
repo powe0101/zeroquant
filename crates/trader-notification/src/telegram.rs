@@ -301,6 +301,90 @@ impl TelegramSender {
             NotificationEvent::Custom { title, message } => {
                 format!("{priority_emoji} <b>{title}</b>\n\n{message}")
             }
+
+            NotificationEvent::RouteStateChanged {
+                symbol,
+                symbol_name,
+                previous_state,
+                new_state,
+                macro_risk,
+                macro_summary,
+            } => {
+                // 상태별 이모지
+                let state_emoji = match new_state.to_uppercase().as_str() {
+                    "ATTACK" => "🚀",
+                    "ARMED" => "⚡",
+                    "WAIT" => "👀",
+                    "OVERHEAT" => "🔥",
+                    _ => "😐",
+                };
+
+                let name_text = symbol_name
+                    .as_ref()
+                    .map(|n| format!(" ({})", n))
+                    .unwrap_or_default();
+
+                let macro_text = match (macro_risk, macro_summary) {
+                    (Some(risk), Some(summary)) => {
+                        let risk_emoji = match risk.to_uppercase().as_str() {
+                            "CRITICAL" => "🚨",
+                            "HIGH" => "⚠️",
+                            _ => "✅",
+                        };
+                        format!("\n\n<b>매크로 환경</b> {risk_emoji}\n{summary}")
+                    }
+                    _ => String::new(),
+                };
+
+                format!(
+                    "{state_emoji} <b>RouteState 변경: {new_state}</b>\n\n\
+                     심볼: <code>{symbol}</code>{name_text}\n\
+                     상태 변경: {previous_state} → <b>{new_state}</b>{macro_text}"
+                )
+            }
+
+            NotificationEvent::MacroAlert {
+                risk_level,
+                usd_krw,
+                usd_change_pct,
+                nasdaq_change_pct,
+                recommendation,
+            } => {
+                let risk_emoji = match risk_level.to_uppercase().as_str() {
+                    "CRITICAL" => "🚨",
+                    "HIGH" => "⚠️",
+                    _ => "✅",
+                };
+
+                format!(
+                    "{risk_emoji} <b>매크로 환경 경고: {risk_level}</b>\n\n\
+                     USD/KRW: {usd_krw}원 ({usd_change_pct}%)\n\
+                     나스닥: {nasdaq_change_pct}%\n\n\
+                     <i>{recommendation}</i>"
+                )
+            }
+
+            NotificationEvent::MarketBreadthAlert {
+                temperature,
+                all_ratio,
+                kospi_ratio,
+                kosdaq_ratio,
+                recommendation,
+            } => {
+                let temp_emoji = match temperature.to_uppercase().as_str() {
+                    "OVERHEAT" => "🔥",
+                    "COLD" => "🧊",
+                    _ => "🌤",
+                };
+
+                format!(
+                    "{temp_emoji} <b>시장 온도: {temperature}</b>\n\n\
+                     전체: {all_ratio}%\n\
+                     코스피: {kospi_ratio}%\n\
+                     코스닥: {kosdaq_ratio}%\n\n\
+                     <i>{recommendation}</i>"
+                )
+            }
         };
 
         let timestamp = notification.timestamp.format("%Y-%m-%d %H:%M:%S UTC");
@@ -542,6 +626,99 @@ impl NotificationManager {
             reason: reason.to_string(),
             strategy_name: strategy_name.to_string(),
             indicators,
+        })
+        .with_priority(priority);
+
+        self.notify(&notification).await
+    }
+
+    /// RouteState 변경 알림을 전송합니다 (ATTACK 상태 진입 시).
+    ///
+    /// # 인자
+    /// - `symbol`: 종목 코드
+    /// - `symbol_name`: 종목명 (선택)
+    /// - `previous_state`: 이전 상태
+    /// - `new_state`: 새 상태
+    /// - `macro_risk`: 매크로 위험 수준 (선택)
+    /// - `macro_summary`: 매크로 환경 요약 (선택)
+    pub async fn notify_route_state_changed(
+        &self,
+        symbol: &str,
+        symbol_name: Option<&str>,
+        previous_state: &str,
+        new_state: &str,
+        macro_risk: Option<&str>,
+        macro_summary: Option<&str>,
+    ) -> NotificationResult<()> {
+        // ATTACK 상태 진입 시 High 우선순위
+        let priority = if new_state.to_uppercase() == "ATTACK" {
+            NotificationPriority::High
+        } else if new_state.to_uppercase() == "OVERHEAT" {
+            NotificationPriority::High
+        } else {
+            NotificationPriority::Normal
+        };
+
+        let notification = Notification::new(NotificationEvent::RouteStateChanged {
+            symbol: symbol.to_string(),
+            symbol_name: symbol_name.map(|s| s.to_string()),
+            previous_state: previous_state.to_string(),
+            new_state: new_state.to_string(),
+            macro_risk: macro_risk.map(|s| s.to_string()),
+            macro_summary: macro_summary.map(|s| s.to_string()),
+        })
+        .with_priority(priority);
+
+        self.notify(&notification).await
+    }
+
+    /// 매크로 환경 경고 알림을 전송합니다.
+    pub async fn notify_macro_alert(
+        &self,
+        risk_level: &str,
+        usd_krw: &str,
+        usd_change_pct: &str,
+        nasdaq_change_pct: &str,
+        recommendation: &str,
+    ) -> NotificationResult<()> {
+        let priority = match risk_level.to_uppercase().as_str() {
+            "CRITICAL" => NotificationPriority::Critical,
+            "HIGH" => NotificationPriority::High,
+            _ => NotificationPriority::Normal,
+        };
+
+        let notification = Notification::new(NotificationEvent::MacroAlert {
+            risk_level: risk_level.to_string(),
+            usd_krw: usd_krw.to_string(),
+            usd_change_pct: usd_change_pct.to_string(),
+            nasdaq_change_pct: nasdaq_change_pct.to_string(),
+            recommendation: recommendation.to_string(),
+        })
+        .with_priority(priority);
+
+        self.notify(&notification).await
+    }
+
+    /// 시장 온도 알림을 전송합니다.
+    pub async fn notify_market_breadth(
+        &self,
+        temperature: &str,
+        all_ratio: &str,
+        kospi_ratio: &str,
+        kosdaq_ratio: &str,
+        recommendation: &str,
+    ) -> NotificationResult<()> {
+        let priority = match temperature.to_uppercase().as_str() {
+            "OVERHEAT" | "COLD" => NotificationPriority::High,
+            _ => NotificationPriority::Normal,
+        };
+
+        let notification = Notification::new(NotificationEvent::MarketBreadthAlert {
+            temperature: temperature.to_string(),
+            all_ratio: all_ratio.to_string(),
+            kospi_ratio: kospi_ratio.to_string(),
+            kosdaq_ratio: kosdaq_ratio.to_string(),
+            recommendation: recommendation.to_string(),
         })
         .with_priority(priority);
 

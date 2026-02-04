@@ -89,7 +89,13 @@ pub async fn import_to_db(config: ImportDbConfig) -> Result<usize> {
     };
 
     let symbol = create_symbol(&config);
-    let symbol_id = symbol_repo.get_or_create(&symbol, exchange).await?;
+    let market_type_str = match config.market {
+        Market::KR => "stock",
+        Market::US => "stock",
+    };
+    let symbol_id = symbol_repo
+        .get_or_create(&symbol.base, &symbol.quote, market_type_str, exchange)
+        .await?;
 
     info!("Symbol ID: {} for {}", symbol_id, symbol);
 
@@ -229,7 +235,7 @@ async fn download_from_yahoo(config: &ImportDbConfig) -> Result<Vec<Kline>> {
         let close_time = calculate_close_time(open_time, config.interval);
 
         klines.push(Kline {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             timeframe,
             open_time,
             open,

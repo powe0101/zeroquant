@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 
 use trader_analytics::backtest::{BacktestConfig, BacktestEngine};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol, Timeframe};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Timeframe};
 use trader_exchange::simulated::{DataFeed, DataFeedConfig};
 use trader_strategy::Strategy;
 
@@ -26,7 +26,7 @@ struct SmaCrossoverStrategy {
     /// Strategy name
     name: String,
     /// Target symbol
-    symbol: Symbol,
+    symbol: String,
     /// Fast SMA period
     fast_period: usize,
     /// Slow SMA period
@@ -44,7 +44,7 @@ struct SmaCrossoverStrategy {
 }
 
 impl SmaCrossoverStrategy {
-    fn new(symbol: Symbol, fast_period: usize, slow_period: usize) -> Self {
+    fn new(symbol: String, fast_period: usize, slow_period: usize) -> Self {
         Self {
             name: "SMA Crossover".to_string(),
             symbol,
@@ -101,7 +101,7 @@ impl Strategy for SmaCrossoverStrategy {
     ) -> Result<Vec<Signal>, Box<dyn std::error::Error + Send + Sync>> {
         // Only process kline data for our symbol
         let kline = match &data.data {
-            MarketDataType::Kline(k) if k.symbol == self.symbol => k,
+            MarketDataType::Kline(k) if k.ticker == self.symbol => k,
             _ => return Ok(Vec::new()),
         };
 
@@ -193,10 +193,10 @@ async fn test_full_backtest_pipeline() {
     }
 
     // 1. Load data from CSV
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
     let mut feed = DataFeed::new(DataFeedConfig::default());
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::M1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::M1, csv_path)
         .expect("Failed to load CSV");
 
     println!("Loaded {} candles from CSV", count);
@@ -207,14 +207,14 @@ async fn test_full_backtest_pipeline() {
 
     // 2. Extract klines for backtest engine
     let mut klines = Vec::new();
-    while let Some(kline) = feed.next_kline(&symbol, Timeframe::M1) {
+    while let Some(kline) = feed.next_kline(ticker, Timeframe::M1) {
         klines.push(kline);
     }
     println!("Extracted {} klines for backtest", klines.len());
 
     // 3. Create strategy
     let mut strategy = SmaCrossoverStrategy::new(
-        symbol.clone(),
+        ticker.to_string(),
         10, // Fast SMA period
         30, // Slow SMA period
     );
@@ -276,22 +276,22 @@ async fn test_backtest_with_hourly_data() {
         return;
     }
 
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
     let mut feed = DataFeed::new(DataFeedConfig::default());
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::H1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::H1, csv_path)
         .expect("Failed to load CSV");
 
     println!("Loaded {} hourly candles", count);
 
     // Extract klines
     let mut klines = Vec::new();
-    while let Some(kline) = feed.next_kline(&symbol, Timeframe::H1) {
+    while let Some(kline) = feed.next_kline(ticker, Timeframe::H1) {
         klines.push(kline);
     }
 
     // Use shorter SMA periods for hourly data
-    let mut strategy = SmaCrossoverStrategy::new(symbol.clone(), 5, 12);
+    let mut strategy = SmaCrossoverStrategy::new(ticker.to_string(), 5, 12);
     strategy.initialize(json!({})).await.unwrap();
 
     let config = BacktestConfig::new(dec!(10_000_000))
@@ -332,17 +332,17 @@ async fn test_grid_trading_strategy() {
     }
 
     // 1. Load data from CSV
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
     let mut feed = DataFeed::new(DataFeedConfig::default());
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::M1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::M1, csv_path)
         .expect("Failed to load CSV");
 
     println!("Loaded {} candles from CSV", count);
 
     // Get initial price for grid center calculation
     let mut klines = Vec::new();
-    while let Some(kline) = feed.next_kline(&symbol, Timeframe::M1) {
+    while let Some(kline) = feed.next_kline(ticker, Timeframe::M1) {
         klines.push(kline);
     }
 
@@ -457,16 +457,16 @@ async fn test_grid_trading_hourly() {
         return;
     }
 
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
     let mut feed = DataFeed::new(DataFeedConfig::default());
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::H1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::H1, csv_path)
         .expect("Failed to load CSV");
 
     println!("Loaded {} hourly candles", count);
 
     let mut klines = Vec::new();
-    while let Some(kline) = feed.next_kline(&symbol, Timeframe::H1) {
+    while let Some(kline) = feed.next_kline(ticker, Timeframe::H1) {
         klines.push(kline);
     }
 
@@ -523,11 +523,11 @@ async fn test_datafeed_with_simulated_exchange() {
         .with_initial_balance("BTC", dec!(1));
 
     let exchange = SimulatedExchange::new(config);
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
 
     // Load historical data
     exchange
-        .load_from_csv(symbol.clone(), Timeframe::H1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::H1, csv_path)
         .await
         .expect("Failed to load CSV into exchange");
 
@@ -538,7 +538,7 @@ async fn test_datafeed_with_simulated_exchange() {
 
     // Step through some data
     for i in 0..10 {
-        if let Some(kline) = exchange.step(&symbol, Timeframe::H1).await {
+        if let Some(kline) = exchange.step(ticker, Timeframe::H1).await {
             println!(
                 "Step {}: close = {}, volume = {}",
                 i, kline.close, kline.volume
@@ -550,10 +550,10 @@ async fn test_datafeed_with_simulated_exchange() {
     }
 
     // Verify exchange can provide ticker
-    if let Ok(ticker) = exchange.get_ticker(&symbol).await {
+    if let Ok(ticker_info) = exchange.get_ticker(ticker).await {
         println!(
             "Current ticker: bid={}, ask={}, last={}",
-            ticker.bid, ticker.ask, ticker.last
+            ticker_info.bid, ticker_info.ask, ticker_info.last
         );
     }
 
@@ -576,16 +576,16 @@ async fn test_bollinger_bands_strategy() {
     }
 
     // Load data
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
     let mut feed = DataFeed::new(DataFeedConfig::default());
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::M1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::M1, csv_path)
         .expect("Failed to load CSV");
 
     println!("Loaded {} candles for Bollinger Bands test", count);
 
     let mut klines = Vec::new();
-    while let Some(kline) = feed.next_kline(&symbol, Timeframe::M1) {
+    while let Some(kline) = feed.next_kline(ticker, Timeframe::M1) {
         klines.push(kline);
     }
 
@@ -658,10 +658,10 @@ async fn test_volatility_breakout_strategy() {
     }
 
     // Load data
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
     let mut feed = DataFeed::new(DataFeedConfig::default());
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::H1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::H1, csv_path)
         .expect("Failed to load CSV");
 
     println!(
@@ -670,7 +670,7 @@ async fn test_volatility_breakout_strategy() {
     );
 
     let mut klines = Vec::new();
-    while let Some(kline) = feed.next_kline(&symbol, Timeframe::H1) {
+    while let Some(kline) = feed.next_kline(ticker, Timeframe::H1) {
         klines.push(kline);
     }
 
@@ -738,13 +738,13 @@ async fn test_strategy_comparison() {
         return;
     }
 
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
     let mut feed = DataFeed::new(DataFeedConfig::default());
-    feed.load_from_csv(symbol.clone(), Timeframe::M1, csv_path)
+    feed.load_from_csv(ticker.to_string(), Timeframe::M1, csv_path)
         .expect("Failed to load CSV");
 
     let mut klines = Vec::new();
-    while let Some(kline) = feed.next_kline(&symbol, Timeframe::M1) {
+    while let Some(kline) = feed.next_kline(ticker, Timeframe::M1) {
         klines.push(kline);
     }
 
@@ -834,7 +834,7 @@ async fn test_strategy_comparison() {
 
     // 3. SMA Crossover (for comparison)
     {
-        let mut strategy = SmaCrossoverStrategy::new(symbol.clone(), 10, 30);
+        let mut strategy = SmaCrossoverStrategy::new(ticker.to_string(), 10, 30);
         strategy.initialize(json!({})).await.unwrap();
 
         let mut engine = BacktestEngine::new(make_config());
@@ -880,4 +880,242 @@ async fn test_strategy_comparison() {
     println!("  - 복합: 그리드 + 볼린저 조합");
 
     println!("\n=== 전략 비교 완료 ===");
+}
+
+// ==================== 다중 타임프레임 백테스트 테스트 ====================
+
+/// 다중 타임프레임 백테스트 - 빈 secondary로 단일 TF처럼 동작하는지 검증
+#[tokio::test]
+async fn test_multi_timeframe_with_empty_secondary() {
+    use std::collections::HashMap;
+
+    // 1. 테스트 데이터 생성
+    let ticker = "BTC/USDT";
+    let klines = generate_sample_klines(ticker, Timeframe::D1, 100);
+    let config = BacktestConfig::new(dec!(10000000))
+        .with_commission_rate(dec!(0.001))
+        .with_slippage_rate(dec!(0.0005));
+
+    // 2. SMA 전략으로 단일 TF 백테스트
+    let mut strategy = SmaCrossoverStrategy::new(ticker.to_string(), 10, 30);
+    strategy.initialize(json!({})).await.unwrap();
+
+    let mut engine1 = BacktestEngine::new(config.clone());
+    let report_single = engine1.run(&mut strategy, &klines).await.unwrap();
+
+    // 3. 같은 전략으로 run_multi_timeframe (빈 secondary)
+    let mut strategy2 = SmaCrossoverStrategy::new(ticker.to_string(), 10, 30);
+    strategy2.initialize(json!({})).await.unwrap();
+
+    let mut engine2 = BacktestEngine::new(config.clone());
+    let empty_secondary: HashMap<Timeframe, Vec<trader_core::Kline>> = HashMap::new();
+    let report_multi = engine2
+        .run_multi_timeframe(&mut strategy2, &klines, &empty_secondary)
+        .await
+        .unwrap();
+
+    // 4. 결과 비교 - 동일해야 함
+    println!("\n=== 다중 TF 빈 secondary 테스트 ===");
+    println!(
+        "단일 TF run(): 수익률 {:.2}%, 거래 {}회",
+        report_single.metrics.total_return_pct, report_single.metrics.total_trades
+    );
+    println!(
+        "다중 TF (빈 secondary): 수익률 {:.2}%, 거래 {}회",
+        report_multi.metrics.total_return_pct, report_multi.metrics.total_trades
+    );
+
+    // 수익률과 거래 수가 동일해야 함
+    assert_eq!(
+        report_single.metrics.total_trades,
+        report_multi.metrics.total_trades,
+        "거래 수가 다릅니다"
+    );
+    assert_eq!(
+        report_single.metrics.total_return_pct,
+        report_multi.metrics.total_return_pct,
+        "수익률이 다릅니다"
+    );
+
+    println!("✓ 빈 secondary로 run_multi_timeframe 호출 시 run()과 동일 결과 확인");
+}
+
+/// 다중 타임프레임 백테스트 - secondary 데이터가 있는 경우
+#[tokio::test]
+async fn test_multi_timeframe_with_secondary_data() {
+    use std::collections::HashMap;
+
+    // 1. Primary (1시간봉) + Secondary (일봉) 데이터 생성
+    let ticker = "BTC/USDT";
+    let primary_klines = generate_sample_klines(ticker, Timeframe::H1, 240); // 10일치 시간봉
+    let secondary_d1 = generate_sample_klines(ticker, Timeframe::D1, 30); // 30일치 일봉
+
+    let mut secondary_klines: HashMap<Timeframe, Vec<trader_core::Kline>> = HashMap::new();
+    secondary_klines.insert(Timeframe::D1, secondary_d1);
+
+    let config = BacktestConfig::new(dec!(10000000))
+        .with_commission_rate(dec!(0.001))
+        .with_slippage_rate(dec!(0.0005));
+
+    // 2. SMA 전략으로 다중 TF 백테스트
+    let mut strategy = SmaCrossoverStrategy::new(ticker.to_string(), 5, 20);
+    strategy.initialize(json!({})).await.unwrap();
+
+    let mut engine = BacktestEngine::new(config);
+    let report = engine
+        .run_multi_timeframe(&mut strategy, &primary_klines, &secondary_klines)
+        .await
+        .unwrap();
+
+    // 3. 결과 검증
+    println!("\n=== 다중 TF secondary 데이터 테스트 ===");
+    println!("Primary: H1 {} 캔들", primary_klines.len());
+    println!("Secondary: D1 {} 캔들", secondary_klines.get(&Timeframe::D1).map(|v| v.len()).unwrap_or(0));
+    println!(
+        "결과: 수익률 {:.2}%, 거래 {}회, MDD {:.2}%",
+        report.metrics.total_return_pct,
+        report.metrics.total_trades,
+        report.metrics.max_drawdown_pct
+    );
+
+    // 백테스트가 정상 완료되어야 함
+    assert!(
+        report.data_points > 0,
+        "데이터 포인트가 0입니다"
+    );
+
+    println!("✓ secondary 데이터가 있는 run_multi_timeframe 정상 동작 확인");
+}
+
+/// 다중 타임프레임 백테스트 - 모든 전략이 다중 TF 실행 경로로 동작해도 결과 일관성 유지
+#[tokio::test]
+async fn test_all_strategies_via_multi_timeframe_path() {
+    use std::collections::HashMap;
+    use trader_strategy::strategies::{BollingerStrategy, VolatilityBreakoutStrategy};
+
+    let ticker = "BTC/USDT";
+    let klines = generate_sample_klines(ticker, Timeframe::D1, 60);
+    let empty_secondary: HashMap<Timeframe, Vec<trader_core::Kline>> = HashMap::new();
+
+    let config = BacktestConfig::new(dec!(10000000))
+        .with_commission_rate(dec!(0.001))
+        .with_slippage_rate(dec!(0.0005));
+
+    println!("\n=== 모든 전략 다중 TF 경로 테스트 ===");
+
+    // 1. Bollinger 전략
+    {
+        let mut strategy = BollingerStrategy::new();
+        strategy
+            .initialize(json!({
+                "ticker": ticker,
+                "period": 20,
+                "std_multiplier": 2.0
+            }))
+            .await
+            .unwrap();
+
+        let mut engine = BacktestEngine::new(config.clone());
+        let report = engine
+            .run_multi_timeframe(&mut strategy, &klines, &empty_secondary)
+            .await
+            .unwrap();
+
+        println!(
+            "Bollinger (via multi_tf): 수익률 {:.2}%, 거래 {}회",
+            report.metrics.total_return_pct, report.metrics.total_trades
+        );
+        assert!(report.data_points > 0);
+    }
+
+    // 2. Volatility Breakout 전략
+    {
+        let mut strategy = VolatilityBreakoutStrategy::new();
+        strategy
+            .initialize(json!({
+                "ticker": ticker,
+                "k_factor": 0.5,
+                "amount": "10000000"
+            }))
+            .await
+            .unwrap();
+
+        let mut engine = BacktestEngine::new(config.clone());
+        let report = engine
+            .run_multi_timeframe(&mut strategy, &klines, &empty_secondary)
+            .await
+            .unwrap();
+
+        println!(
+            "Volatility Breakout (via multi_tf): 수익률 {:.2}%, 거래 {}회",
+            report.metrics.total_return_pct, report.metrics.total_trades
+        );
+        assert!(report.data_points > 0);
+    }
+
+    // 3. SMA Crossover 전략
+    {
+        let mut strategy = SmaCrossoverStrategy::new(ticker.to_string(), 10, 30);
+        strategy.initialize(json!({})).await.unwrap();
+
+        let mut engine = BacktestEngine::new(config.clone());
+        let report = engine
+            .run_multi_timeframe(&mut strategy, &klines, &empty_secondary)
+            .await
+            .unwrap();
+
+        println!(
+            "SMA Crossover (via multi_tf): 수익률 {:.2}%, 거래 {}회",
+            report.metrics.total_return_pct, report.metrics.total_trades
+        );
+        assert!(report.data_points > 0);
+    }
+
+    println!("✓ 모든 전략이 run_multi_timeframe 경로로 정상 동작 확인");
+}
+
+/// 샘플 Kline 데이터 생성 헬퍼 함수
+fn generate_sample_klines(
+    ticker: &str,
+    timeframe: Timeframe,
+    count: usize,
+) -> Vec<trader_core::Kline> {
+    use chrono::{TimeZone, Utc};
+    use rust_decimal::prelude::FromPrimitive;
+
+    let base_price = 50000.0_f64;
+    let duration_secs = timeframe.as_secs() as i64;
+
+    (0..count)
+        .map(|i| {
+            let open_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+                + chrono::Duration::seconds(i as i64 * duration_secs);
+            let close_time = open_time + chrono::Duration::seconds(duration_secs);
+
+            // 랜덤한 가격 변동 시뮬레이션
+            let noise = ((i as f64 * 0.7).sin() + (i as f64 * 1.3).cos()) * 0.02;
+            let trend = i as f64 * 0.001;
+            let price_mult = 1.0 + noise + trend;
+
+            let open = base_price * price_mult;
+            let high = open * 1.02;
+            let low = open * 0.98;
+            let close = open * (1.0 + noise * 0.5);
+            let volume = 1000000.0 * (1.0 + noise.abs());
+
+            trader_core::Kline {
+                ticker: ticker.to_string(),
+                timeframe,
+                open_time,
+                close_time,
+                open: Decimal::from_f64(open).unwrap_or(dec!(50000)),
+                high: Decimal::from_f64(high).unwrap_or(dec!(51000)),
+                low: Decimal::from_f64(low).unwrap_or(dec!(49000)),
+                close: Decimal::from_f64(close).unwrap_or(dec!(50500)),
+                volume: Decimal::from_f64(volume).unwrap_or(dec!(1000000)),
+                quote_volume: None,
+                num_trades: None,
+            }
+        })
+        .collect()
 }

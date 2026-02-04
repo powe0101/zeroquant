@@ -39,11 +39,15 @@ pub enum FieldType {
     /// 단일 선택 (드롭다운)
     Select,
     /// 다중 선택 (체크박스)
+    #[serde(rename = "multi_select")]
     MultiSelect,
     /// 심볼 입력 (자동완성)
     Symbol,
     /// 심볼 배열
     Symbols,
+    /// 다중 타임프레임 (Primary + Secondary)
+    #[serde(rename = "multi_timeframe")]
+    MultiTimeframe,
 }
 
 /// 필드 스키마.

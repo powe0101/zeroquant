@@ -20,7 +20,7 @@
 //! # 권장 타임프레임
 //! - 일봉 (1D)
 
-use crate::strategies::common::deserialize_symbols;
+use crate::strategies::common::deserialize_tickers;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -34,14 +34,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 코스닥 피레인 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KosdaqFireRainConfig {
     /// 거래 대상 ETF 리스트
-    #[serde(default = "default_etf_list", deserialize_with = "deserialize_symbols")]
-    pub symbols: Vec<String>,
+    #[serde(default = "default_etf_list", deserialize_with = "deserialize_tickers")]
+    pub tickers: Vec<String>,
 
     /// 코스피 레버리지 티커
     #[serde(default = "default_kospi_leverage")]
@@ -156,7 +156,7 @@ fn default_min_global_score() -> Decimal {
 impl Default for KosdaqFireRainConfig {
     fn default() -> Self {
         Self {
-            symbols: default_etf_list(),
+            tickers: default_etf_list(),
             kospi_leverage: "122630".to_string(),
             kosdaq_leverage: "233740".to_string(),
             kospi_inverse: "252670".to_string(),
@@ -327,7 +327,7 @@ impl EtfData {
 /// 코스닥 피레인 전략.
 pub struct KosdaqFireRainStrategy {
     config: Option<KosdaqFireRainConfig>,
-    symbols: Vec<Symbol>,
+    tickers: Vec<String>,
 
     /// ETF별 데이터
     etf_data: HashMap<String, EtfData>,
@@ -353,7 +353,7 @@ impl KosdaqFireRainStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             etf_data: HashMap::new(),
             current_date: None,
             started: false,
@@ -382,9 +382,9 @@ impl KosdaqFireRainStrategy {
             Err(_) => return true,
         };
 
-        // RouteState 체크 (첫 번째 심볼 기준)
-        if let Some(symbol) = self.symbols.first() {
-            if let Some(route) = ctx.get_route_state(&symbol.base) {
+        // RouteState 체크 (첫 번째 티커 기준)
+        if let Some(ticker) = self.tickers.first() {
+            if let Some(route) = ctx.get_route_state(&ticker) {
                 match route {
                     RouteState::Wait | RouteState::Overheat => {
                         debug!("[KosdaqFireRain] RouteState가 {:?}이므로 진입 불가", route);
@@ -395,9 +395,9 @@ impl KosdaqFireRainStrategy {
             }
         }
 
-        // GlobalScore 체크 (첫 번째 심볼 기준)
-        if let Some(symbol) = self.symbols.first() {
-            if let Some(score) = ctx.get_global_score(&symbol.base) {
+        // GlobalScore 체크 (첫 번째 티커 기준)
+        if let Some(ticker) = self.tickers.first() {
+            if let Some(score) = ctx.get_global_score(&ticker) {
                 if score.overall_score < config.min_global_score {
                     debug!(
                         "[KosdaqFireRain] GlobalScore {} < {} 기준 미달",
@@ -627,8 +627,8 @@ impl KosdaqFireRainStrategy {
                 None => continue,
             };
 
-            // Symbol.base와 ticker 비교 (Symbol.to_string()은 "base/quote" 형식이므로 base만 비교)
-            let symbol = match self.symbols.iter().find(|s| s.base == ticker) {
+            // ticker 문자열에서 base 부분만 비교 ("BASE/QUOTE" 형식)
+            let ticker = match self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))) {
                 Some(s) => s.clone(),
                 None => continue,
             };
@@ -636,7 +636,7 @@ impl KosdaqFireRainStrategy {
             // 매도 신호 확인
             if let Some(reason) = self.should_sell(&data) {
                 signals.push(
-                    Signal::exit("kosdaq_fire_rain", symbol.clone(), Side::Sell)
+                    Signal::exit("kosdaq_fire_rain", ticker.clone(), Side::Sell)
                         .with_strength(1.0)
                         .with_prices(Some(data.current_price), None, None)
                         .with_metadata("exit_reason", json!(reason))
@@ -664,18 +664,18 @@ impl KosdaqFireRainStrategy {
                     continue;
                 }
 
-                signals.push(
-                    Signal::entry("kosdaq_fire_rain", symbol, Side::Buy)
-                        .with_strength(config.position_ratio)
-                        .with_prices(Some(data.current_price), None, None)
-                        .with_metadata("etf_type", json!(format!("{:?}", data.etf_type)))
-                        .with_metadata("action", json!("buy")),
-                );
                 info!(
                     ticker = %ticker,
                     etf_type = ?data.etf_type,
                     price = %data.current_price,
                     "매수 신호"
+                );
+                signals.push(
+                    Signal::entry("kosdaq_fire_rain", ticker, Side::Buy)
+                        .with_strength(config.position_ratio)
+                        .with_prices(Some(data.current_price), None, None)
+                        .with_metadata("etf_type", json!(format!("{:?}", data.etf_type)))
+                        .with_metadata("action", json!("buy")),
                 );
             }
         }
@@ -712,24 +712,24 @@ impl Strategy for KosdaqFireRainStrategy {
         let fr_config: KosdaqFireRainConfig = serde_json::from_value(config)?;
 
         info!(
-            symbols = ?fr_config.symbols,
+            tickers = ?fr_config.tickers,
             max_positions = fr_config.max_positions,
             position_ratio = %format!("{:.0}%", fr_config.position_ratio * 100.0),
             "코스닥 피레인 전략 초기화"
         );
 
         // ETF 데이터 초기화
-        for ticker in &fr_config.symbols {
-            let symbol = Symbol::stock(ticker, "KRW");
-            self.symbols.push(symbol);
+        for ticker_base in &fr_config.tickers {
+            let ticker = format!("{}/KRW", ticker_base);
+            self.tickers.push(ticker.clone());
 
-            let etf_type = if ticker == &fr_config.kospi_leverage {
+            let etf_type = if ticker_base == &fr_config.kospi_leverage {
                 EtfType::KospiLeverage
-            } else if ticker == &fr_config.kosdaq_leverage {
+            } else if ticker_base == &fr_config.kosdaq_leverage {
                 EtfType::KosdaqLeverage
-            } else if ticker == &fr_config.kospi_inverse {
+            } else if ticker_base == &fr_config.kospi_inverse {
                 EtfType::KospiInverse
-            } else if ticker == &fr_config.kosdaq_inverse {
+            } else if ticker_base == &fr_config.kosdaq_inverse {
                 EtfType::KosdaqInverse
             } else {
                 continue;
@@ -753,11 +753,11 @@ impl Strategy for KosdaqFireRainStrategy {
             return Ok(vec![]);
         }
 
-        // base 심볼만 추출 (229200/KRW -> 229200)
-        let symbol_str = data.symbol.base.clone();
+        // base 티커만 추출 (229200/KRW -> 229200)
+        let ticker_str = data.ticker.clone();
 
         // 등록된 ETF인지 확인
-        if !self.etf_data.contains_key(&symbol_str) {
+        if !self.etf_data.contains_key(&ticker_str) {
             return Ok(vec![]);
         }
 
@@ -773,7 +773,7 @@ impl Strategy for KosdaqFireRainStrategy {
         }
 
         // ETF 데이터 업데이트
-        if let Some(etf) = self.etf_data.get_mut(&symbol_str) {
+        if let Some(etf) = self.etf_data.get_mut(&ticker_str) {
             etf.update(close, volume);
         }
 
@@ -796,7 +796,7 @@ impl Strategy for KosdaqFireRainStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let ticker = order.symbol.to_string();
+        let ticker = order.ticker.to_string();
         let price = order.price.unwrap_or(Decimal::ZERO);
 
         if let Some(etf) = self.etf_data.get_mut(&ticker) {
@@ -842,7 +842,7 @@ impl Strategy for KosdaqFireRainStrategy {
         &mut self,
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let ticker = position.symbol.to_string();
+        let ticker = position.ticker.to_string();
 
         if let Some(etf) = self.etf_data.get_mut(&ticker) {
             etf.holdings = position.quantity;
@@ -916,7 +916,7 @@ mod tests {
         let mut strategy = KosdaqFireRainStrategy::new();
 
         let config = json!({
-            "symbols": ["122630", "233740", "252670", "251340"],
+            "tickers": ["122630", "233740", "252670", "251340"],
             "max_positions": 2
         });
 
@@ -952,7 +952,7 @@ register_strategy! {
     name: "코스닥 급등주",
     description: "코스닥 급등 종목 포착 전략입니다.",
     timeframe: "15m",
-    symbols: ["122630", "252670", "233740", "251340"],
+    tickers: ["122630", "252670", "233740", "251340"],
     category: Intraday,
     markets: [Stock],
     type: KosdaqFireRainStrategy

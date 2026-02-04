@@ -27,7 +27,8 @@ use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+use trader_core::{RoundMethod, TickSizeProvider};
 
 /// 미국 시장 세션 유형.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +49,8 @@ pub enum UsMarketSession {
 pub struct KisUsClient {
     oauth: Arc<KisOAuth>,
     client: Client,
+    /// 호가 단위 제공자 (옵션, 설정 시 주문 가격 자동 라운딩)
+    tick_size_provider: Option<Arc<dyn TickSizeProvider>>,
 }
 
 impl KisUsClient {
@@ -74,7 +77,24 @@ impl KisUsClient {
             .build()
             .map_err(|e| ExchangeError::NetworkError(format!("HTTP client 생성 실패: {}", e)))?;
 
-        Ok(Self { oauth, client })
+        Ok(Self {
+            oauth,
+            client,
+            tick_size_provider: None,
+        })
+    }
+
+    /// 호가 단위 제공자를 설정합니다.
+    ///
+    /// 설정 시 주문 가격이 자동으로 호가 단위로 라운딩됩니다.
+    /// - 매수 주문: Floor (내림) - 보수적으로 더 낮은 가격
+    /// - 매도 주문: Ceil (올림) - 보수적으로 더 높은 가격
+    ///
+    /// # Arguments
+    /// * `provider` - 호가 단위 제공자 (예: `UsEquityTickSize`)
+    pub fn with_tick_size_provider(mut self, provider: Arc<dyn TickSizeProvider>) -> Self {
+        self.tick_size_provider = Some(provider);
+        self
     }
 
     /// 내부 OAuth 참조 반환 (토큰 캐싱용).
@@ -302,6 +322,34 @@ impl KisUsClient {
         exchange_code: Option<&str>,
         is_buy: bool,
     ) -> Result<UsOrderResponse, ExchangeError> {
+        // 호가 단위 라운딩 (시장가 주문이 아닌 경우)
+        let rounded_price = if !price.is_zero() {
+            if let Some(ref provider) = self.tick_size_provider {
+                // 매수: Floor (내림) - 보수적으로 더 낮은 가격
+                // 매도: Ceil (올림) - 보수적으로 더 높은 가격
+                let method = if is_buy {
+                    RoundMethod::Floor
+                } else {
+                    RoundMethod::Ceil
+                };
+                let adjusted = provider.round_to_tick(price, method);
+                if adjusted != price {
+                    warn!(
+                        "주문 가격 호가 단위 조정: {} -> {} (종목: {}, 방향: {})",
+                        price,
+                        adjusted,
+                        symbol,
+                        if is_buy { "매수" } else { "매도" }
+                    );
+                }
+                adjusted
+            } else {
+                price
+            }
+        } else {
+            price
+        };
+
         let tr_id = if is_buy {
             self.get_tr_id(tr_id::US_BUY_REAL, tr_id::US_BUY_PAPER)
         } else {
@@ -318,13 +366,14 @@ impl KisUsClient {
         // 매수/매도에 따른 사이드 코드 결정 (API 호출용 예비)
         let _side_cd = if is_buy { "buy" } else { "sell" };
 
+        // 요청 본문 구성 (라운딩된 가격 사용)
         let body = serde_json::json!({
             "CANO": self.oauth.config().cano(),
             "ACNT_PRDT_CD": self.oauth.config().acnt_prdt_cd(),
             "OVRS_EXCG_CD": excd,
             "PDNO": symbol,
             "ORD_QTY": quantity.to_string(),
-            "OVRS_ORD_UNPR": price.to_string(),
+            "OVRS_ORD_UNPR": rounded_price.to_string(),
             "ORD_SVR_DVSN_CD": "0",
             "ORD_DVSN": order_type,
         });

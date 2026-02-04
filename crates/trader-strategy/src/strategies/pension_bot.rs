@@ -36,7 +36,7 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 자산 유형
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,7 +62,7 @@ impl Default for PensionAssetType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PensionAsset {
     /// 종목 코드
-    pub symbol: String,
+    pub ticker:  String,
     /// 자산 유형
     pub asset_type: PensionAssetType,
     /// 목표 비중 (%)
@@ -71,38 +71,38 @@ pub struct PensionAsset {
 
 impl PensionAsset {
     pub fn new(
-        symbol: impl Into<String>,
+        ticker: impl Into<String>,
         asset_type: PensionAssetType,
         target_rate: Decimal,
     ) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             asset_type,
             target_rate,
         }
     }
 
-    pub fn stock(symbol: impl Into<String>, target_rate: Decimal) -> Self {
-        Self::new(symbol, PensionAssetType::Stock, target_rate)
+    pub fn stock(ticker: impl Into<String>, target_rate: Decimal) -> Self {
+        Self::new(ticker, PensionAssetType::Stock, target_rate)
     }
 
-    pub fn safe(symbol: impl Into<String>, target_rate: Decimal) -> Self {
-        Self::new(symbol, PensionAssetType::Safe, target_rate)
+    pub fn safe(ticker: impl Into<String>, target_rate: Decimal) -> Self {
+        Self::new(ticker, PensionAssetType::Safe, target_rate)
     }
 
-    pub fn mat(symbol: impl Into<String>, target_rate: Decimal) -> Self {
-        Self::new(symbol, PensionAssetType::Mat, target_rate)
+    pub fn mat(ticker: impl Into<String>, target_rate: Decimal) -> Self {
+        Self::new(ticker, PensionAssetType::Mat, target_rate)
     }
 
-    pub fn cash(symbol: impl Into<String>) -> Self {
-        Self::new(symbol, PensionAssetType::Cash, dec!(0))
+    pub fn cash(ticker: impl Into<String>) -> Self {
+        Self::new(ticker, PensionAssetType::Cash, dec!(0))
     }
 }
 
 /// 자산별 모멘텀 결과
 #[derive(Debug, Clone)]
 struct AssetMomentum {
-    symbol: String,
+    ticker:  String,
     asset_type: PensionAssetType,
     base_target_rate: Decimal,
     momentum_score: Decimal,
@@ -113,9 +113,9 @@ struct AssetMomentum {
 }
 
 impl AssetMomentum {
-    fn new(symbol: String, asset_type: PensionAssetType, base_rate: Decimal) -> Self {
+    fn new(ticker:  String, asset_type: PensionAssetType, base_rate: Decimal) -> Self {
         Self {
-            symbol,
+            ticker,
             asset_type,
             base_target_rate: base_rate,
             momentum_score: dec!(0),
@@ -345,8 +345,8 @@ impl PensionBotStrategy {
     fn init_from_config(&mut self, config: &PensionBotConfig) {
         for asset in &config.portfolio {
             let momentum =
-                AssetMomentum::new(asset.symbol.clone(), asset.asset_type, asset.target_rate);
-            self.asset_data.insert(asset.symbol.clone(), momentum);
+                AssetMomentum::new(asset.ticker.clone(), asset.asset_type, asset.target_rate);
+            self.asset_data.insert(asset.ticker.clone(), momentum);
         }
     }
 
@@ -369,16 +369,16 @@ impl PensionBotStrategy {
 
         // 1. 45%는 단기자금(CASH)에 배분
         let to_short_term = remaining_rate * config.cash_to_short_term_rate;
-        let cash_symbol = self
+        let cash_ticker = self
             .asset_data
             .values()
             .find(|m| m.asset_type == PensionAssetType::Cash)
-            .map(|m| m.symbol.clone());
+            .map(|m| m.ticker.clone());
 
-        if let Some(symbol) = cash_symbol {
-            if let Some(momentum) = self.asset_data.get_mut(&symbol) {
+        if let Some(ticker) = cash_ticker {
+            if let Some(momentum) = self.asset_data.get_mut(&ticker) {
                 momentum.adjusted_rate += to_short_term;
-                debug!("Added {:.2}% to CASH asset {}", to_short_term, symbol);
+                debug!("Added {:.2}% to CASH asset {}", to_short_term, ticker);
             }
         }
 
@@ -390,12 +390,12 @@ impl PensionBotStrategy {
             .asset_data
             .values()
             .filter(|m| m.asset_type != PensionAssetType::Cash && m.momentum_score > dec!(0))
-            .map(|m| (m.symbol.clone(), m.momentum_score))
+            .map(|m| (m.ticker.clone(), m.momentum_score))
             .collect();
         sorted.sort_by(|a, b| b.1.cmp(&a.1));
 
         // 상위 12개에 차등 보너스 (3-3-3-3-2-2-2-2-1-1-1-1 = 24등분)
-        let bonus_symbols: Vec<String> = sorted
+        let bonus_tickers: Vec<String> = sorted
             .iter()
             .take(config.top_bonus_count)
             .map(|(s, _)| s.clone())
@@ -404,16 +404,16 @@ impl PensionBotStrategy {
         let rate_cell = to_bonus / dec!(24);
         let bonus_weights = [3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1];
 
-        for (idx, symbol) in bonus_symbols.iter().enumerate() {
+        for (idx, ticker) in bonus_tickers.iter().enumerate() {
             if idx >= bonus_weights.len() {
                 break;
             }
             let weight = Decimal::from(bonus_weights[idx]);
             let bonus = rate_cell * weight;
 
-            if let Some(momentum) = self.asset_data.get_mut(symbol) {
+            if let Some(momentum) = self.asset_data.get_mut(ticker) {
                 momentum.adjusted_rate += bonus;
-                debug!("Added {:.2}% bonus to {}", bonus, symbol);
+                debug!("Added {:.2}% bonus to {}", bonus, ticker);
             }
         }
     }
@@ -431,7 +431,7 @@ impl PensionBotStrategy {
             .filter(|m| m.adjusted_rate > dec!(0))
             .map(|m| {
                 let weight = m.adjusted_rate / total_rate;
-                TargetAllocation::new(m.symbol.clone(), weight)
+                TargetAllocation::new(m.ticker.clone(), weight)
             })
             .collect()
     }
@@ -444,7 +444,7 @@ impl PensionBotStrategy {
         }
     }
 
-    /// 특정 심볼에 대해 진입 가능 여부 확인
+    /// 특정 티커에 대해 진입 가능 여부 확인
     ///
     /// StrategyContext를 통해 RouteState와 GlobalScore를 체크합니다.
     /// - RouteState::Attack/Armed: 진입 허용
@@ -537,16 +537,16 @@ impl PensionBotStrategy {
         for order in result.orders {
             // BUY 시그널의 경우 can_enter() 체크
             if order.side == RebalanceOrderSide::Buy {
-                if !self.can_enter(&order.symbol) {
+                if !self.can_enter(&order.ticker) {
                     debug!(
                         "[PensionBot] Skipping BUY signal for {} - entry not allowed",
-                        order.symbol
+                        order.ticker
                     );
                     continue;
                 }
             }
 
-            let symbol = Symbol::stock(&order.symbol, "KRW");
+            let ticker = format!("{}/KRW", order.ticker);
 
             let side = match order.side {
                 RebalanceOrderSide::Buy => Side::Buy,
@@ -560,12 +560,12 @@ impl PensionBotStrategy {
             };
 
             let signal = if order.side == RebalanceOrderSide::Buy {
-                Signal::entry("pension_bot", symbol, side)
+                Signal::entry("pension_bot", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
             } else {
-                Signal::exit("pension_bot", symbol, side)
+                Signal::exit("pension_bot", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
@@ -618,7 +618,7 @@ impl Strategy for PensionBotStrategy {
         &mut self,
         data: &MarketData,
     ) -> Result<Vec<Signal>, Box<dyn std::error::Error + Send + Sync>> {
-        let symbol_str = data.symbol.base.clone();
+        let ticker_str = data.ticker.clone();
 
         // Kline 데이터에서 종가 추출
         let (close, timestamp) = match &data.data {
@@ -627,7 +627,7 @@ impl Strategy for PensionBotStrategy {
         };
 
         // 자산 데이터 업데이트
-        if let Some(momentum) = self.asset_data.get_mut(&symbol_str) {
+        if let Some(momentum) = self.asset_data.get_mut(&ticker_str) {
             momentum.candles.push(close);
             momentum.current_price = close;
 
@@ -680,7 +680,7 @@ impl Strategy for PensionBotStrategy {
             "asset_count": self.asset_data.len(),
             "assets": self.asset_data.values()
                 .map(|m| json!({
-                    "symbol": m.symbol,
+                    "ticker": m.ticker,
                     "asset_type": format!("{:?}", m.asset_type),
                     "momentum_score": m.momentum_score.to_string(),
                     "avg_momentum": m.avg_momentum.to_string(),
@@ -810,7 +810,7 @@ register_strategy! {
     name: "연금 자동화",
     description: "장기 연금 계좌 운용 전략입니다.",
     timeframe: "1d",
-    symbols: ["SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "TIP", "BIL"],
+    tickers: ["SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "TIP", "BIL"],
     category: Monthly,
     markets: [Stock],
     type: PensionBotStrategy

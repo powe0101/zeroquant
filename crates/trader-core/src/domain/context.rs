@@ -14,7 +14,6 @@ use super::analytics_provider::{
 };
 use super::market_data::Kline;
 use super::order::{OrderStatusType, Side};
-use crate::types::Symbol;
 use crate::Timeframe;
 
 // =============================================================================
@@ -142,8 +141,8 @@ impl Default for StrategyAccountInfo {
 /// 전략용 포지션 상세 정보.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrategyPositionInfo {
-    /// 심볼
-    pub symbol: Symbol,
+    /// 심볼 (ticker)
+    pub ticker: String,
     /// 방향 (매수/매도)
     pub side: Side,
     /// 보유 수량
@@ -166,10 +165,10 @@ pub struct StrategyPositionInfo {
 
 impl StrategyPositionInfo {
     /// 새 포지션 정보 생성.
-    pub fn new(symbol: Symbol, side: Side, quantity: Decimal, avg_entry_price: Decimal) -> Self {
+    pub fn new(ticker: String, side: Side, quantity: Decimal, avg_entry_price: Decimal) -> Self {
         let now = Utc::now();
         Self {
-            symbol,
+            ticker,
             side,
             quantity,
             avg_entry_price,
@@ -211,8 +210,8 @@ impl StrategyPositionInfo {
 pub struct PendingOrder {
     /// 주문 ID
     pub order_id: String,
-    /// 심볼
-    pub symbol: Symbol,
+    /// 심볼 (ticker)
+    pub ticker: String,
     /// 방향
     pub side: Side,
     /// 주문 가격
@@ -385,13 +384,13 @@ impl StrategyContext {
     pub fn get_pending_orders(&self, symbol: &str) -> Vec<&PendingOrder> {
         self.pending_orders
             .iter()
-            .filter(|o| o.symbol.base == symbol)
+            .filter(|o| o.ticker == symbol)
             .collect()
     }
 
     /// 미체결 주문 존재 여부 확인.
     pub fn has_pending_order(&self, symbol: &str) -> bool {
-        self.pending_orders.iter().any(|o| o.symbol.base == symbol)
+        self.pending_orders.iter().any(|o| o.ticker == symbol)
     }
 
     /// 총 포지션 가치 계산.
@@ -429,7 +428,7 @@ impl StrategyContext {
     pub fn update_positions(&mut self, positions: Vec<StrategyPositionInfo>) {
         self.positions.clear();
         for pos in positions {
-            self.positions.insert(pos.symbol.to_standard_string(), pos);
+            self.positions.insert(pos.ticker.clone(), pos);
         }
         self.last_exchange_sync = Utc::now();
     }
@@ -658,7 +657,6 @@ impl StrategyContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::MarketType;
     use rust_decimal_macros::dec;
 
     #[test]
@@ -670,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_position_info_update_price() {
-        let symbol = Symbol::new("AAPL", "USD", MarketType::Stock);
+        let symbol = "AAPL".to_string();
         let mut pos = StrategyPositionInfo::new(symbol, Side::Buy, dec!(10), dec!(150));
 
         // 가격 상승 → 수익
@@ -689,7 +687,7 @@ mod tests {
         let mut ctx = StrategyContext::new();
 
         // 포지션 추가
-        let symbol = Symbol::new("AAPL", "USD", MarketType::Stock);
+        let symbol = "AAPL".to_string();
         let pos = StrategyPositionInfo::new(symbol, Side::Buy, dec!(10), dec!(150));
         ctx.positions.insert("AAPL".to_string(), pos);
 
@@ -705,11 +703,11 @@ mod tests {
         let mut ctx = StrategyContext::new();
 
         // 포지션 2개 추가
-        let sym1 = Symbol::new("AAPL", "USD", MarketType::Stock);
+        let sym1 = "AAPL".to_string();
         let mut pos1 = StrategyPositionInfo::new(sym1, Side::Buy, dec!(10), dec!(150));
         pos1.update_price(dec!(160)); // 1600
 
-        let sym2 = Symbol::new("MSFT", "USD", MarketType::Stock);
+        let sym2 = "MSFT".to_string();
         let mut pos2 = StrategyPositionInfo::new(sym2, Side::Buy, dec!(5), dec!(300));
         pos2.update_price(dec!(310)); // 1550
 

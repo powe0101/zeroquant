@@ -31,6 +31,8 @@ pub struct BacktestResultRecord {
     pub error_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// 백테스트에 사용된 타임프레임 설정 (다중 TF 백테스트 시)
+    pub timeframes_used: Option<serde_json::Value>,
 }
 
 // ==================== 요청/응답 타입 ====================
@@ -62,6 +64,8 @@ pub struct BacktestResultInput {
     pub trades: serde_json::Value,
     /// 성공 여부
     pub success: bool,
+    /// 백테스트에 사용된 타임프레임 설정 (다중 TF 백테스트 시)
+    pub timeframes_used: Option<serde_json::Value>,
 }
 
 /// 저장된 결과 응답용 DTO.
@@ -81,6 +85,9 @@ pub struct BacktestResultDto {
     pub trades: serde_json::Value,
     pub success: bool,
     pub created_at: String,
+    /// 백테스트에 사용된 타임프레임 설정
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeframes_used: Option<serde_json::Value>,
 }
 
 impl From<BacktestResultRecord> for BacktestResultDto {
@@ -100,6 +107,7 @@ impl From<BacktestResultRecord> for BacktestResultDto {
             trades: record.trades,
             success: record.success,
             created_at: record.created_at.to_rfc3339(),
+            timeframes_used: record.timeframes_used,
         }
     }
 }
@@ -173,9 +181,9 @@ impl BacktestResultsRepository {
             INSERT INTO backtest_results (
                 strategy_id, strategy_type, symbol, start_date, end_date,
                 initial_capital, slippage_rate, metrics, config_summary,
-                equity_curve, trades, success
+                equity_curve, trades, success, timeframes_used
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id
             "#,
         )
@@ -191,6 +199,7 @@ impl BacktestResultsRepository {
         .bind(&input.equity_curve)
         .bind(&input.trades)
         .bind(input.success)
+        .bind(&input.timeframes_used)
         .fetch_one(pool)
         .await?;
 
@@ -209,7 +218,7 @@ impl BacktestResultsRepository {
             r#"
             SELECT id, strategy_id, strategy_type, symbol, start_date, end_date,
                    initial_capital, slippage_rate, metrics, config_summary,
-                   equity_curve, trades, success, error_message, created_at, deleted_at
+                   equity_curve, trades, success, error_message, created_at, deleted_at, timeframes_used
             FROM backtest_results
             WHERE id = $1 AND deleted_at IS NULL
             "#,
@@ -250,7 +259,7 @@ impl BacktestResultsRepository {
             r#"
             SELECT id, strategy_id, strategy_type, symbol, start_date, end_date,
                    initial_capital, slippage_rate, metrics, config_summary,
-                   equity_curve, trades, success, error_message, created_at, deleted_at
+                   equity_curve, trades, success, error_message, created_at, deleted_at, timeframes_used
             FROM backtest_results
             WHERE deleted_at IS NULL
               AND ($1::text IS NULL OR strategy_id = $1)
@@ -308,7 +317,7 @@ impl BacktestResultsRepository {
             r#"
             SELECT id, strategy_id, strategy_type, symbol, start_date, end_date,
                    initial_capital, slippage_rate, metrics, config_summary,
-                   equity_curve, trades, success, error_message, created_at, deleted_at
+                   equity_curve, trades, success, error_message, created_at, deleted_at, timeframes_used
             FROM backtest_results
             WHERE strategy_id = $1 AND deleted_at IS NULL
             ORDER BY created_at DESC
@@ -332,7 +341,7 @@ impl BacktestResultsRepository {
             r#"
             SELECT id, strategy_id, strategy_type, symbol, start_date, end_date,
                    initial_capital, slippage_rate, metrics, config_summary,
-                   equity_curve, trades, success, error_message, created_at, deleted_at
+                   equity_curve, trades, success, error_message, created_at, deleted_at, timeframes_used
             FROM backtest_results
             WHERE deleted_at IS NULL
             ORDER BY created_at DESC
@@ -412,6 +421,7 @@ mod tests {
             error_message: None,
             created_at: Utc::now(),
             deleted_at: None,
+            timeframes_used: None,
         };
 
         let dto: BacktestResultDto = record.into();

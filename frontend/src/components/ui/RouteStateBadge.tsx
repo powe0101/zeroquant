@@ -8,7 +8,7 @@
  * - WAIT: 파란색, 대기
  * - OVERHEAT: 보라색, 과열
  */
-import { Component, Show, createMemo } from 'solid-js'
+import { type Component, Show, createMemo } from 'solid-js'
 import {
   Zap,
   Target,

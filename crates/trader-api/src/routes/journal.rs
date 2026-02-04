@@ -11,6 +11,7 @@
 //! - `GET /api/v1/journal/pnl/symbol` - 종목별 손익 조회
 //! - `POST /api/v1/journal/sync` - 거래소 체결 내역 동기화
 //! - `PATCH /api/v1/journal/executions/{id}` - 체결 내역 메모/태그 수정
+//! - `GET /api/v1/journal/cost-basis/{symbol}` - FIFO 원가 계산
 
 use axum::{
     extract::{Path, Query, State},
@@ -23,6 +24,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use trader_core::Side;
+use ts_rs::TS;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -121,11 +123,12 @@ fn parse_date_flexible(s: &str, field_name: &str) -> Result<NaiveDate, DateParse
 }
 
 use crate::repository::{
+    build_tracker_from_executions, create_exchange_providers_from_credential, CostBasisSummary,
     CumulativePnL, CurrentPosition as RepoCurrentPosition, DailySummary, ExecutionCacheRepository,
     ExecutionFilter, JournalRepository, MonthlyPnL, NewExecution, PnLSummary, PositionRepository,
-    StrategyPerformance, SymbolPnL, TradeExecutionRecord, TradingInsights, WeeklyPnL, YearlyPnL,
+    StrategyPerformance, SymbolPnL, TradeExecution, TradeExecutionRecord, TradingInsights,
+    WeeklyPnL, YearlyPnL,
 };
-use crate::routes::portfolio::get_or_create_kis_client;
 use crate::routes::strategies::ApiError;
 use crate::state::AppState;
 use tracing::{error, info, warn};
@@ -133,7 +136,8 @@ use tracing::{error, info, warn};
 // ==================== 요청 타입 ====================
 
 /// 체결 내역 조회 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct ListExecutionsQuery {
     /// 종목 필터
     pub symbol: Option<String>,
@@ -152,7 +156,8 @@ pub struct ListExecutionsQuery {
 }
 
 /// 일별 손익 조회 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct DailyPnLQuery {
     /// 시작 날짜 (YYYY-MM-DD)
     pub start_date: Option<String>,
@@ -161,7 +166,8 @@ pub struct DailyPnLQuery {
 }
 
 /// 체결 내역 수정 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct UpdateExecutionRequest {
     /// 메모
     pub memo: Option<String>,
@@ -170,7 +176,8 @@ pub struct UpdateExecutionRequest {
 }
 
 /// 동기화 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct SyncRequest {
     /// 동기화할 거래소 (선택적, 기본값은 활성 계정의 거래소)
     pub exchange: Option<String>,
@@ -181,7 +188,8 @@ pub struct SyncRequest {
 // ==================== 응답 타입 ====================
 
 /// 포지션 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct JournalPositionsResponse {
     /// 포지션 목록
     pub positions: Vec<JournalPositionResponse>,
@@ -192,7 +200,8 @@ pub struct JournalPositionsResponse {
 }
 
 /// 포지션 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct JournalPositionResponse {
     pub id: String,
     pub exchange: String,
@@ -242,7 +251,8 @@ impl From<RepoCurrentPosition> for JournalPositionResponse {
 }
 
 /// 포지션 요약.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct PositionsSummary {
     pub total_positions: usize,
     pub total_cost_basis: String,
@@ -252,7 +262,8 @@ pub struct PositionsSummary {
 }
 
 /// 체결 내역 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct ExecutionsListResponse {
     pub executions: Vec<ExecutionResponse>,
     pub total: i64,
@@ -261,7 +272,8 @@ pub struct ExecutionsListResponse {
 }
 
 /// 체결 내역 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct ExecutionResponse {
     pub id: String,
     pub exchange: String,
@@ -311,7 +323,8 @@ impl From<TradeExecutionRecord> for ExecutionResponse {
 }
 
 /// PnL 요약 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct PnLSummaryResponse {
     pub total_realized_pnl: String,
     pub total_fees: String,
@@ -357,14 +370,16 @@ impl From<PnLSummary> for PnLSummaryResponse {
 }
 
 /// 일별 손익 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct DailyPnLResponse {
     pub daily: Vec<DailyPnLItem>,
     pub total_days: usize,
 }
 
 /// 일별 손익 항목.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct DailyPnLItem {
     pub date: String,
     pub total_trades: i64,
@@ -392,14 +407,16 @@ impl From<DailySummary> for DailyPnLItem {
 }
 
 /// 종목별 손익 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct SymbolPnLResponse {
     pub symbols: Vec<SymbolPnLItem>,
     pub total: usize,
 }
 
 /// 종목별 손익 항목.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct SymbolPnLItem {
     pub symbol: String,
     pub symbol_name: Option<String>,
@@ -433,7 +450,8 @@ impl From<SymbolPnL> for SymbolPnLItem {
 }
 
 /// 동기화 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "journal/")]
 pub struct SyncResponse {
     pub success: bool,
     pub inserted: i32,
@@ -888,6 +906,12 @@ pub struct TradingInsightsResponse {
     pub active_trading_days: i64,
     pub first_trade_at: Option<String>,
     pub last_trade_at: Option<String>,
+
+    /// 고급 통계 (연속 승/패, Max Drawdown)
+    pub max_consecutive_wins: Option<i64>,
+    pub max_consecutive_losses: Option<i64>,
+    pub max_drawdown: Option<String>,
+    pub max_drawdown_pct: Option<String>,
 }
 
 impl From<TradingInsights> for TradingInsightsResponse {
@@ -911,7 +935,23 @@ impl From<TradingInsights> for TradingInsightsResponse {
             active_trading_days: t.active_trading_days.unwrap_or(0),
             first_trade_at: t.first_trade_at.map(|dt| dt.to_rfc3339()),
             last_trade_at: t.last_trade_at.map(|dt| dt.to_rfc3339()),
+            // 고급 통계는 별도 조회 필요 (From에서는 None)
+            max_consecutive_wins: None,
+            max_consecutive_losses: None,
+            max_drawdown: None,
+            max_drawdown_pct: None,
         }
+    }
+}
+
+impl TradingInsightsResponse {
+    /// 고급 통계를 추가한 새 인스턴스 반환.
+    pub fn with_advanced_stats(mut self, stats: &crate::repository::AdvancedTradingStats) -> Self {
+        self.max_consecutive_wins = Some(stats.max_consecutive_wins);
+        self.max_consecutive_losses = Some(stats.max_consecutive_losses);
+        self.max_drawdown = Some(stats.max_drawdown.to_string());
+        self.max_drawdown_pct = Some(format!("{:.2}", stats.max_drawdown_pct));
+        self
     }
 }
 
@@ -1097,6 +1137,8 @@ pub async fn get_cumulative_pnl(
 /// 투자 인사이트 조회.
 ///
 /// GET /api/v1/journal/insights
+///
+/// 기본 인사이트와 함께 고급 통계(연속 승/패, Max Drawdown)를 반환합니다.
 pub async fn get_trading_insights(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<TradingInsightsResponse>, (StatusCode, Json<ApiError>)> {
@@ -1116,7 +1158,23 @@ pub async fn get_trading_insights(
         })?;
 
     match insights {
-        Some(i) => Ok(Json(i.into())),
+        Some(i) => {
+            // 기본 인사이트를 응답으로 변환
+            let mut response: TradingInsightsResponse = i.into();
+
+            // 고급 통계 조회 (별도 계산)
+            match JournalRepository::get_advanced_stats(pool, credential_id).await {
+                Ok(stats) => {
+                    response = response.with_advanced_stats(&stats);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to get advanced stats: {}", e);
+                    // 고급 통계 실패해도 기본 응답은 반환
+                }
+            }
+
+            Ok(Json(response))
+        }
         None => Ok(Json(TradingInsightsResponse {
             total_trades: 0,
             buy_trades: 0,
@@ -1136,6 +1194,10 @@ pub async fn get_trading_insights(
             active_trading_days: 0,
             first_trade_at: None,
             last_trade_at: None,
+            max_consecutive_wins: None,
+            max_consecutive_losses: None,
+            max_drawdown: None,
+            max_drawdown_pct: None,
         })),
     }
 }
@@ -1241,11 +1303,32 @@ pub async fn sync_executions(
 
     info!("체결 내역 동기화 시작: credential_id={}", credential_id);
 
-    // KIS 클라이언트 획득
-    let (kr_client, _us_client) = get_or_create_kis_client(&state, credential_id)
+    // DB 연결 확인
+    let pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", "DB pool이 없습니다")),
+            )
+        })?;
+
+    let encryptor = state
+        .encryptor
+        .as_ref()
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("ENCRYPTOR_ERROR", "Encryptor가 없습니다")),
+            )
+        })?;
+
+    // ExchangeProvider 생성
+    let providers = create_exchange_providers_from_credential(pool, encryptor, credential_id, None)
         .await
         .map_err(|e| {
-            error!("KIS 클라이언트 생성 실패: {}", e);
+            error!("거래소 Provider 생성 실패: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError::new("CLIENT_ERROR", &e)),
@@ -1270,50 +1353,56 @@ pub async fn sync_executions(
     };
     let end_date = default_end;
 
-    // 체결 내역 조회 (매수+매도 전체)
-    let history = kr_client
-        .get_order_history(&start_date, &end_date, "00", "", "")
+    // 체결 내역 조회 (ExchangeProvider 사용)
+    let request = trader_core::ExecutionHistoryRequest::new(&start_date, &end_date).with_side("00");
+
+    let history_response = providers
+        .kr
+        .fetch_execution_history(&request)
         .await
         .map_err(|e| {
-            error!("체결 내역 조회 실패: {}", e);
+            error!("체결 내역 조회 실패: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError::new(
                     "HISTORY_FETCH_ERROR",
-                    &format!("체결 내역 조회 실패: {}", e),
+                    &format!("체결 내역 조회 실패: {:?}", e),
                 )),
             )
         })?;
 
-    // ExecutionHistory로 변환
-    let execution_history = history.to_execution_history();
-
-    // NewExecution으로 변환 (execution_cache용)
-    let executions: Vec<NewExecution> = execution_history
-        .records
+    // Trade를 NewExecution으로 변환 (execution_cache용)
+    let executions: Vec<NewExecution> = history_response
+        .trades
         .iter()
-        .filter(|r| r.filled_qty > Decimal::ZERO) // 체결된 것만
-        .map(|r| {
-            let side_str = format!("{:?}", r.side).to_lowercase();
+        .filter(|t| t.quantity > Decimal::ZERO) // 체결된 것만
+        .map(|t| {
+            let side_str = format!("{:?}", t.side).to_lowercase();
             let side = Side::from_str_flexible(&side_str).unwrap_or(Side::Buy);
-            let amount = r.filled_qty * r.filled_price;
-            let trade_id = format!("{}_{}", r.order_id, r.ordered_at.timestamp());
+            let amount = t.quantity * t.price;
+            let trade_id = format!("{}_{}", t.exchange_trade_id, t.executed_at.timestamp());
+            let asset_name = t
+                .metadata
+                .get("stock_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&t.ticker)
+                .to_string();
 
             NewExecution {
                 credential_id,
                 exchange: "kis".to_string(),
-                executed_at: r.ordered_at,
-                symbol: r.symbol.to_string(),
-                normalized_symbol: Some(r.asset_name.clone()),
+                executed_at: t.executed_at,
+                symbol: t.ticker.clone(),
+                normalized_symbol: Some(asset_name),
                 side,
-                quantity: r.filled_qty,
-                price: r.filled_price,
+                quantity: t.quantity,
+                price: t.price,
                 amount,
-                fee: None, // KIS API에서 수수료 정보가 별도로 필요
-                fee_currency: Some("KRW".to_string()),
-                order_id: r.order_id.clone(),
+                fee: Some(t.fee),
+                fee_currency: Some(t.fee_currency.clone()),
+                order_id: t.exchange_trade_id.clone(),
                 trade_id: Some(trade_id),
-                order_type: Some(r.order_type.clone()),
+                order_type: Some("LIMIT".to_string()), // KIS API는 주문 유형을 제공하지 않음
                 raw_data: None,
             }
         })
@@ -1429,6 +1518,202 @@ async fn get_active_credential_id(
     }
 }
 
+// ==================== FIFO 원가 계산 ====================
+
+/// FIFO 원가 계산 쿼리.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CostBasisQuery {
+    /// 시장 (기본: KR)
+    #[serde(default = "default_market_kr")]
+    pub market: String,
+    /// 현재가 (미실현 손익 계산용, 선택)
+    #[serde(default)]
+    pub current_price: Option<Decimal>,
+}
+
+fn default_market_kr() -> String {
+    "KR".to_string()
+}
+
+/// FIFO 원가 계산 응답.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CostBasisResponse {
+    /// 심볼
+    pub symbol: String,
+    /// 총 보유 수량
+    pub total_quantity: Decimal,
+    /// 가중평균 매입가 (수수료 포함)
+    pub average_cost: Decimal,
+    /// 가중평균 매입가 (수수료 제외)
+    pub average_price: Decimal,
+    /// 총 비용 기준
+    pub total_cost_basis: Decimal,
+    /// 시장 가치 (현재가 기준, 선택)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_value: Option<Decimal>,
+    /// 미실현 손익
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unrealized_pnl: Option<Decimal>,
+    /// 미실현 손익률 (%)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unrealized_pnl_pct: Option<Decimal>,
+    /// 누적 실현 손익
+    pub total_realized_pnl: Decimal,
+    /// 총 매도 건수
+    pub total_sales: u32,
+    /// 총 수수료
+    pub total_fees: Decimal,
+    /// 로트 개수
+    pub lot_count: usize,
+}
+
+impl From<CostBasisSummary> for CostBasisResponse {
+    fn from(s: CostBasisSummary) -> Self {
+        Self {
+            symbol: s.symbol,
+            total_quantity: s.total_quantity,
+            average_cost: s.average_cost,
+            average_price: s.average_price,
+            total_cost_basis: s.total_cost_basis,
+            market_value: s.market_value,
+            unrealized_pnl: s.unrealized_pnl,
+            unrealized_pnl_pct: s.unrealized_pnl_pct,
+            total_realized_pnl: s.total_realized_pnl,
+            total_sales: s.total_sales,
+            total_fees: s.total_fees,
+            lot_count: s.lot_count,
+        }
+    }
+}
+
+/// GET /api/v1/journal/cost-basis/{symbol} - FIFO 원가 계산
+///
+/// 특정 종목의 체결 내역을 기반으로 FIFO 원가와 실현/미실현 손익을 계산합니다.
+async fn get_cost_basis(
+    State(state): State<Arc<AppState>>,
+    Path(symbol): Path<String>,
+    Query(query): Query<CostBasisQuery>,
+) -> Result<Json<CostBasisResponse>, (StatusCode, String)> {
+    tracing::debug!("FIFO 원가 계산 요청: {} ({})", symbol, query.market);
+
+    let pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Database not available".to_string()))?;
+
+    // 활성 credential 조회
+    let credential_id = crate::repository::get_active_credential_id(pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("credential 조회 실패: {}", e)))?;
+
+    // 종목 체결 내역 조회 (시간순 정렬은 build_tracker_from_executions에서 수행)
+    let filter = ExecutionFilter {
+        symbol: Some(symbol.clone()),
+        strategy_id: None,
+        start_date: None,
+        end_date: None,
+        side: None,
+        limit: Some(10000), // 충분한 개수
+        offset: None,
+    };
+
+    let executions = JournalRepository::list_executions(pool, credential_id, filter)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("체결 내역 조회 실패: {}", e)))?;
+
+    if executions.is_empty() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("종목 '{}' 체결 내역이 없습니다", symbol),
+        ));
+    }
+
+    // TradeExecutionRecord → TradeExecution 변환
+    let trade_executions: Vec<TradeExecution> = executions
+        .into_iter()
+        .map(|e| TradeExecution {
+            id: e.id,
+            symbol: e.symbol,
+            side: e.side,
+            quantity: e.quantity,
+            price: e.price,
+            fee: e.fee.unwrap_or(Decimal::ZERO),
+            executed_at: e.executed_at,
+        })
+        .collect();
+
+    // FIFO 추적기 빌드
+    let tracker = build_tracker_from_executions(&symbol, trade_executions);
+
+    // 요약 생성 (현재가가 있으면 미실현 손익도 계산)
+    let summary = tracker.summary(query.current_price);
+
+    Ok(Json(summary.into()))
+}
+
+// ==================== 손익 재계산 ====================
+
+/// 손익 재계산 응답.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RecalculateResponse {
+    pub symbols_processed: i32,
+    pub executions_updated: i32,
+    pub total_realized_pnl: Decimal,
+    pub errors: Vec<String>,
+}
+
+/// 모든 체결 내역의 손익 재계산.
+///
+/// CostBasisTracker를 사용하여 FIFO 기반으로 각 체결의
+/// realized_pnl과 position_effect를 자동으로 계산합니다.
+///
+/// # 계산 항목
+///
+/// - **realized_pnl**: 매도 시 FIFO 기반 실현 손익
+/// - **position_effect**: open(신규), add(추가매수), reduce(부분매도), close(전량매도)
+#[utoipa::path(
+    post,
+    path = "/api/v1/journal/recalculate",
+    responses(
+        (status = 200, description = "재계산 완료", body = RecalculateResponse),
+        (status = 500, description = "서버 오류")
+    ),
+    tag = "journal"
+)]
+async fn recalculate_pnl(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<RecalculateResponse>, (StatusCode, Json<ApiError>)> {
+    let pool = get_db_pool(&state)?;
+    let credential_id = get_active_credential_id(&state).await?;
+
+    info!(credential_id = %credential_id, "손익 재계산 시작");
+
+    let result = JournalRepository::recalculate_all_pnl(pool, credential_id)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "손익 재계산 실패");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("RECALCULATE_ERROR", format!("재계산 실패: {}", e))),
+            )
+        })?;
+
+    info!(
+        symbols = result.symbols_processed,
+        executions = result.executions_updated,
+        total_pnl = %result.total_realized_pnl,
+        errors = result.errors.len(),
+        "손익 재계산 완료"
+    );
+
+    Ok(Json(RecalculateResponse {
+        symbols_processed: result.symbols_processed,
+        executions_updated: result.executions_updated,
+        total_realized_pnl: result.total_realized_pnl,
+        errors: result.errors,
+    }))
+}
+
 // ==================== 라우터 ====================
 
 /// 매매일지 라우터 생성.
@@ -1439,6 +1724,7 @@ pub fn journal_router() -> Router<Arc<AppState>> {
         .route("/executions", get(list_executions))
         .route("/executions/{id}", patch(update_execution))
         .route("/sync", post(sync_executions))
+        .route("/recalculate", post(recalculate_pnl))
         // 손익 API
         .route("/pnl", get(get_pnl_summary))
         .route("/pnl/daily", get(get_daily_pnl))
@@ -1450,6 +1736,8 @@ pub fn journal_router() -> Router<Arc<AppState>> {
         // 인사이트 API
         .route("/insights", get(get_trading_insights))
         .route("/strategies", get(get_strategy_performance))
+        // 원가 계산 API
+        .route("/cost-basis/{symbol}", get(get_cost_basis))
 }
 
 // ==================== 테스트 ====================

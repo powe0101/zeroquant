@@ -2,7 +2,7 @@
 
 use rust_decimal_macros::dec;
 use std::path::Path;
-use trader_core::{Symbol, Timeframe};
+use trader_core::Timeframe;
 use trader_exchange::simulated::{DataFeed, DataFeedConfig};
 
 /// Test loading downloaded CSV data into DataFeed.
@@ -19,11 +19,11 @@ fn test_load_downloaded_csv() {
 
     let config = DataFeedConfig::default();
     let mut feed = DataFeed::new(config);
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
 
     // Load CSV
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::H1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::H1, csv_path)
         .expect("Failed to load CSV");
 
     // Verify data was loaded
@@ -31,7 +31,7 @@ fn test_load_downloaded_csv() {
     println!("Loaded {} candles from CSV", count);
 
     // Verify data count
-    assert_eq!(feed.data_count(&symbol, Timeframe::H1), count);
+    assert_eq!(feed.data_count(ticker, Timeframe::H1), count);
 
     // Verify time range
     let (start, end) = feed.time_range().expect("Should have time range");
@@ -40,7 +40,7 @@ fn test_load_downloaded_csv() {
 
     // Test playback
     let kline = feed
-        .next_kline(&symbol, Timeframe::H1)
+        .next_kline(ticker, Timeframe::H1)
         .expect("Should get first kline");
 
     println!(
@@ -54,10 +54,10 @@ fn test_load_downloaded_csv() {
 
     // Test getting historical klines
     for _ in 0..10 {
-        feed.next_kline(&symbol, Timeframe::H1);
+        feed.next_kline(ticker, Timeframe::H1);
     }
 
-    let historical = feed.get_historical_klines(&symbol, Timeframe::H1, 5);
+    let historical = feed.get_historical_klines(ticker, Timeframe::H1, 5);
     assert_eq!(historical.len(), 5, "Should get 5 historical klines");
 
     // Historical should be in chronological order
@@ -83,15 +83,15 @@ fn test_playback_exhaustion() {
         ..Default::default()
     };
     let mut feed = DataFeed::new(config);
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
 
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::H1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::H1, csv_path)
         .expect("Failed to load CSV");
 
     // Play through all data
     let mut played = 0;
-    while feed.next_kline(&symbol, Timeframe::H1).is_some() {
+    while feed.next_kline(ticker, Timeframe::H1).is_some() {
         played += 1;
     }
 
@@ -111,11 +111,11 @@ fn test_load_large_dataset() {
 
     let config = DataFeedConfig::default();
     let mut feed = DataFeed::new(config);
-    let symbol = Symbol::crypto("BTC", "USDT");
+    let ticker = "BTC/USDT";
 
     let start = std::time::Instant::now();
     let count = feed
-        .load_from_csv(symbol.clone(), Timeframe::M1, csv_path)
+        .load_from_csv(ticker.to_string(), Timeframe::M1, csv_path)
         .expect("Failed to load CSV");
     let elapsed = start.elapsed();
 
@@ -131,7 +131,7 @@ fn test_load_large_dataset() {
     // Test playback performance
     let start = std::time::Instant::now();
     let mut total = 0;
-    while feed.next_kline(&symbol, Timeframe::M1).is_some() {
+    while feed.next_kline(ticker, Timeframe::M1).is_some() {
         total += 1;
     }
     let elapsed = start.elapsed();

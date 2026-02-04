@@ -95,6 +95,8 @@ pub enum ServerMessage {
     Trade(TradeData),
     /// 호가창 데이터
     OrderBook(OrderBookData),
+    /// 캔들스틱(Kline) 데이터
+    Kline(KlineData),
     /// 주문 업데이트
     OrderUpdate(OrderUpdateData),
     /// 포지션 업데이트
@@ -146,6 +148,32 @@ pub struct TickerData {
     pub low_24h: Decimal,
     /// 타임스탬프
     pub timestamp: i64,
+}
+
+
+/// 캔들스틱(Kline) 데이터.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KlineData {
+    /// 심볼
+    pub symbol: String,
+    /// 타임프레임 (예: "1m", "5m", "1h", "1d")
+    pub timeframe: String,
+    /// 시가
+    pub open: Decimal,
+    /// 고가
+    pub high: Decimal,
+    /// 저가
+    pub low: Decimal,
+    /// 종가
+    pub close: Decimal,
+    /// 거래량
+    pub volume: Decimal,
+    /// 캔들 시작 타임스탬프 (밀리초)
+    pub open_time: i64,
+    /// 캔들 종료 타임스탬프 (밀리초)
+    pub close_time: i64,
+    /// 캔들 완료 여부
+    pub is_closed: bool,
 }
 
 /// 체결 데이터.

@@ -164,7 +164,13 @@ pub async fn run_backtest(config: BacktestCliConfig) -> Result<BacktestReport> {
     let symbol = create_symbol(&config);
 
     // 심볼 ID 조회 (get_or_create 사용)
-    let symbol_id = symbol_repo.get_or_create(&symbol, exchange).await?;
+    let market_type_str = match config.market {
+        Market::KR => "stock",
+        Market::US => "stock",
+    };
+    let symbol_id = symbol_repo
+        .get_or_create(&symbol.base, &symbol.quote, market_type_str, exchange)
+        .await?;
     info!("Symbol ID: {}", symbol_id);
 
     // 4. 과거 데이터 로드

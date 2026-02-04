@@ -1,2088 +1,559 @@
-최종 업데이트: 2026-02-03
 
 # ZeroQuant TODO - 통합 로드맵
 
-> **마지막 업데이트**: 2026-02-02
-> **현재 버전**: v0.5.7
-> **참조 문서**: `python_strategy_modules.md`, `improvement_todo.md`
-
----
-
-## 📋 목차
-
-1. [⚙️ Phase 0 - 기반 작업 (Foundation)](#️-phase-0---기반-작업-foundation)
-2. [🔴 Phase 1 - 핵심 기능 (Core Features)](#-phase-1---핵심-기능-core-features)
-3. [🟡 Phase 2 - 프론트엔드 UI](#-phase-2---프론트엔드-ui)
-4. [🟢 Phase 3 - 품질/성능 개선](#-phase-3---품질성능-개선)
-5. [🟣 Phase 4 - 선택적/낮은 우선순위](#-phase-4---선택적낮은-우선순위)
-6. [✅ 완료 현황](#-완료-현황)
-
----
-
-## 📊 의존성 다이어그램
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                    Phase 0: Foundation (3주)                          │
-│                                                                       │
-│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐       │
-│  │ 전략 레지스트리  │  │ 공통 로직 추출  │  │ StrategyContext  │       │
-│  │ (자동등록)      │  │ (26개 전략)    │  │ (거래소 컨텍스트) │       │
-│  └───────┬────────┘  └───────┬────────┘  └────────┬─────────┘       │
-│          │                   │                    │                  │
-│          │                   │           ┌───────┴───────┐          │
-│          ▼                   │           ▼               ▼          │
-│  ┌────────────────────┐      │    ┌────────────┐  ┌────────────┐    │
-│  │ SDUI 자동 생성 ⭐   │      │    │TickSize   │  │ 포지션 공유 │    │
-│  │ ┌────────────────┐ │      │    │Provider   │  │ 충돌 방지  │    │
-│  │ │FragmentRegistry│ │      │    └────────────┘  └────────────┘    │
-│  │ │SchemaComposer  │ │      │                                       │
-│  │ │#[derive(Config)]│      │                                       │
-│  │ └────────────────┘ │      │                                       │
-│  └────────────────────┘      │                                       │
-│          │                   │                                       │
-│  ┌───────┴───────────────────┴─────────────────────────────────┐    │
-│  │            Journal-Backtest 공통 모듈 ⭐ 신규                 │    │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐ │    │
-│  │  │ calculations │  │ statistics   │  │ UnifiedTrade trait │ │    │
-│  │  │ (P&L 계산)   │  │ (승률,PF 등) │  │ (타입 통합)        │ │    │
-│  │  └──────────────┘  └──────────────┘  └────────────────────┘ │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-│                                                                       │
-└──────────┬───────────────────┬───────────────────────────────────────┘
-           │                   │
-           ▼                   ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                    Phase 1: Core Features (2.5주)                     │
-│                                                                       │
-│  ┌─────────────────────┐                                             │
-│  │ StructuralFeatures  │ ← 공통 로직에서 피처 계산 재사용            │
-│  └──────────┬──────────┘                                             │
-│             ▼                                                         │
-│  ┌─────────────────────┐                                             │
-│  │     RouteState      │ ← StructuralFeatures 기반 상태 판정         │
-│  └──────────┬──────────┘                                             │
-│             ▼                                                         │
-│  ┌─────────────────────┐     ┌─────────────────────────┐             │
-│  │    Global Score     │     │  SignalMarker ⭐ 신규   │             │
-│  │ (RouteState+TickSize│     │  (기술 신호 저장)       │             │
-│  └──────────┬──────────┘     │  - indicators 값 기록   │             │
-│             │                │  - 백테스트/실거래 공용 │             │
-│             ▼                └───────────┬─────────────┘             │
-│  ┌─────────────────────┐                 │                           │
-│  │    전략 연계        │ ←───────────────┘                           │
-│  │ (스크리닝 + 포지션) │   ↑ 공통 통계 모듈 재사용                   │
-│  └─────────────────────┘                                             │
-└──────────────────────────────────────────────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                    Phase 2: Frontend UI (3.5주)                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐              │
-│  │ Journal UI  │  │ Screening UI│  │ Global Ranking  │              │
-│  │             │  │             │  │                 │              │
-│  │ 공통 통계   │  │             │  │                 │              │
-│  │ 모듈 재사용 │  │             │  │                 │              │
-│  └──────┬──────┘  └─────────────┘  └─────────────────┘              │
-│         │                                                            │
-│         ▼                                                            │
-│  ┌────────────────────────────────────────────┐                     │
-│  │   캔들 차트 신호 시각화 ⭐ 신규             │                     │
-│  │  ┌────────────────┐  ┌────────────────┐   │                     │
-│  │  │SignalOverlay   │  │IndicatorFilter │   │                     │
-│  │  │(진입/청산 표시)│  │(RSI,MACD필터) │   │                     │
-│  │  └────────────────┘  └────────────────┘   │                     │
-│  └────────────────────────────────────────────┘                     │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-### 🔑 StrategyContext의 핵심 역할
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         데이터 소스                                   │
-│  ┌────────────────┐              ┌────────────────────────────────┐  │
-│  │  거래소 API    │              │      분석 엔진                  │  │
-│  │  (Binance,KIS) │              │  (GlobalScorer, RouteState)    │  │
-│  └───────┬────────┘              └───────────────┬────────────────┘  │
-│          │                                       │                   │
-│          ▼                                       ▼                   │
-│  ┌────────────────┐              ┌────────────────────────────────┐  │
-│  │ExchangeProvider│              │     AnalyticsProvider          │  │
-│  │ - 계좌 정보    │              │ - Global Score                 │  │
-│  │ - 포지션       │              │ - RouteState                   │  │
-│  │ - 미체결 주문  │              │ - Screening 결과               │  │
-│  └───────┬────────┘              │ - StructuralFeatures           │  │
-│          │                       └───────────────┬────────────────┘  │
-│          │                                       │                   │
-│          └───────────────┬───────────────────────┘                   │
-│                          ▼                                           │
-└──────────────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                      StrategyContext                                  │
-│        (전략 간 공유되는 통합 컨텍스트 - Arc<RwLock<>>)               │
-├──────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│  ┌─────────────────────────┐      ┌─────────────────────────────┐   │
-│  │  거래소 정보 (1~5초)     │      │  분석 결과 (1~10분)          │   │
-│  │  - AccountInfo          │      │  - global_scores            │   │
-│  │  - positions            │      │  - route_states             │   │
-│  │  - pending_orders       │      │  - screening_results        │   │
-│  │  - exchange_constraints │      │  - structural_features      │   │
-│  └────────────┬────────────┘      └──────────────┬──────────────┘   │
-│               │                                   │                  │
-│               └─────────────┬─────────────────────┘                  │
-│                             ▼                                        │
-│              ┌──────────────────────────────┐                        │
-│              │       충돌 방지 + 의사결정    │                        │
-│              │  - 중복 주문 차단             │                        │
-│              │  - 잔고/포지션 한도 체크      │                        │
-│              │  - Global Score 기반 종목 선택│                        │
-│              │  - RouteState 기반 진입/청산  │                        │
-│              └──────────────────────────────┘                        │
-│                             │                                        │
-│         ┌───────────────────┼───────────────────┐                    │
-│         ▼                   ▼                   ▼                    │
-│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐            │
-│  │ 전략 A      │     │ 전략 B      │     │ 전략 C      │            │
-│  │ (RSI)       │     │ (Grid)      │     │ (Momentum)  │            │
-│  │             │     │             │     │             │            │
-│  │ ctx.route_  │     │ ctx.account │     │ ctx.global_ │            │
-│  │ states 활용 │     │ .available  │     │ scores 활용 │            │
-│  └─────────────┘     └─────────────┘     └─────────────┘            │
-│                                                                       │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## ⚙️ Phase 0 - 기반 작업 (Foundation)
-
-> **🎯 핵심 원칙**: 합칠 수 있는 기능은 합치고, 재활용할 수 있는 코드는 재활용한다.
->
-> **왜 먼저?** 이 작업들이 완료되면 이후 모든 기능 구현이 훨씬 수월해집니다.
-> - 공통 로직 추출 → 새 전략/기능 추가 시 보일러플레이트 80% 감소
-> - Journal-Backtest 통합 → P&L 계산 로직 1곳에서 관리, 버그 수정 범위 축소
-> - 레지스트리 패턴 → 모든 전략에 새 기능(RouteState, GlobalScore) 일괄 적용 가능
->
-> **예상 시간**: 3주 (188시간) - SDUI 시스템 포함
-> **핵심 효과**: 코드 중복 40-50% 감소, 사이드 이펙트 최소화, 유지보수 용이성 증대, UI 자동 생성
-
-### 1. 전략 레지스트리 패턴 ⭐ 최우선
-**[병렬 가능: P0.1]**
-
-**현재 문제**: 새 전략 추가 시 **5곳 이상 수정** 필요
-- `strategies/mod.rs` - pub mod, pub use
-- `routes/strategies.rs` - 팩토리 함수 4개
-- `routes/backtest/engine.rs` - match arm
-- `config/sdui/strategy_schemas.json` - UI 스키마
-- `frontend/Strategies.tsx` - 타임프레임 매핑
-
-**개선 후**: 전략 파일 **1곳만 수정**
-
-**구현 항목**
-- [x] `inventory` crate 도입 (컴파일 타임 등록) ✅ v0.5.7
-- [x] `StrategyMeta` 구조체 정의 ✅ v0.5.7
-  ```rust
-  pub struct StrategyMeta {
-      pub id: &'static str,
-      pub name: &'static str,           // 한글 이름
-      pub description: &'static str,
-      pub default_timeframe: &'static str,
-      pub default_symbols: &'static [&'static str],
-      pub category: StrategyCategory,   // Realtime/Intraday/Daily/Monthly
-      pub factory: fn() -> Box<dyn Strategy>,
-  }
-  ```
-- [x] `register_strategy!` 매크로 구현 ✅ v0.5.7 (Proc macro로 구현, 266줄)
-  ```rust
-  register_strategy! {
-      id: "rsi_mean_reversion",
-      name: "RSI 평균회귀",
-      timeframe: "15m",
-      category: Intraday,
-      type: RsiStrategy
-  }
-  ```
-- [x] 팩토리 함수 자동화 (`create_strategy_instance()` 등) ✅ v0.5.7
-- [x] `GET /api/v1/strategies/meta` API (프론트엔드 동적 조회) ✅ v0.5.7 (routes/schema.rs, 189줄)
-- [x] 기존 26개 전략 마이그레이션 ✅ v0.5.7
-
-**효과**:
-- 전략 추가 시간: 2시간 → 30분
-- Global Score, RouteState를 전략에 쉽게 연동 가능
-- 새 피처(StructuralFeatures) 모든 전략에 일괄 적용 가능
-
-**예상 시간**: 28시간 (3.5일)
-
----
-
-### 2. TickSizeProvider (호가 단위 계산)
-
-**[병렬 가능: P0.1]**
-
-**목적**: 거래소별 호가 단위 통합 관리 (StrategyContext.exchange_constraints에서 활용)
-
-**구현 항목**
-- [x] `TickSizeProvider` trait 정의 (trader-core) ✅ v0.5.7 (tick_size.rs, 335줄)
-  ```rust
-  pub trait TickSizeProvider: Send + Sync {
-      fn tick_size(&self, price: Decimal) -> Decimal;
-      fn round_to_tick(&self, price: Decimal, method: RoundMethod) -> Decimal;
-  }
-  ```
-- [x] 거래소별 구현 ✅ v0.5.7
-  - [x] `KrxTickSize`: 7단계 호가 단위
-  - [x] `UsEquityTickSize`: 고정 $0.01
-  - [x] `BinanceTickSize`: 심볼별 설정
-- [x] `round_to_tick()` 유틸리티 함수 ✅ v0.5.7
-- [x] 팩토리 함수 `get_tick_provider(exchange: Exchange)` ✅ v0.5.7
-
-**효과**:
-- 백테스트 정확도 향상 (실제 호가 단위 반영)
-- 주문 실행 시 가격 유효성 자동 검증
-- Global Score의 목표가/손절가 계산에 활용
-
-**예상 시간**: 4시간 (0.5일)
-
----
-
-### 3. 전략 공통 로직 추출
-
-**[의존성: P0.1 완료 후]**
-
-**현재 문제**: 26개 전략이 유사한 코드 패턴 반복
-
-**개선 구조**
-```
-strategies/common/
-├── mod.rs
-├── position_sizing.rs    # 켈리, 고정비율, ATR 기반 사이징
-├── risk_checks.rs        # 최대 포지션, 일일 손실 한도
-├── signal_filters.rs     # 노이즈 필터, 확인 신호
-├── entry_exit.rs         # 진입/청산 공통 로직
-├── indicators.rs         # 기술적 지표 계산 (공용)
-└── position_sync.rs      # ✅ 구현 완료 (v0.5.5)
-```
-
-**구현 항목**
-- [x] `PositionSizer` trait 및 구현체 ✅ v0.5.7 (position_sizing.rs, 286줄)
-  ```rust
-  pub trait PositionSizer {
-      fn calculate_size(&self, capital: Decimal, risk: &RiskParams) -> Decimal;
-  }
-  pub struct KellyPositionSizer { /* ... */ }
-  pub struct FixedRatioSizer { /* ... */ }
-  ```
-- [x] `RiskChecker` trait 및 공통 체크 ✅ v0.5.7 (risk_checks.rs, 291줄)
-- [x] `SignalFilter` trait (노이즈 필터링) ✅ v0.5.7 (signal_filters.rs, 372줄)
-- [x] 공용 지표 계산 함수 (RSI, MACD, BB 등) ✅ v0.5.7 (indicators.rs, 349줄)
-
-**효과**:
-- StructuralFeatures 계산 로직을 공통 모듈에서 재사용
-- 새 전략 개발 시 보일러플레이트 80% 감소
-- 버그 수정 시 한 곳만 수정
-
-**예상 시간**: 25시간 (3일)
-
----
-### 4. SDUI 스키마 자동 생성 시스템 ⭐ 확장
-
-**[병렬 가능: P0.2]**
-
-**목적**: 전략 Config에서 UI 스키마를 자동 생성하고, 재사용 가능한 Fragment로 동적 UI 조합
-
-**현재 문제**:
-- 전략마다 수동으로 SDUI JSON 스키마 작성 필요
-- 동일한 지표/필터 설정이 여러 전략에 중복 정의
-- 전략 추가 시 프론트엔드 코드 수정 필요
-
-#### 4.1 Schema Fragment 시스템 ✅ 완료
-
-**구현 항목**
-- [x] `SchemaFragment` 구조체 정의 (trader-core) → [schema.rs](crates/trader-core/src/domain/schema.rs)
-  ```rust
-  /// 재사용 가능한 UI 스키마 조각
-  pub struct SchemaFragment {
-      pub id: String,           // "indicator.rsi", "filter.route_state"
-      pub name: String,         // "RSI 설정"
-      pub description: Option<String>,
-      pub category: FragmentCategory,
-      pub fields: Vec<FieldSchema>,
-      pub dependencies: Vec<String>,  // 다른 Fragment 의존성
-  }
-
-  pub enum FragmentCategory {
-      Indicator,    // 기술적 지표 (RSI, MACD, BB 등)
-      Filter,       // 필터 조건 (RouteState, MarketRegime 등)
-      RiskManagement,  // 리스크 관리 (손절, 익절, 트레일링)
-      PositionSizing,  // 포지션 크기 (고정, 켈리, ATR 기반)
-      Timing,       // 타이밍 (리밸런싱 주기, 거래 시간)
-      Asset,        // 자산 선택 (심볼, 유니버스)
-  }
-  ```
-
-- [x] 기본 Fragment 정의 (26개 전략 공통 요소) → [schema_registry.rs](crates/trader-strategy/src/schema_registry.rs)
-  ```rust
-  // 지표 Fragment
-  pub static RSI_FRAGMENT: SchemaFragment = fragment! {
-      id: "indicator.rsi",
-      name: "RSI 설정",
-      category: Indicator,
-      fields: [
-          { name: "period", type: "integer", default: 14, min: 2, max: 100, label: "RSI 기간" },
-          { name: "overbought", type: "number", default: 70.0, min: 50, max: 100, label: "과매수 임계값" },
-          { name: "oversold", type: "number", default: 30.0, min: 0, max: 50, label: "과매도 임계값" },
-      ]
-  };
-
-  // 필터 Fragment
-  pub static ROUTE_STATE_FILTER: SchemaFragment = fragment! {
-      id: "filter.route_state",
-      name: "RouteState 필터",
-      category: Filter,
-      fields: [
-          { name: "enabled", type: "boolean", default: false, label: "RouteState 필터 활성화" },
-          { name: "allowed_states", type: "multi_select",
-            options: ["Attack", "Armed", "Wait", "Overheat", "Neutral"],
-            default: ["Attack", "Armed"], label: "허용 상태" },
-      ]
-  };
-
-  // 리스크 Fragment
-  pub static TRAILING_STOP_FRAGMENT: SchemaFragment = fragment! {
-      id: "risk.trailing_stop",
-      name: "트레일링 스탑",
-      category: RiskManagement,
-      fields: [
-          { name: "enabled", type: "boolean", default: false, label: "트레일링 스탑 활성화" },
-          { name: "trigger_pct", type: "number", default: 2.0, min: 0.1, max: 20,
-            label: "활성화 수익률 (%)", condition: "enabled == true" },
-          { name: "trail_pct", type: "number", default: 1.0, min: 0.1, max: 10,
-            label: "추적 비율 (%)", condition: "enabled == true" },
-      ]
-  };
-  ```
-
-#### 4.2 FragmentRegistry (Fragment 관리) ✅ 완료
-
-- [x] `FragmentRegistry` 구현 → [schema_registry.rs](crates/trader-strategy/src/schema_registry.rs)
-  ```rust
-  pub struct FragmentRegistry {
-      fragments: HashMap<String, SchemaFragment>,
-  }
-
-  impl FragmentRegistry {
-      /// 빌트인 Fragment 자동 등록
-      pub fn with_builtins() -> Self;
-
-      /// Fragment 조회
-      pub fn get(&self, id: &str) -> Option<&SchemaFragment>;
-
-      /// 카테고리별 Fragment 목록
-      pub fn list_by_category(&self, category: FragmentCategory) -> Vec<&SchemaFragment>;
-
-      /// 의존성 포함 전체 Fragment 수집
-      pub fn resolve_with_dependencies(&self, ids: &[&str]) -> Vec<&SchemaFragment>;
-  }
-  ```
-
-- [x] 빌트인 Fragment 카탈로그 (17개 Fragment 구현)
-  | 카테고리 | Fragment ID | 설명 |
-  |----------|-------------|------|
-  | Indicator | `indicator.rsi` | RSI 설정 |
-  | Indicator | `indicator.macd` | MACD 설정 |
-  | Indicator | `indicator.bollinger` | 볼린저 밴드 설정 |
-  | Indicator | `indicator.ma` | 이동평균 설정 (SMA/EMA) |
-  | Indicator | `indicator.atr` | ATR 설정 |
-  | Filter | `filter.route_state` | RouteState 필터 |
-  | Filter | `filter.market_regime` | MarketRegime 필터 |
-  | Filter | `filter.volume` | 거래량 필터 |
-  | RiskManagement | `risk.stop_loss` | 손절 설정 |
-  | RiskManagement | `risk.take_profit` | 익절 설정 |
-  | RiskManagement | `risk.trailing_stop` | 트레일링 스탑 |
-  | PositionSizing | `sizing.fixed_ratio` | 고정 비율 |
-  | PositionSizing | `sizing.kelly` | 켈리 기준 |
-  | Timing | `timing.rebalance` | 리밸런싱 주기 |
-  | Asset | `asset.single` | 단일 심볼 |
-  | Asset | `asset.universe` | 심볼 유니버스 |
-
-#### 4.3 StrategyConfig Derive 매크로 ✅ 완료
-
-- [x] `#[derive(StrategyConfig)]` 프로시저 매크로 → [trader-strategy-macro/src/lib.rs](crates/trader-strategy-macro/src/lib.rs)
-  ```rust
-  use trader_strategy_macro::StrategyConfig;
-
-  #[derive(StrategyConfig)]
-  #[strategy(
-      id = "rsi_mean_reversion",
-      name = "RSI 평균회귀",
-      description = "RSI 과매수/과매도 구간에서 평균회귀 매매",
-      category = "single_asset"
-  )]
-  pub struct RsiConfig {
-      // 기본 Fragment 사용
-      #[fragment("indicator.rsi")]
-      pub rsi: RsiIndicatorConfig,
-
-      // 선택적 Fragment
-      #[fragment("filter.route_state", optional)]
-      pub route_filter: Option<RouteStateFilterConfig>,
-
-      // 커스텀 필드
-      #[schema(label = "쿨다운 캔들 수", min = 0, max = 100)]
-      pub cooldown_candles: usize,
-  }
-  ```
-
-- [x] 매크로가 생성하는 코드 (`ui_schema()` 메서드 생성)
-  ```rust
-  impl RsiConfig {
-      /// 전체 UI 스키마 생성
-      pub fn ui_schema() -> StrategyUISchema {
-          StrategyUISchema {
-              id: "rsi_mean_reversion".to_string(),
-              name: "RSI 평균회귀".to_string(),
-              description: Some("RSI 과매수/과매도 구간에서 평균회귀 매매".to_string()),
-              category: "single_asset".to_string(),
-              fragments: vec![
-                  FragmentRef { id: "indicator.rsi", required: true },
-                  FragmentRef { id: "filter.route_state", required: false },
-              ],
-              custom_fields: vec![
-                  FieldSchema {
-                      name: "cooldown_candles".to_string(),
-                      field_type: FieldType::Integer,
-                      label: "쿨다운 캔들 수".to_string(),
-                      min: Some(0.0), max: Some(100.0),
-                      ..Default::default()
-                  }
-              ],
-          }
-      }
-  }
-  ```
-
-#### 4.4 SchemaComposer (스키마 조합기)
-
-- [x] `SchemaComposer` 구현 ✅ v0.5.7 (schema_composer.rs, 279줄)
-  ```rust
-  pub struct SchemaComposer {
-      registry: Arc<FragmentRegistry>,
-  }
-
-  impl SchemaComposer {
-      /// 전략 스키마 + Fragment → 완성된 SDUI JSON
-      pub fn compose(&self, strategy_schema: &StrategyUISchema) -> serde_json::Value {
-          let mut sections = vec![];
-
-          // Fragment 섹션 추가
-          for frag_ref in &strategy_schema.fragments {
-              if let Some(fragment) = self.registry.get(&frag_ref.id) {
-                  sections.push(self.fragment_to_section(fragment, frag_ref.required));
-              }
-          }
-
-          // 커스텀 필드 섹션
-          if !strategy_schema.custom_fields.is_empty() {
-              sections.push(self.custom_fields_section(&strategy_schema.custom_fields));
-          }
-
-          json!({
-              "strategy_id": strategy_schema.id,
-              "name": strategy_schema.name,
-              "description": strategy_schema.description,
-              "sections": sections
-          })
-      }
-
-      fn fragment_to_section(&self, fragment: &SchemaFragment, required: bool) -> serde_json::Value {
-          json!({
-              "id": fragment.id,
-              "name": fragment.name,
-              "required": required,
-              "collapsible": !required,
-              "fields": fragment.fields.iter().map(|f| self.field_to_json(f)).collect::<Vec<_>>()
-          })
-      }
-  }
-  ```
-
-#### 4.5 API 엔드포인트
-
-- [x] `GET /api/v1/strategies/meta` - 전략 목록 + 기본 메타데이터 ✅ v0.5.7 (routes/schema.rs, 189줄)
-- [x] `GET /api/v1/strategies/{id}/schema` - 완성된 SDUI JSON 스키마 ✅ v0.5.7
-- [ ] `GET /api/v1/schema/fragments` - 사용 가능한 Fragment 목록
-- [ ] `GET /api/v1/schema/fragments/{category}` - 카테고리별 Fragment
-
-#### 4.6 프론트엔드 통합
-
-- [ ] `SDUIRenderer` 컴포넌트 (SolidJS)
-  - Fragment 기반 섹션 자동 렌더링
-  - 조건부 필드 표시/숨김 (`condition` 속성 처리)
-  - 실시간 유효성 검증
-
-**효과**:
-| 항목 | 개선 |
-|------|------|
-| 전략 추가 UI 작업 | 2시간 → 0분 (자동 생성) |
-| Fragment 재사용 | 26개 전략에서 공통 설정 통합 |
-| 프론트엔드 수정 | 새 전략 추가 시 코드 변경 불필요 |
-| 일관성 | 모든 전략이 동일한 UI 패턴 사용 |
-
-**예상 시간**: 20시간 (2.5일)
-- FragmentRegistry + 빌트인: 8시간
-- Derive 매크로: 6시간
-- SchemaComposer + API: 4시간
-- 프론트엔드 통합: 2시간
-
----
-
-### 5. Journal-Backtest 공통 모듈 ⭐ 신규
-
-**[병렬 가능: P0.4]**
-
-**목적**: 매매일지와 백테스트에서 중복되는 로직을 통합하여 일관성 확보
-
-**현재 문제**:
-- P&L 계산이 `journal.rs`와 `engine.rs`에서 각각 독립 구현됨
-- 승률, Profit Factor 등 통계 로직이 분산됨
-- `TradeExecutionRecord`(Journal)와 `RoundTrip`(Backtest) 타입이 별도 정의
-- 버그 수정 시 양쪽 모두 수정 필요
-
-**구현 항목**
-- [x] `trader-core/domain/calculations.rs` - 공유 계산 함수 ✅ v0.5.7 (374줄)
-  ```rust
-  pub mod calculations {
-      /// 비용기준 계산 (FIFO, 가중평균, 최종평가 지원)
-      pub fn cost_basis(entries: &[TradeEntry], method: CostMethod) -> Decimal;
-
-      /// 실현손익 계산
-      pub fn realized_pnl(entry: Decimal, exit: Decimal, qty: Decimal, side: Side) -> Decimal;
-
-      /// 수익률 계산
-      pub fn return_pct(pnl: Decimal, cost_basis: Decimal) -> Decimal;
-
-      /// 미실현손익 계산
-      pub fn unrealized_pnl(entry: Decimal, current: Decimal, qty: Decimal, side: Side) -> Decimal;
-  }
-  ```
-- [x] `trader-core/domain/statistics.rs` - 통합 통계 모듈 ✅ v0.5.7 (514줄)
-  ```rust
-  pub struct TradeStatistics {
-      pub total_trades: usize,
-      pub winning_trades: usize,
-      pub losing_trades: usize,
-      pub win_rate_pct: Decimal,
-      pub profit_factor: Decimal,
-      pub avg_win: Decimal,
-      pub avg_loss: Decimal,
-      pub largest_win: Decimal,
-      pub largest_loss: Decimal,
-      pub avg_holding_period: Duration,
-      pub expectancy: Decimal,  // 기대값 = 승률*평균이익 - 패률*평균손실
-  }
-
-  impl TradeStatistics {
-      pub fn from_round_trips(trades: &[RoundTrip]) -> Self;
-      pub fn from_journal_trades(trades: &[TradeExecutionRecord]) -> Self;
-  }
-  ```
-- [x] `UnifiedTrade` trait 정의 (두 타입 간 변환) ✅ v0.5.7
-  ```rust
-  pub trait UnifiedTrade {
-      fn symbol(&self) -> &str;
-      fn side(&self) -> Side;
-      fn entry_price(&self) -> Decimal;
-      fn exit_price(&self) -> Option<Decimal>;
-      fn quantity(&self) -> Decimal;
-      fn pnl(&self) -> Option<Decimal>;
-      fn entry_time(&self) -> DateTime<Utc>;
-      fn exit_time(&self) -> Option<DateTime<Utc>>;
-  }
-
-  impl UnifiedTrade for RoundTrip { /* ... */ }
-  impl UnifiedTrade for TradeExecutionRecord { /* ... */ }
-  ```
-- [x] 백테스트에서 Journal 통계 재사용 ✅ v0.5.7 (journal_integration.rs, 280줄)
-  ```rust
-  // 백테스트 결과를 Journal 형식으로 내보내기
-  pub fn export_to_journal(report: &BacktestReport) -> Vec<TradeExecutionRecord>;
-
-  // Journal 데이터로 백테스트 비교 분석
-  pub fn compare_with_actual(backtest: &BacktestReport, journal: &[TradeExecutionRecord]) -> ComparisonReport;
-  ```
-
-**효과**:
-| 항목 | 개선 |
-|------|------|
-| 코드 중복 | 40-50% 감소 |
-| 버그 수정 범위 | 1곳으로 통합 |
-| 새 지표 추가 | 양쪽 자동 적용 |
-| 백테스트-실거래 비교 | 동일 기준으로 분석 가능 |
-
-**예상 시간**: 15시간 (2일)
-
----
-
-### 6. StrategyContext (전략 실행 컨텍스트) ⭐ 신규
-
-**[의존성: P0.4, P0.5 완료 후]**
-
-**목적**: 전략이 거래소 정보와 현재 포지션 상태를 실시간으로 조회하여 의사결정에 활용
-
-**현재 문제**:
-- 각 전략이 포지션을 독립적으로 관리 → 전략 간 포지션 정보 공유 불가
-- 거래소 실시간 잔고 조회 기능 부재 → 실제 매수 가능 금액 알 수 없음
-- 미체결 주문 상태 모름 → 중복 주문 위험
-
-**구현 항목**
-- [x] `StrategyContext` 구조체 정의 ✅ (trader-core/domain/context.rs)
-  ```rust
-  pub struct StrategyContext {
-      // ===== 거래소 실시간 정보 =====
-      /// 계좌 정보 (거래소에서 실시간 조회)
-      pub account: AccountInfo,
-      /// 현재 보유 포지션 (전략 간 공유)
-      pub positions: HashMap<Symbol, PositionInfo>,
-      /// 미체결 주문 목록
-      pub pending_orders: Vec<PendingOrder>,
-      /// 거래소 제약 조건
-      pub exchange_constraints: ExchangeConstraints,
-
-      // ===== 외부 분석 결과 (주기적 갱신) =====
-      /// Global Score 랭킹 결과
-      pub global_scores: HashMap<Symbol, GlobalScoreResult>,
-      /// RouteState 상태 정보
-      pub route_states: HashMap<Symbol, RouteState>,
-      /// 스크리닝 결과 (프리셋별)
-      pub screening_results: HashMap<ScreeningPreset, Vec<ScreeningResult>>,
-      /// 구조적 피처 캐시
-      pub structural_features: HashMap<Symbol, StructuralFeatures>,
-
-      // ===== 메타 정보 =====
-      /// 마지막 거래소 동기화 시간
-      pub last_exchange_sync: DateTime<Utc>,
-      /// 마지막 분석 갱신 시간
-      pub last_analysis_sync: DateTime<Utc>,
-  }
-  ```
-- [x] `AccountInfo` - 실시간 계좌 정보 ✅ (`StrategyAccountInfo`로 구현)
-  ```rust
-  pub struct AccountInfo {
-      pub total_balance: Decimal,       // 총 자산
-      pub available_balance: Decimal,   // 매수 가능 금액
-      pub margin_used: Decimal,         // 사용 중인 증거금
-      pub unrealized_pnl: Decimal,      // 미실현 손익 합계
-  }
-  ```
-- [x] `PositionInfo` - 포지션 상세 정보 ✅ (`StrategyPositionInfo`로 구현)
-  ```rust
-  pub struct PositionInfo {
-      pub symbol: Symbol,
-      pub side: Side,
-      pub quantity: Decimal,
-      pub avg_entry_price: Decimal,
-      pub current_price: Decimal,       // 실시간 시세
-      pub unrealized_pnl: Decimal,
-      pub unrealized_pnl_pct: Decimal,  // 수익률 %
-      pub liquidation_price: Option<Decimal>,  // 청산가 (레버리지)
-  }
-  ```
-- [x] `ExchangeConstraints` - 거래소 제약 ✅ (trader-core/domain/context.rs)
-  ```rust
-  pub struct ExchangeConstraints {
-      pub tick_size: TickSizeProvider,
-      pub min_order_qty: Decimal,
-      pub max_leverage: Option<Decimal>,
-      pub trading_hours: Option<TradingHours>,
-  }
-  ```
-- [x] `ExchangeProvider` trait (거래소별 구현) ✅ (trader-core/domain/exchange_provider.rs)
-  ```rust
-  #[async_trait]
-  pub trait ExchangeProvider: Send + Sync {
-      async fn fetch_account(&self) -> Result<AccountInfo>;
-      async fn fetch_positions(&self) -> Result<Vec<PositionInfo>>;
-      async fn fetch_pending_orders(&self) -> Result<Vec<PendingOrder>>;
-  }
-  ```
-- [x] `AnalyticsProvider` trait (분석 결과 주입) ✅ (trader-core/domain/analytics_provider.rs)
-  ```rust
-  #[async_trait]
-  pub trait AnalyticsProvider: Send + Sync {
-      /// Global Score 조회 (시장별)
-      async fn fetch_global_scores(&self, market: Market) -> Result<Vec<GlobalScoreResult>>;
-      /// RouteState 조회
-      async fn fetch_route_states(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, RouteState>>;
-      /// 스크리닝 결과 조회
-      async fn fetch_screening(&self, preset: ScreeningPreset) -> Result<Vec<ScreeningResult>>;
-      /// 구조적 피처 조회
-      async fn fetch_features(&self, symbols: &[Symbol]) -> Result<HashMap<Symbol, StructuralFeatures>>;
-  }
-  ```
-- [x] `ContextSyncService` - 주기적 동기화 서비스 ✅ (trader-api/services/context_sync.rs)
-  ```rust
-  pub struct ContextSyncService {
-      exchange_provider: Box<dyn ExchangeProvider>,
-      analytics_provider: Box<dyn AnalyticsProvider>,
-      context: Arc<RwLock<StrategyContext>>,
-      exchange_sync_interval: Duration,  // 1~5초
-      analytics_sync_interval: Duration, // 1~10분
-  }
-
-  impl ContextSyncService {
-      pub async fn run(&self, shutdown: CancellationToken) {
-          loop {
-              tokio::select! {
-                  _ = tokio::time::sleep(self.exchange_sync_interval) => {
-                      self.sync_exchange().await;
-                  }
-                  _ = shutdown.cancelled() => break,
-              }
-          }
-      }
-  }
-  ```
-
-**Strategy trait 확장**
-- [x] `set_context` 메서드 ✅ (trader-strategy/traits.rs:58)
-- [x] `PositionAdjustable` trait ✅ *2026-02-03 구현* (trader-core/domain/position.rs)
-  - `should_adjust_position(&self, position: &Position) -> PositionAdjustment`
-- [x] `PositionAdjustment` struct ✅ *2026-02-03 구현* (trader-core/domain/position.rs)
-  - `AdjustmentType` enum: Add, Reduce, Close, StopLoss, TakeProfit, Rebalance, None
-
-```rust
-pub trait Strategy: Send + Sync {
-    // 기존 메서드들...
-
-    /// 컨텍스트 주입 (엔진에서 호출)
-    fn set_context(&mut self, ctx: Arc<RwLock<StrategyContext>>);
-
-    /// 포지션 기반 의사결정 (선택적 구현) - 미구현
-    fn should_adjust_position(&self, position: &PositionInfo) -> Option<PositionAdjustment> {
-        None  // 기본: 조정 안 함
-    }
-}
-```
-
-**활용 예시**:
-
-```rust
-// 예시 1: 물타기 전략 (포지션 기반)
-fn should_adjust_position(&self, pos: &PositionInfo) -> Option<PositionAdjustment> {
-    if pos.unrealized_pnl_pct < dec!(-5) {  // -5% 손실 시
-        Some(PositionAdjustment::AddToPosition {
-            quantity: pos.quantity * dec!(0.5),  // 50% 추가 매수
-            reason: "물타기".to_string(),
-        })
-    } else {
-        None
-    }
-}
-
-// 예시 2: Global Score 기반 종목 선택
-fn select_targets(&self, ctx: &StrategyContext) -> Vec<Symbol> {
-    ctx.global_scores.iter()
-        .filter(|(_, score)| score.global_score >= 80.0)  // 80점 이상
-        .filter(|(symbol, _)| {
-            // RouteState가 ATTACK 또는 ARMED인 종목만
-            matches!(
-                ctx.route_states.get(*symbol),
-                Some(RouteState::Attack) | Some(RouteState::Armed)
-            )
-        })
-        .map(|(symbol, _)| symbol.clone())
-        .take(10)  // TOP 10
-        .collect()
-}
-
-// 예시 3: 스크리닝 결과 기반 진입 (코스닥 급등주 전략)
-fn generate_signals(&mut self) -> Vec<Signal> {
-    let ctx = self.context.read().await;
-
-    // 스크리닝 결과에서 모멘텀 상위 종목 조회
-    let candidates = ctx.screening_results
-        .get(&ScreeningPreset::Momentum)
-        .unwrap_or(&vec![]);
-
-    candidates.iter()
-        .filter(|r| {
-            // ATTACK 상태 + 이미 보유하지 않은 종목
-            ctx.route_states.get(&r.symbol) == Some(&RouteState::Attack)
-                && !ctx.positions.contains_key(&r.symbol)
-        })
-        .map(|r| Signal::buy(&r.symbol, r.current_price))
-        .collect()
-}
-
-// 예시 4: OVERHEAT 상태 자동 익절
-fn check_overheat_exit(&self, ctx: &StrategyContext) -> Vec<Signal> {
-    ctx.positions.iter()
-        .filter(|(symbol, _)| {
-            ctx.route_states.get(*symbol) == Some(&RouteState::Overheat)
-        })
-        .map(|(symbol, pos)| Signal::sell(symbol, pos.current_price))
-        .collect()
-}
-```
-
-**효과**:
-
-| 카테고리 | 효과 |
-|----------|------|
-| **거래소 연동** | 실시간 잔고/포지션으로 유효한 주문만 생성 |
-| **충돌 방지** | 전략 간 포지션 공유로 중복 주문/반대 포지션 차단 |
-| **포지션 관리** | 물타기, 부분 익절, 리밸런싱 등 동적 조절 가능 |
-| **분석 결과 활용** | Global Score 기반 자동 종목 선택 |
-| **상태 기반 매매** | RouteState(ATTACK/OVERHEAT)로 진입/청산 자동화 |
-| **스크리닝 연동** | 스크리닝 결과를 전략에서 직접 조회하여 활용 |
-
-**예상 시간**: 50시간 (6일) (AnalyticsProvider 포함, 가장 복잡한 작업)
-
----
-
-```
-순서 | 작업 | 시간 | 병렬 가능 여부 | 의존성
------|------|------|--------------|--------
-1    | 전략 레지스트리 | 28h | [P0.1] | -
-2    | TickSizeProvider | 4h | [P0.1] | -
-3    | 공통 로직 추출 | 25h | - | P0.1 완료 후
-4    | SDUI 자동 생성 | 50h | [P0.2] | -
-5    | Journal-Backtest | 15h | [P0.4] | -
-6    | StrategyContext | 50h | - | P0.4, P0.5 완료 후
-```
-
-**예상 시간**: 4시간 (0.5일)
-**총 예상 시간**: 172h → **228h** (56h 증가, Standalone Collector 추가)
-
----
-
-### 7. Standalone Data Collector ⭐ 신규
-
-**[병렬 가능: P0.7]**
-
-**목적**: API 서버와 독립적으로 데이터를 수집하는 standalone 바이너리 구축
-
-**현재 문제**:
-- 데이터 수집이 API 서버 내부 백그라운드 태스크로 실행됨
-- API 서버 재시작 시 데이터 수집 중단
-- 높은 I/O 부하가 API 응답 성능에 영향
-- Cron/systemd로 독립 실행 불가
-- 리소스 격리 불가 (별도 머신/컨테이너 배포 어려움)
-
-**구현 항목**
-- [x] 새로운 `trader-collector` crate 생성 ✅
-  ```rust
-  // CLI 인터페이스
-  pub enum Commands {
-      SyncSymbols,           // 심볼 동기화 (KRX, Binance, Yahoo)
-      CollectOhlcv,          // OHLCV 수집 (일봉)
-      CollectFundamental,    // Fundamental 수집
-      RunAll,                // 전체 워크플로우
-      Daemon,                // 데몬 모드 (주기적 실행) ⭐
-  }
-  ```
-- [x] 모듈 구조 ✅
-  ```
-  trader-collector/
-  ├── src/
-  │   ├── main.rs           // CLI 엔트리포인트
-  │   ├── config.rs         // 환경변수 기반 설정
-  │   ├── modules/
-  │   │   ├── symbol_sync.rs      // 심볼 동기화
-  │   │   ├── ohlcv_collect.rs    // OHLCV 수집
-  │   ├── error.rs          // 에러 타입
-  │   └── stats.rs          // 수집 통계
-  ```
-- [x] trader-data 컴포넌트 재사용 ✅
-  - `CachedHistoricalDataProvider` - Yahoo Finance (KRX fallback) 🔄
-  - `SymbolResolver` - 심볼 정규화 및 변환
-  - `SymbolInfoProvider` - KRX/Binance/Yahoo 종목 조회
-- [x] Yahoo Finance로 전환 ✅ (KRX API 차단 대응)
-  - KRX data.krx.co.kr → 403 Forbidden
-  - Yahoo Finance 자동 fallback 내장
-  - 증분 수집 지원 (마지막 시간 이후만)
-- [x] 배치 처리 및 Rate Limiting ✅
-  - 전체 종목 수집 (LIMIT 제거)
-  - Rate limit: 200ms~500ms (설정 가능)
-  - 개별 실패가 전체 중단하지 않도록 에러 핸들링
-- [x] 스케줄링 지원 ✅
-  - Cron 스크립트 예제 제공 (`scripts/collector.cron`)
-  - systemd timer/service 파일 제공
-  - 데몬 모드 추가 (DAEMON_INTERVAL_MINUTES)
-- [x] 모니터링 및 로깅 ✅
-  - tracing 기반 구조화 로깅
-  - 진행률, 성공/실패 통계 출력
-  - CollectionStats 구조체
-- [x] 추가 구현 ⭐
-  - symbol_type 마이그레이션 (024_add_symbol_type.sql)
-  - ETN 자동 필터링 (223개)
-  - 우선주/특수증권 대응
-  - 최적화된 환경변수 예제 (.env.collector.optimized)
-
-**기대 효과**:
-| 항목 | 개선 |
-|------|------|
-| **서비스 분리** | API 서버와 완전 독립 운영 |
-| **스케줄링** | Cron/systemd로 유연한 주기 설정 |
-| **리소스 격리** | 별도 머신/컨테이너 배포 가능 |
-| **안정성** | API 서버 장애가 데이터 수집에 영향 없음 |
-| **성능** | 데이터 수집 부하가 API 응답에 영향 없음 |
-
-**참조 문서**:
-- `docs/standalone_collector_design.md` - 상세 설계 문서 (100+ 섹션)
-- `docs/collector_quick_start.md` - 빠른 시작 가이드
-- `docs/collector_env_example.env` - 환경변수 예제
-
-**예상 시간**: 40시간 (5일)
-- CLI + 기본 구조: 8시간
-- 심볼 동기화 모듈: 10시간
-- OHLCV 수집 모듈: 10시간
-- Fundamental 수집 모듈: 8시간
-- 배포 설정 (Docker, systemd): 4시간
-
----
+> **마지막 업데이트**: 2026-02-04
+> **현재 버전**: v0.6.0
+> **참조 문서**: `python_strategy_modules.md`, `improvement_todo.md`, `complete_todo.md`
 
 ## 🔴 Phase 1 - 핵심 기능 (Core Features)
-
 > **의존성**: Phase 0 완료 후 시작
-> **예상 시간**: 2주
 
-### Phase 1-A: 분석 엔진(1.5주, 선형 의존)
+> 1.4 Multiple KLine Period 완료됨 → [8. 완료된 작업](#8-완료된-작업) 참조
 
-#### 1.1.1 구조적 피처 (Structural Features)
-**[의존성: P0.3 공통 로직]**
+### 1.5. 전략 연계 (스크리닝 활용)[complete_todo.md:1551-1563]
+**해당 작업은 후순위입니다.**
+- [ ] **전체 전략**을 python-strategy 폴더에 있는 xx.xxx 전략들과 docs/STRATEGY_DEVELOPMENT.md 를 매칭하여 적절한 스크리닝을 활용하여 완전히 새로 구현합니다. 아래는 예입니다. 이때 Multiple KLine Period을 적용할 수 있는 경우 같이 적용하도록 합니다.
+  - 코스닥 급등주 전략: ATTACK 상태 종목만 진입 
+  - 스노우볼 전략: 저PBR+고배당 + Global Score 상위 
+  - 섹터 모멘텀 전략: 섹터별 TOP 5 자동 선택 
 
-**목적**: "살아있는 횡보"와 "죽은 횡보"를 구분하여 돌파 가능성 예측
 
-**구현 항목**
-- [x] `StructuralFeatures` 구조체 정의 (trader-analytics) ✅
-  ```rust
-  pub struct StructuralFeatures {
-      pub low_trend: f64,      // Higher Low 강도
-      pub vol_quality: f64,    // 매집/이탈 판별
-      pub range_pos: f64,      // 박스권 위치 (0~1)
-      pub dist_ma20: f64,      // MA20 이격도
-      pub bb_width: f64,       // 볼린저 밴드 폭
-      pub rsi: f64,            // RSI 14일
-  }
-  ```
-- [x] `from_candles()` 계산 로직 (공통 지표 모듈 활용) ✅
-- [x] 피처 캐싱 (Redis, 동일 OHLCV 재계산 방지) ✅ (trader-api/cache/structural.rs)
-- [x] 스크리닝 필터 조건으로 활용 ✅ (screening_integration.rs)
+## Phase 2: 프론트엔드 UI
 
-**예상 시간**: 1주
+> 2.1~2.3 완료됨 → [8. 완료된 작업](#8-완료된-작업) 참조
 
----
-
-#### 1.1.2 RouteState 상태 관리
-**[의존성: P1-A.1.1 완료 후]**
-
-**목적**: 종목의 현재 매매 단계를 5단계로 분류
-
-**구현 항목**
-- [x] `RouteState` enum 정의 (trader-core) ✅
-  ```rust
-  pub enum RouteState {
-      Attack,    // TTM Squeeze 해제 + 모멘텀 상승 + RSI 45~65 + Range_Pos >= 0.8
-      Armed,     // Squeeze 중 + MA20 위 또는 Vol_Quality >= 2.0
-      Wait,      // 정배열 + MA 지지 + Low_Trend > 0
-      Overheat,  // 5일 수익률 > 20% 또는 RSI >= 75
-      Neutral,   // 위 조건 미충족
-  }
-  ```
-- [x] `RouteStateCalculator` 구현 (StructuralFeatures 활용) ✅
-- [x] `symbol_fundamental` 테이블에 `route_state` 컬럼 추가 ✅ (09_strategy_system.sql)
-- [x] 스크리닝 응답에 `route_state` 포함 ✅ (ScreeningResult.route_state)
-- [ ] ATTACK 상태 전환 시 텔레그램 알림
-
-**전략 연동**:
-- 레지스트리 패턴으로 등록된 모든 전략에서 RouteState 조회 가능
-- 진입/청산 조건에 RouteState 활용
-
-**예상 시간**: 0.5주
-
----
-### Phase 1-B: 환경 분석 (0.5주, 병렬 가능)
-
-> **병렬 실행**: Phase 1-A 완료 후, 아래 항목들은 서로 독립적이므로 동시 진행 가능
-
-#### 1.2.1 MarketRegime 시장 레짐 ⭐ 신규
-
-**목적**: 종목의 추세 단계를 5단계로 분류하여 매매 타이밍 판단
-
-**구현 항목**
-- [x] `MarketRegime` enum 정의 (trader-core) ✅
-  ```rust
-  pub enum MarketRegime {
-      StrongUptrend,  // ① 강한 상승 추세 (rel_60d > 10 + slope > 0 + RSI 50~70)
-      Correction,     // ② 상승 후 조정 (rel_60d > 5 + slope <= 0)
-      Sideways,       // ③ 박스 / 중립 (-5 <= rel_60d <= 5)
-      BottomBounce,   // ④ 바닥 반등 시도 (rel_60d <= -5 + slope > 0)
-      Downtrend,      // ⑤ 하락 / 약세
-  }
-  ```
-- [x] 60일 상대강도(`rel_60d_%`) 계산 로직 ✅ (calculate_relative_strength_60d)
-- [x] 스크리닝 응답에 `regime` 필드 추가 ✅ (ScreeningResult.regime)
-
-**예상 시간**: 4시간
-
----
-
-#### 1.2.2 TRIGGER 진입 트리거 시스템 ✅ 완료
-
-**목적**: 여러 기술적 조건을 종합하여 진입 신호 강도와 트리거 라벨 생성
-
-**구현 항목**
-- [x] `TriggerResult` 구조체 정의 → [trigger.rs](crates/trader-core/src/domain/trigger.rs)
-  ```rust
-  pub struct TriggerResult {
-      pub score: f64,              // 0~100
-      pub triggers: Vec<TriggerType>,
-      pub label: String,           // "🚀급등시동, 📦박스돌파"
-  }
-
-  pub enum TriggerType {
-      SqueezeBreak,   // TTM Squeeze 해제 (+30점)
-      BoxBreakout,    // 박스권 돌파 (+25점)
-      VolumeSpike,    // 거래량 폭증 (+20점)
-      MomentumUp,     // 모멘텀 상승 (+15점)
-      HammerCandle,   // 망치형 캔들 (+10점)
-      Engulfing,      // 장악형 캔들 (+10점)
-  }
-  ```
-- [x] 캔들 패턴 감지 로직 (망치형, 장악형) → [candle_patterns.rs](crates/trader-analytics/src/indicators/candle_patterns.rs)
-- [x] 스크리닝 응답에 `trigger_score`, `trigger_label` 추가 → [screening.rs](crates/trader-api/src/routes/screening.rs)
-
-**예상 시간**: 8시간
-
----
-
-#### 1.2.3 TTM Squeeze 상세 구현 ✅ 완료
-
-**목적**: John Carter의 TTM Squeeze - BB가 KC 내부로 들어가면 에너지 응축 상태
-
-**구현 항목**
-- [x] `TtmSqueezeResult` 구조체 정의 → [volatility.rs](crates/trader-analytics/src/indicators/volatility.rs)
-  ```rust
-  pub struct TtmSqueezeResult {
-      pub is_squeeze: bool,
-      pub squeeze_count: u32,
-      pub momentum: Decimal,
-      pub released: bool,
-  }
-  ```
-- [x] Keltner Channel 계산 → `KeltnerChannelResult`
-- [x] BB vs KC 비교 로직 → `VolatilityIndicators::ttm_squeeze()`
-- [x] `symbol_fundamental` 테이블에 `ttm_squeeze`, `ttm_squeeze_cnt` 컬럼 추가
-
-**예상 시간**: 6시간
-
----
-
-#### 1.2.4 Macro Filter 매크로 환경 필터 ✅ 완료
-
-**목적**: USD/KRW 환율, 나스닥 지수 모니터링으로 시장 위험도 평가 및 동적 진입 기준 조정
-
-**구현 항목**
-- [x] `MacroEnvironment` 구조체 정의 → [macro_environment.rs](crates/trader-core/src/domain/macro_environment.rs)
-  ```rust
-  pub struct MacroEnvironment {
-      pub risk_level: MacroRisk,
-      pub usd_krw: Decimal,
-      pub usd_change_pct: f64,
-      pub nasdaq_change_pct: f64,
-      pub adjusted_ebs: u8,          // 조정된 EBS 기준
-      pub recommendation_limit: usize, // 추천 종목 수 제한
-  }
-
-  pub enum MacroRisk {
-      Critical,  // 환율 1400+ or 나스닥 -2% → EBS +1, 추천 3개
-      High,      // 환율 +0.5% 급등 → EBS +1, 추천 5개
-      Normal,    // 기본값
-  }
-  ```
-- [ ] 환율/지수 데이터 수집 (Yahoo Finance API)
-- [ ] 스크리닝 API 응답에 `macro_risk` 필드 추가
-- [ ] 텔레그램 알림에 매크로 상태 포함
-
-**예상 시간**: 6시간
-
----
-
-#### 1.2.5 Market Breadth 시장 온도 ✅ 완료
-
-**목적**: 20일선 상회 종목 비율로 시장 전체 건강 상태 측정
-
-**구현 항목**
-- [x] `MarketBreadth` 구조체 정의 → [market_breadth.rs](crates/trader-core/src/domain/market_breadth.rs)
-- [x] `MarketTemperature` enum 정의
-- [x] 시장별 Above_MA20 비율 계산
-- [ ] 대시보드에 시장 온도 위젯 추가
-
-**예상 시간**: 4시간
-
----
-
-#### 1.2.6 추가 기술적 지표 ✅ 완료
-
-**목적**: 분석 정확도 향상을 위한 추가 지표
-
-**구현 항목**
-- [x] `HMA` (Hull Moving Average) → [hma.rs](crates/trader-analytics/src/indicators/hma.rs)
-- [x] `OBV` (On-Balance Volume) → [obv.rs](crates/trader-analytics/src/indicators/obv.rs)
-- [x] `SuperTrend` → [supertrend.rs](crates/trader-analytics/src/indicators/supertrend.rs)
-- [x] `CandlePattern` 감지 → [candle_patterns.rs](crates/trader-analytics/src/indicators/candle_patterns.rs)
-
-**예상 시간**: 8시간
-
----
-
-#### 1.2.7 Sector RS 섹터 상대강도 ✅ 완료
-
-**목적**: 시장 대비 초과수익(Relative Strength)으로 진짜 주도 섹터 발굴
-
-**구현 항목**
-- [x] 섹터별 RS 계산 → [screening.rs](crates/trader-api/src/repository/screening.rs)
-- [x] 종합 섹터 점수 계산 로직
-- [x] 스크리닝에 `sector_rs`, `sector_rank` 필드 추가 → [screening_integration.rs](crates/trader-strategy/src/strategies/common/screening_integration.rs)
-
-**예상 시간**: 4시간
-
----
-
-#### 1.2.8 Reality Check 추천 검증 ✅ 완료
-
-**목적**: 전일 추천 종목의 익일 실제 성과 자동 검증
-
-**구현 항목**
-- [x] `price_snapshot` 테이블 (TimescaleDB hypertable) → [10_reality_check.sql](migrations/10_reality_check.sql)
-  ```sql
-  CREATE TABLE price_snapshot (
-      snapshot_date DATE NOT NULL,
-      symbol VARCHAR(20) NOT NULL,
-      close_price DECIMAL(18,4),
-      volume BIGINT,
-      global_score DECIMAL(5,2),
-      route_state VARCHAR(20),
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      PRIMARY KEY (snapshot_date, symbol)
-  );
-  SELECT create_hypertable('price_snapshot', 'snapshot_date');
-  ```
-- [x] `reality_check` 테이블 (TimescaleDB hypertable) → [10_reality_check.sql](migrations/10_reality_check.sql)
-- [x] 전일 추천 vs 금일 종가 비교 로직 → [reality_check.rs](crates/trader-api/src/repository/reality_check.rs)
-- [x] `RealityCheckRepository` 구현 → [reality_check.rs](crates/trader-api/src/repository/reality_check.rs)
-- [x] 통계 대시보드 API → [reality_check.rs](crates/trader-api/src/routes/reality_check.rs)
-  - `GET /api/v1/reality-check/stats` - 통계 조회
-  - `GET /api/v1/reality-check/results` - 검증 결과 목록
-  - `GET /api/v1/reality-check/snapshots` - 스냅샷 목록
-  - `POST /api/v1/reality-check/snapshots` - 스냅샷 저장
-  - `POST /api/v1/reality-check/calculate` - Reality Check 계산
-
-**활용**:
-- 전략 신뢰도 측정
-- 백테스트 vs 실거래 괴리 분석
-- 파라미터 튜닝 피드백
-- 시계열 쿼리로 기간별 성과 추이 분석
-
-**예상 시간**: 8시간
-
----
-
-### Phase 1-C: 신호 시스템 (0.5주, 순차)
-
-#### 1.3.1 기술 신호 저장 시스템 (SignalMarker) ⭐ 신규
-
-**목적**: 백테스트와 실거래에서 발생한 기술 신호를 저장하여 분석 및 시각화에 활용
-
-**현재 문제**:
-- 백테스트에서 신호 발생 시점과 지표값이 기록되지 않음
-- 전략 디버깅 시 "왜 이 시점에 진입/청산했는가" 추적 불가
-- 과거 데이터에서 특정 패턴(골든크로스, RSI 과매도 등) 검색 불가
-
-**구현 항목**
-- [x] ✅ `SignalMarker` 구조체 정의 (trader-core) → [signal.rs:196-234](crates/trader-core/src/domain/signal.rs#L196-L234)
-  ```rust
-  /// 기술 신호 마커 - 캔들 차트에 표시할 신호 정보
-  pub struct SignalMarker {
-      pub id: Uuid,
-      pub symbol: Symbol,
-      pub timestamp: DateTime<Utc>,
-      pub signal_type: SignalType,       // Entry, Exit, Alert
-      pub side: Option<Side>,            // Buy, Sell
-      pub price: Decimal,                // 신호 발생 시점 가격
-      pub strength: f64,                 // 신호 강도 (0~1)
-
-      /// 신호 생성에 사용된 지표 값들
-      pub indicators: SignalIndicators,
-
-      /// 신호 생성 이유 (사람이 읽을 수 있는 형태)
-      pub reason: String,
-
-      /// 전략 정보
-      pub strategy_id: String,
-      pub strategy_name: String,
-
-      /// 실행 여부 (백테스트에서 실제 체결되었는지)
-      pub executed: bool,
-
-      /// 메타데이터 (확장용)
-      pub metadata: HashMap<String, Value>,
-  }
-
-  /// 신호 생성에 사용된 기술적 지표 값들
-  pub struct SignalIndicators {
-      // 추세 지표
-      pub sma_short: Option<Decimal>,
-      pub sma_long: Option<Decimal>,
-      pub ema_short: Option<Decimal>,
-      pub ema_long: Option<Decimal>,
-
-      // 모멘텀 지표
-      pub rsi: Option<f64>,
-      pub macd: Option<Decimal>,
-      pub macd_signal: Option<Decimal>,
-      pub macd_histogram: Option<Decimal>,
-
-      // 변동성 지표
-      pub bb_upper: Option<Decimal>,
-      pub bb_middle: Option<Decimal>,
-      pub bb_lower: Option<Decimal>,
-      pub atr: Option<Decimal>,
-
-      // TTM Squeeze
-      pub squeeze_on: Option<bool>,
-      pub squeeze_momentum: Option<Decimal>,
-
-      // 구조적 피처 (StructuralFeatures 연동)
-      pub route_state: Option<RouteState>,
-      pub range_pos: Option<f64>,
-      pub vol_quality: Option<f64>,
-  }
-  ```
-- [x] ✅ `SignalMarkerRepository` 구현 (저장/조회) → [signal_marker.rs](crates/trader-api/src/repository/signal_marker.rs)
-- [x] ✅ 백테스트 엔진에서 SignalMarker 자동 기록 → [engine.rs:533](crates/trader-analytics/src/backtest/engine.rs#L533)
-  ```rust
-  // engine.rs에서 신호 발생 시 마커 생성
-  fn process_signal(&mut self, signal: &Signal, kline: &Kline) {
-      let marker = SignalMarker::from_signal(signal, kline, &self.indicators);
-      self.signal_markers.push(marker);
-      // ... 기존 로직
-  }
-  ```
-- [x] ✅ 지표 패턴 검색 API → [signals.rs:184](crates/trader-api/src/routes/signals.rs#L184)
-
-**API 엔드포인트**
-- [x] ✅ `GET /api/v1/signals/by-symbol` - 심볼별 신호 마커 조회 → [signals.rs:226](crates/trader-api/src/routes/signals.rs#L226)
-- [x] ✅ `GET /api/v1/signals/markers/backtest/{id}` - 백테스트 결과의 신호 목록 *2026-02-03 구현* → [signals.rs:330](crates/trader-api/src/routes/signals.rs#L330)
-- [x] ✅ `POST /api/v1/signals/search` - 지표 조건 검색 → [signals.rs:184](crates/trader-api/src/routes/signals.rs#L184)
-- [x] ✅ `GET /api/v1/signals/by-strategy` - 전략별 신호 조회 → [signals.rs:270](crates/trader-api/src/routes/signals.rs#L270)
-
-**텔레그램 알림 연동**
-- [x] ✅ `SignalAlertService` 기본 구조체 → [signal_alert.rs:96](crates/trader-api/src/services/signal_alert.rs#L96)
-- [x] ✅ `AlertRule` 구조체 *2026-02-03 구현* → [alert.rs](crates/trader-core/src/domain/alert.rs)
-- [x] ✅ `AlertCondition` enum *2026-02-03 구현* → [alert.rs](crates/trader-core/src/domain/alert.rs)
-  - Indicator, Price, RouteStateChange, GlobalScore, And, Or
-- [x] ✅ `IndicatorFilter` 구조체 *2026-02-03 구현* → [alert.rs](crates/trader-core/src/domain/alert.rs)
-- [x] ✅ `ComparisonOperator` enum *2026-02-03 구현* (Eq, Ne, Gt, Gte, Lt, Lte, Between, CrossAbove, CrossBelow)
-  ```rust
-  pub struct SignalAlertService {
-      telegram: TelegramNotifier,
-      alert_rules: Vec<AlertRule>,
-  }
-
-  /// 알림 규칙 정의
-  pub struct AlertRule {
-      pub name: String,
-      pub conditions: AlertConditions,
-      pub enabled: bool,
-  }
-
-  pub struct AlertConditions {
-      pub signal_types: Vec<SignalType>,      // Entry, Exit 등
-      pub min_strength: Option<f64>,          // 최소 신호 강도
-      pub route_states: Vec<RouteState>,      // ATTACK, ARMED 등
-      pub symbols: Option<Vec<String>>,       // 특정 심볼만 (None=전체)
-      pub strategies: Option<Vec<String>>,    // 특정 전략만
-      pub indicator_filters: Vec<IndicatorFilter>,  // RSI < 30 등
-  }
-
-  impl SignalAlertService {
-      /// 신호 발생 시 규칙 검사 후 알림 전송
-      pub async fn on_signal(&self, marker: &SignalMarker) -> Result<()> {
-          for rule in &self.alert_rules {
-              if rule.matches(marker) {
-                  self.send_alert(rule, marker).await?;
-              }
-          }
-          Ok(())
-      }
-
-      /// 텔레그램 메시지 포맷
-      fn format_message(&self, marker: &SignalMarker) -> String {
-          format!(
-              "🚨 *{} 신호*\n\
-               종목: `{}`\n\
-               유형: {} (강도: {:.0}%)\n\
-               가격: {}\n\
-               상태: {:?}\n\
-               ─────────────\n\
-               RSI: {:.1} | MACD: {}\n\
-               전략: {}",
-              marker.side.map(|s| s.to_string()).unwrap_or_default(),
-              marker.symbol,
-              marker.signal_type,
-              marker.strength * 100.0,
-              marker.price,
-              marker.indicators.route_state,
-              marker.indicators.rsi.unwrap_or(0.0),
-              marker.indicators.macd.map(|m| m.to_string()).unwrap_or("-".into()),
-              marker.strategy_name,
-          )
-      }
-  }
-  ```
-- [ ] ❌ 알림 규칙 설정 API **미구현**
-  - [ ] `GET /api/v1/alerts/rules` - 알림 규칙 목록
-  - [ ] `POST /api/v1/alerts/rules` - 규칙 생성
-  - [ ] `PUT /api/v1/alerts/rules/{id}` - 규칙 수정
-  - [ ] `DELETE /api/v1/alerts/rules/{id}` - 규칙 삭제
-- [ ] ❌ 기본 제공 알림 규칙 **미구현**
-  - ATTACK 상태 진입 시 알림
-  - 고강도(strength > 0.8) 진입 신호
-  - RSI 극단값(< 25 또는 > 75) 신호
-
-**활용 시나리오**:
-1. **전략 디버깅**: "왜 이 시점에 매수했는가?" → 당시 RSI=28, MACD 골든크로스 확인
-2. **패턴 학습**: RSI 30 이하에서 진입한 신호들의 성과 분석
-3. **백테스트 시각화**: 차트에 진입/청산 포인트와 지표값 표시
-4. **실거래 검증**: 백테스트 신호 vs 실제 신호 비교
-5. **실시간 알림**: ATTACK 상태 진입, 고강도 신호 발생 시 즉시 텔레그램 알림
-
-**예상 시간**: 20시간 (2.5일) - 텔레그램 알림 포함
-
----
-
-### Phase 1-D: 검증 및 통합 (0.5주, 순차)
-
-#### 1.4.1. Global Score 시스템
-
-**[의존성: P1-A 완료 후]**
-
-**목적**: 모든 기술적 지표를 단일 점수(0~100)로 종합
-
-**구현 항목**
-- [x] ✅ `GlobalScorer` 구현 (trader-analytics) → [global_scorer.rs](crates/trader-analytics/src/global_scorer.rs)
-  - [x] ✅ 7개 팩터 가중치 (RR 0.25, T1 0.18, SL 0.12, NEAR 0.12, MOM 0.10, LIQ 0.13, TEC 0.10) → [global_scorer.rs:56-79](crates/trader-analytics/src/global_scorer.rs#L56-L79)
-  - [x] ✅ 페널티 시스템 7개 → [global_scorer.rs:17-23](crates/trader-analytics/src/global_scorer.rs#L17-L23)
-  - [x] ✅ 정규화 유틸리티 (GlobalScorerParams) → [global_scorer.rs:82-126](crates/trader-analytics/src/global_scorer.rs#L82-L126)
-- [x] ✅ `LiquidityGate` 시장별 설정 → [liquidity_gate.rs](crates/trader-analytics/src/liquidity_gate.rs)
-- [x] ✅ `ERS (Entry Ready Score)` 계산 → GlobalScorer::calculate의 momentum 팩터에 포함
-
-**API**
-- [x] ✅ `POST /api/v1/ranking/global` - 글로벌 랭킹 조회 → [ranking.rs:calculate_global](crates/trader-api/src/routes/ranking.rs)
-- [x] ✅ `GET /api/v1/ranking/top?market=KR&n=10` - TOP N 조회 → [ranking.rs:get_top_ranked](crates/trader-api/src/routes/ranking.rs)
-- [ ] 스크리닝 API에 `global_score` 필드 추가
-
-**전략 연동**:
-- 레지스트리 패턴으로 Global Score 기반 종목 자동 선택
-- 점수 기반 포지션 사이징 (공통 로직 모듈 활용)
-
-**예상 시간**: 1주
-
----
-
-#### 1.4.2 Multiple KLine Period (다중 타임프레임) ⭐ 신규
-
-**[병렬 가능: P1-C 완료 후]**
-
-**목적**: 단일 전략에서 여러 타임프레임의 캔들 데이터를 동시에 활용하여 더 정교한 매매 신호 생성
-
-**참조 문서**: `docs/multiple_kline_period_requirements.md` (상세 요구사항 및 구현 방법론)
-
-**현재 한계**:
-- 전략은 생성 시 지정한 단일 Timeframe만 사용 가능
-- 멀티 타임프레임 분석(MTF Analysis) 불가능
-- 장기 추세 + 단기 진입 타이밍 조합 불가
-
-**구현 단계** (총 6 Phase, 7주):
-
-##### Phase 1: 데이터 모델 확장 (1주)
-- [x] `MultiTimeframeConfig` 구조체 정의 ✅ *2026-02-03 구현*
-  ```rust
-  // crates/trader-core/src/domain/context.rs
-  pub struct MultiTimeframeConfig {
-      pub timeframes: HashMap<Timeframe, usize>,  // TF별 캔들 개수
-      pub primary_timeframe: Option<Timeframe>,   // 기본 타임프레임
-      pub auto_sync: bool,                        // 자동 동기화 여부
-  }
-  ```
-- [ ] `StrategyConfig`에 `multi_timeframe` 필드 추가
-- [ ] DB 스키마 확장 (`strategies.secondary_timeframes` 컬럼)
-- [ ] 유효성 검증 (Secondary는 Primary보다 큰 TF만 허용)
-
-##### Phase 2: 데이터 조회 API (1주)
-- [x] `AnalyticsProviderImpl::fetch_multi_timeframe_klines()` 구현 ✅ *2026-02-03 구현*
-  ```rust
-  // crates/trader-analytics/src/analytics_provider_impl.rs
-  pub async fn fetch_multi_timeframe_klines(
-      &self,
-      ticker: &str,
-      config: &MultiTimeframeConfig,
-  ) -> Result<Vec<(Timeframe, Vec<Kline>)>, AnalyticsError>
-
-  pub async fn fetch_multi_timeframe_klines_batch(
-      &self,
-      tickers: &[&str],
-      config: &MultiTimeframeConfig,
-  ) -> Result<HashMap<String, Vec<(Timeframe, Vec<Kline>)>>, AnalyticsError>
-  ```
-- [ ] Redis 멀티키 조회 최적화 (병렬 GET)
-- [ ] PostgreSQL 단일 쿼리 최적화 (UNION ALL)
-- [ ] 타임프레임별 차등 TTL 설정
-- [ ] 성능 테스트 (목표: 3 TF 조회 < 50ms)
-
-##### Phase 3: Context Layer 통합 (1주)
-- [x] `StrategyContext`에 `klines_by_timeframe` 필드 추가 ✅ *2026-02-03 구현*
-  ```rust
-  // crates/trader-core/src/domain/context.rs
-  pub struct StrategyContext {
-      pub klines_by_timeframe: HashMap<String, HashMap<Timeframe, Vec<Kline>>>,
-      // ticker → (timeframe → klines)
-  }
-
-  impl StrategyContext {
-      pub fn get_klines(&self, ticker: &str, tf: Timeframe) -> &[Kline];
-      pub fn get_multi_timeframe_klines(&self, ticker: &str, tfs: &[Timeframe]) -> Vec<(Timeframe, &[Kline])>;
-      pub fn get_available_timeframes(&self, ticker: &str) -> Vec<(Timeframe, usize)>;
-      pub fn update_klines(&mut self, ticker: &str, tf: Timeframe, klines: Vec<Kline>);
-      pub fn update_multi_timeframe_klines(&mut self, ticker: &str, data: Vec<(Timeframe, Vec<Kline>)>);
-  }
-  ```
-- [ ] Timeframe Alignment 로직 (미래 데이터 누출 방지)
-- [ ] `StrategyExecutor`에서 멀티 데이터 자동 로드
-
-##### Phase 4: 전략 예제 작성 (1주)
-- [ ] `RsiMultiTimeframeStrategy` 구현
-  - 일봉 RSI > 50 (상승 추세 확인)
-  - 1시간봉 RSI < 30 (과매도 진입)
-  - 5분봉 RSI 반등 (실제 진입 타이밍)
-- [ ] `MovingAverageCascadeStrategy` 구현
-  - 주봉 200MA, 일봉 50MA, 1시간 20MA 계층 분석
-- [ ] 헬퍼 함수 작성 (`analyze_trend`, `combine_signals` 등)
-- [ ] 유닛/통합 테스트
-
-##### Phase 5: SDUI 및 API (1.5주)
-- [ ] SDUI 스키마에 멀티 타임프레임 선택 UI 추가
-  ```json
-  {
-    "type": "multi-select",
-    "id": "secondary_timeframes",
-    "label": "보조 타임프레임 (최대 2개)",
-    "validation": "larger_than_primary"
-  }
-  ```
-- [ ] API 엔드포인트 수정
-  - `POST /api/v1/strategies`: `multi_timeframe_config` 필드
-  - `GET /api/v1/strategies/{id}/timeframes`: TF 설정 조회
-  - `GET /api/v1/klines/multi`: 멀티 TF 데이터 조회 (디버깅용)
-- [ ] 프론트엔드 `MultiTimeframeSelector.tsx` 컴포넌트
-
-##### Phase 6: 백테스트/실시간 통합 (1.5주)
-- [ ] 백테스트 엔진에서 타임스탬프별 Secondary 데이터 정렬
-- [ ] 히스토리 캐싱으로 성능 최적화
-- [ ] WebSocket 멀티 스트림 구독
-  ```rust
-  let streams = vec![
-      format!("{}@kline_5m", symbol),
-      format!("{}@kline_1h", symbol),
-      format!("{}@kline_1d", symbol),
-  ];
-  ```
-- [ ] Primary TF 완료 시에만 전략 재평가
-- [ ] 통합 테스트 및 부하 테스트
-
-**사용 예시**:
-```rust
-// RSI 멀티 타임프레임 전략
-impl Strategy for RsiMultiTimeframeStrategy {
-    async fn analyze(&self, ctx: &StrategyContext) -> Result<Signal> {
-        // Primary (5분)
-        let klines_5m = ctx.primary_klines()?;
-        let rsi_5m = calculate_rsi(klines_5m, 14);
-        
-        // Secondary (1시간)
-        let klines_1h = ctx.get_klines(Timeframe::H1)?;
-        let rsi_1h = calculate_rsi(klines_1h, 14);
-        
-        // Secondary (일봉)
-        let klines_1d = ctx.get_klines(Timeframe::D1)?;
-        let rsi_1d = calculate_rsi(klines_1d, 14);
-        
-        // 계층적 필터링
-        if rsi_1d > 50.0 && rsi_1h < 30.0 && rsi_5m < 30.0 {
-            return Ok(Signal::Buy);  // 일봉 상승 + 시간/분봉 과매도
-        }
-        
-        Ok(Signal::Hold)
-    }
-}
-```
-
-**성능 목표**:
-- 3개 타임프레임 조회: < 50ms (캐시 히트)
-- 메모리 사용: < 10MB/전략
-- 백테스트 정확도: 100% (실시간과 일치)
-
-**효과**:
-- 신호 신뢰도 향상 (장기 추세 + 단기 타이밍)
-- 허위 신호 필터링 (멀티 TF 합의 필요)
-- 전문적인 MTF 분석 기법 적용
-- 전략 다양성 확대
-
-**예상 시간**: 7주 (Phase 1-4: 4주 MVP, Phase 5-6: 3주 개선)
-
----
-
-### 1.4.3. 전략 연계 (스크리닝 활용)
-
-**[의존성: P1-A,P1-B,P1-C 완료 후]**
-
-**구현 항목**
-- [x] ✅ 전략에서 스크리닝 결과 활용 인터페이스 정의 → [screening_integration.rs](crates/trader-strategy/src/strategies/common/screening_integration.rs)
-  - ⚠️ **미연동**: 전략에서 실제 호출하지 않음 (테스트에서만 사용)
-- [ ] 코스닥 급등주 전략: ATTACK 상태 종목만 진입 ← **미연동**
-- [ ] 스노우볼 전략: 저PBR+고배당 + Global Score 상위 ← **미연동**
-- [ ] 섹터 모멘텀 전략: 섹터별 TOP 5 자동 선택 ← **미연동**
-- [x] ✅ 참고 구현: `grid.rs`의 `can_enter()` 패턴 → [grid.rs:218-264](crates/trader-strategy/src/strategies/grid.rs#L218-L264)
-
-**예상 시간**: 8시간 (전략 연동 작업)
-
----
-
-## Phase 2:  프론트엔드 UI (병렬 가능)
-
-**[의존성: P1 완료 후]**
-
-> **병렬 실행**: Phase 1 완료 후, 아래 항목들은 서로 독립적이므로 동시 진행 가능
-
-> **예상 시간**: 3주
-
-### 2.1. Trading Journal UI ⭐ (백엔드 완료)
-
-**페이지**: `TradingJournal.tsx`
-- [ ] 보유 현황 테이블 (FIFO 원가, 평가손익)
-- [ ] 체결 내역 타임라인
-- [ ] 포지션 비중 차트 (파이/도넛)
-- [ ] 손익 분석 대시보드 (일별/주별/월별/연도별)
-
-**예상 시간**: 1주
-
----
-
-### 2.2. Screening UI (백엔드 완료)
-
-**페이지**: `Screening.tsx`
-- [ ] 필터 조건 입력 폼
-- [ ] 프리셋 선택 UI
-- [ ] 스크리닝 결과 테이블 (정렬, 페이지네이션)
-- [ ] **RouteState 뱃지 컴포넌트** (Phase 1 연동)
-- [ ] 종목 상세 모달 (Fundamental + 미니 차트)
-
-**예상 시간**: 1주
-
----
-
-### 2.3. Global Ranking UI
-
-**페이지**: `GlobalRanking.tsx`
-- [ ] TOP 10 대시보드 위젯
-- [ ] 시장별 필터 (KR-KOSPI, KR-KOSDAQ, US)
-- [ ] **점수 구성 요소 시각화** (레이더 차트)
-- [ ] **RouteState별 필터링**
-
-**예상 시간**: 0.5주
-
----
-
-### 2.4. 캔들 차트 신호 시각화 ⭐ 신규
-
-**[의존성: P1-C1.1 완료 후]**
-
-**목적**: 과거 캔들 데이터에서 기술 신호 발생 지점을 시각적으로 표시
-
-**구현 항목**
-- [ ] `SignalMarkerOverlay` 컴포넌트
-  ```tsx
-  interface SignalMarkerOverlayProps {
-    markers: SignalMarker[];
-    onMarkerClick?: (marker: SignalMarker) => void;
-  }
-
-  // 차트에 마커 아이콘 표시
-  // - 매수 신호: 초록색 위 화살표 ▲
-  // - 매도 신호: 빨간색 아래 화살표 ▼
-  // - 알림 신호: 노란색 점 ●
-  ```
-- [ ] `SignalDetailPopup` - 마커 클릭 시 상세 정보
-  ```tsx
-  // 표시 내용:
-  // - 신호 유형, 강도
-  // - 발생 시점 지표 값 (RSI, MACD 등)
-  // - RouteState
-  // - 전략 이름
-  // - 실행 여부 (체결/미체결)
-  ```
-- [ ] `IndicatorFilterPanel` - 신호 필터링 UI
-  ```tsx
-  // 필터 조건:
-  // - RSI 범위 (예: 30 이하만)
-  // - MACD 크로스 유형
-  // - RouteState (ATTACK, ARMED 등)
-  // - 전략 선택
-  ```
-- [ ] 백테스트 결과 페이지에 차트+신호 통합
-  ```tsx
-  // BacktestResult.tsx
-  <CandlestickChart data={candles}>
-    <SignalMarkerOverlay markers={backtest.signal_markers} />
-    <EquityCurveOverlay data={backtest.equity_curve} />
-  </CandlestickChart>
-  ```
-
-**활용 화면**:
-1. **백테스트 결과 분석**: 진입/청산 지점 시각적 확인
-2. **종목 상세 페이지**: 과거 신호 발생 이력 조회
-3. **전략 디버깅**: 특정 조건의 신호만 필터링하여 분석
-
-**예상 시간**: 1주
-
----
-
-### 2.5. 대시보드 고급 시각화 ⭐ 신규
+### 2.4. 대시보드 고급 시각화 ⭐ 신규
 
 **목적**: 고급 시각화 기능을 프론트엔드에 구현
 
-#### 5.1 시장 심리 지표
-- [ ] `FearGreedGauge` 컴포넌트
-  - RSI + Disparity 기반 0~100 게이지
-  - 5단계 색상 구분 (극단적 공포 → 극단적 탐욕)
-- [ ] `MarketBreadthWidget` - 20일선 상회 비율
+## Phase 3: 프론트엔드 연동
 
-#### 5.2 팩터 분석 차트
-- [ ] `RadarChart7Factor` - 7개 팩터 레이더 (NORM_*)
-- [ ] `ScoreWaterfall` - 점수 기여도 워터폴
-- [ ] `KellyVisualization` - 켈리 자금관리 바
+> 6.5, 6.6, 6.7, 6.8 완료됨 → [8. 완료된 작업](#8-완료된-작업) 참조
 
-#### 5.3 포트폴리오 분석
-- [ ] `CorrelationHeatmap` - TOP 10 상관관계 히트맵
-- [ ] `VolumeProfile` - 매물대 가로 막대 오버레이
-- [ ] `OpportunityMap` - TOTAL vs TRIGGER 산점도
+### 6.8.5 후속 작업 ✅
 
-#### 5.4 상태 관리 UI
-- [ ] `KanbanBoard` - ATTACK/ARMED/WATCH 3열 칸반
-- [ ] `SurvivalBadge` - 생존일 뱃지 (연속 상위권 일수)
-- [ ] `RegimeSummaryTable` - 레짐별 평균 성과
-
-#### 5.5 섹터 시각화
-- [ ] `SectorTreemap` - 거래대금 기반 트리맵
-- [ ] `SectorMomentumBar` - 5일 수익률 Top 10
-
-**예상 시간**: 1.5주 (46시간)
+> 전략 생성/수정 시 TF 설정 저장 완료됨 → [8. 완료된 작업](#8-완료된-작업) 참조
+> 백테스트 TF 선택 UI 완료됨 → [8. 완료된 작업](#8-완료된-작업) 참조
+> 백테스트 API multi_timeframe_config 지원 완료됨 → [8. 완료된 작업](#8-완료된-작업) 참조
 
 ---
 
-### 2.6. 프론트엔드 공통 개선
+#### 6.9 상태 관리 및 아키텍처 개선
 
-**상태 관리 리팩토링**
-- [ ] `createSignal` → `createStore` 통합
-- [ ] `createMemo`로 파생 상태 최적화
-
-**컴포넌트 구조화**
-```
-frontend/src/
-├── components/
-│   ├── strategy/
-│   │   └── SDUIRenderer/    # ⭐ 신규: SDUI 자동 생성
-│   │       ├── SDUIRenderer.tsx
-│   │       ├── SDUISection.tsx
-│   │       ├── SDUIField.tsx
-│   │       └── SDUIValidation.ts
-│   ├── journal/
-│   ├── screening/
-│   ├── charts/        # ⭐ 신규: 시각화 컴포넌트
-│   │   ├── FearGreedGauge.tsx
-│   │   ├── RadarChart7Factor.tsx
-│   │   ├── ScoreWaterfall.tsx
-│   │   ├── CorrelationHeatmap.tsx
-│   │   ├── OpportunityMap.tsx
-│   │   └── KanbanBoard.tsx
-│   └── common/
-├── hooks/
-│   ├── useStrategies.ts
-│   ├── useStrategySchema.ts  # ⭐ 신규: SDUI 스키마 조회
-│   ├── useJournal.ts
-│   ├── useScreening.ts
-│   └── useMarketSentiment.ts  # ⭐ 신규
-└── stores/
-```
-
-**SDUIRenderer 시스템** (Phase 0 SDUI 자동 생성 연동)
-- [ ] `SDUIRenderer` 메인 컴포넌트
-  ```tsx
-  interface SDUIRendererProps {
-    strategyId: string;
-    initialValues?: Record<string, any>;
-    onChange?: (values: Record<string, any>) => void;
-  }
-
-  // API에서 스키마 조회 → Fragment 기반 섹션 자동 렌더링
-  ```
-- [ ] `SDUISection` - Fragment 섹션 렌더링 (접힘 지원)
-- [ ] `SDUIField` - 필드 타입별 입력 컴포넌트 자동 선택
-  - integer/number → NumberInput
-  - boolean → Switch
-  - select → Dropdown
-  - multi_select → Checkboxes
-  - symbol → SymbolAutocomplete
-- [ ] `SDUIValidation` - 실시간 유효성 검증 (min/max, required)
-- [ ] 조건부 필드 표시/숨김 (`condition` 속성 처리)
-- [ ] `useStrategySchema` 훅 - 스키마 캐싱 및 조회
-
-- [ ] 커스텀 훅 추출
-- [ ] Lazy Loading 적용
-
-**예상 시간**: 1주 (SDUIRenderer 포함)
+> **목적**: 프론트엔드 코드 품질 및 성능 개선
 
 ---
 
-## Phase 3 - 품질/성능 개선
+##### 6.9.1 상태 관리 리팩토링
 
-> **병렬 실행**: 시스템 안정성 및 성능 개선 Phase 1/2와 병행 가능
+**createSignal → createStore 통합** ✅ (2026-02-04 완료)
 
-### 성능 최적화
-- [ ] 비동기 락 홀드 최적화 (4시간)
-- [ ] Redis 캐싱 전략 (8시간)
-- [ ] 병렬 백테스트 (4시간)
+| 페이지 | 변환 전 | 변환 후 | 감소율 |
+|--------|---------|---------|--------|
+| Strategies.tsx | ~15 signals | 4 stores | ~73% |
+| TradingJournal.tsx | ~20 signals | 5 stores | ~75% |
+| Screening.tsx | 29 signals | 4 stores | ~86% |
+| Backtest.tsx | 19 signals | 4 stores | ~79% |
+| Dashboard.tsx | 4 signals | 2 stores | 50% |
 
-### 테스트
-- [ ] 핵심 전략 테스트: Grid, RSI, Bollinger (8시간)
-- [ ] API 테스트: strategies, backtest, journal (8시간)
+> 상세 내용: [8. 완료된 작업](#8-완료된-작업) 참조
 
-### 인프라
-- [ ] `CredentialsRepository` 구현 (3시간)
-- [ ] `AlertsRepository` 구현 (3시간)
-- [ ] SQLx 트랜잭션 패턴 완료 (3시간)
+**createMemo 파생 상태 최적화** ✅ (2026-02-04 완료)
 
-### 아키텍처
-- [ ] Service 레이어 도입 (10시간)
-- [ ] `analytics.rs` → Repository 이동
+| 페이지 | createMemo 개수 | 최적화 상태 |
+|--------|-----------------|-------------|
+| Strategies.tsx | 3개 | ✅ 필터링, 카운트 |
+| TradingJournal.tsx | 1개 | ✅ 필터 객체 (리소스 기반) |
+| Screening.tsx | 6개 | ✅ **모범 사례** (필터+정렬+페이지네이션) |
+| GlobalRanking.tsx | 5개 | ✅ 통계, Top10, 워터폴, chartColors |
 
-**총 예상 시간**: 51시간
-
----
-
-## Phase 4 : 선택적/낮은 우선순위
-
-### 외부 데이터 연동
-- [ ] `NewsProvider` trait + Finnhub API
-- [ ] `DisclosureProvider` trait + SEC EDGAR
-- [ ] LLM 분석 (공시/뉴스 감성 분석)
-
-### 텔레그램 봇 명령어 ✅ 완료
-- [x] `/portfolio`, `/status`, `/stop`, `/report`, `/attack` → [bot_handler.rs](crates/trader-notification/src/bot_handler.rs), [telegram_bot.rs](crates/trader-api/src/services/telegram_bot.rs)
-
-### 미구현 전략 (4개)
-- [ ] SPAC No-Loss, All at Once ETF, Rotation Savings, Dual KrStock UsBond
-
-### 추가 거래소
-- [ ] Coinbase, Kraken, Interactive Brokers, 키움증권
-
-### ML 예측 활용
-- [ ] 전략에서 ML 예측 결과 사용
-- [ ] 구조적 피처 기반 모델 재훈련
+> 상세 내용: [8. 완료된 작업](#8-완료된-작업) 참조
 
 ---
 
-## ✅ 완료 현황
+##### 6.9.2 커스텀 훅 추출 ✅ (2026-02-04 완료)
 
-### v0.5.6 완료 (2026-02-02)
+| 훅 | 파일 | 주요 기능 |
+|----|------|----------|
+| useStrategies | `hooks/useStrategies.ts` | CRUD, toggle, clone, filtered() |
+| useJournal | `hooks/useJournal.ts` | positions, executions, PnL 데이터, filter |
+| useScreening | `hooks/useScreening.ts` | results, presets CRUD, search |
+| useMarketSentiment | `hooks/useMarketSentiment.ts` | fearGreed, breadth, sectors, 자동갱신 |
 
-| 기능 | 상태 | 비고 |
-|------|:----:|------|
-| **종목 데이터 관리 시스템** | ✅ | CLI 도구 완성 |
-| CSV 변환 스크립트 | ✅ | KRX 원본 → 표준 형식 (21,968개 종목) |
-| sync-csv 명령 | ✅ | CSV → DB 자동 동기화 |
-| list-symbols 명령 | ✅ | DB 종목 조회 (table/csv/json) |
-| fetch-symbols 명령 | ✅ | 온라인 자동 크롤링 (KR/US/CRYPTO) |
-
-#### 종목 데이터 관리 상세
-
-**1. CSV 변환 (`scripts/convert_krx_new_to_csv.py`)**
-- KRX 정보시스템 원본 CSV (상품 분류별) → 표준 형식 변환
-- EUC-KR 인코딩 자동 처리
-- 21,968개 종목 성공적으로 변환
-- 상세 CSV (metadata 포함) 병행 생성
-
-**2. sync-csv 명령 (`trader sync-csv`)**
-- CSV 파일을 읽어 symbol_info 테이블에 동기화
-- KOSPI/KOSDAQ 자동 판별
-- Yahoo Finance 심볼 자동 생성
-- Upsert로 안전한 업데이트
-- 섹터 정보 선택적 업데이트 지원
-
-**3. list-symbols 명령 (`trader list-symbols`)**
-- DB에서 종목 정보 실시간 조회
-- 시장별 필터링 (KR, US, CRYPTO, ALL)
-- 검색 기능 (종목명/티커)
-- 다중 출력 형식: table (사람), csv (데이터), json (API)
-- 파일 저장 옵션
-
-**4. fetch-symbols 명령 (`trader fetch-symbols`)**
-- **자동 크롤링**: 온라인 소스에서 실시간 수집
-- **데이터 소스**:
-  - KR: KRX 공식 API (전체 종목)
-  - US: Yahoo Finance (주요 500개)
-  - CRYPTO: Binance API (USDT 페어 446개)
-- **기능**:
-  - 시장별 선택 수집 (KR/US/CRYPTO/ALL)
-  - DB 자동 저장
-  - CSV 백업 옵션
-  - 드라이런 모드 (테스트용)
-  - 진행 상황 실시간 표시
-
-**사용 예시**:
-```bash
-# CSV 변환
-python scripts/convert_krx_new_to_csv.py
-
-# DB 동기화
-trader sync-csv --codes data/krx_codes.csv
-
-# 종목 조회
-trader list-symbols --market KR --limit 10
-
-# 자동 크롤링
-trader fetch-symbols --market ALL
-```
-
-### v0.5.7 완료 (2026-02-02) - Phase 0 주요 완료 🎉
-
-**Phase 0 진척도: 85% 완료**
-
-| Phase 0 항목 | 상태 | 비고 |
-|-------------|:----:|------|
-| ✅ 전략 레지스트리 (SchemaRegistry) | 100% | Proc macro + 자동 등록 |
-| ✅ 공통 로직 추출 (4개 모듈) | 100% | indicators, position_sizing, risk_checks, signal_filters |
-| ✅ Journal-Backtest 공통 모듈 | 100% | calculations, statistics 통합 |
-| ✅ TickSizeProvider | 100% | tick_size.rs 구현 완료 |
-| 🟡 StrategyContext | 0% | 다음 버전에서 구현 예정 |
-
-#### 🎯 전략 스키마 시스템
-
-| 컴포넌트 | 파일 | 줄 수 | 설명 |
-|---------|------|------:|------|
-| Proc Macro | trader-strategy-macro/src/lib.rs | 266 | 컴파일 타임 메타데이터 추출 |
-| SchemaRegistry | schema_registry.rs | 694 | 전략 스키마 중앙 관리 |
-| SchemaComposer | schema_composer.rs | 279 | 스키마 조합 시스템 |
-| API 라우트 | routes/schema.rs | 189 | REST API 엔드포인트 |
-| **총계** | | **1,428줄** | **26개 전략 모두 적용** |
-
-**효과**:
-- 전략 추가 시간: 2시간 → 30분 (75% 감소)
-- 프론트엔드 SDUI 자동 생성
-- 타입 안전성 확보 (컴파일 타임 체크)
-
-#### 🧩 공통 전략 컴포넌트
-
-| 모듈 | 줄 수 | 주요 기능 | 제거된 중복 코드 |
-|------|------:|-----------|-----------------|
-| indicators.rs | 349 | SMA, EMA, RSI, MACD, Bollinger, ATR, Stochastic | ~800줄 |
-| position_sizing.rs | 286 | FixedAmount, RiskBased, VolatilityAdjusted, Kelly | ~400줄 |
-| risk_checks.rs | 291 | 포지션/집중도/손실/변동성 한도 | ~350줄 |
-| signal_filters.rs | 372 | 거래량/변동성/시간/추세 필터 | ~450줄 |
-| **총계** | **1,298줄** | | **~2,000줄 중복 제거** |
-
-**효과**:
-- 보일러플레이트 80% 감소
-- 전략 간 일관성 확보
-- 유지보수 비용 대폭 절감
-
-#### 📐 도메인 레이어
-
-| 모듈 | 줄 수 | 주요 기능 |
-|------|------:|-----------|
-| calculations.rs | 374 | 손익/수익률/포지션 가치 계산 (Decimal) |
-| statistics.rs | 514 | 샤프/소르티노/MDD/승률/PF |
-| tick_size.rs | 335 | 시장별 최소 호가 단위 |
-| schema.rs | 343 | 공통 도메인 스키마 |
-| **총계** | **1,566줄** | |
-
-**효과**:
-- 백테스트-실거래 로직 통합
-- 금융 계산 정밀도 향상
-- 시장별 주문 정확도 향상
-
-#### 🛠️ CLI 도구
-
-| 명령어 | 줄 수 | 기능 |
-|--------|------:|------|
-| fetch_symbols | 365 | KRX/Yahoo/Binance 심볼 크롤링 |
-| list_symbols | 244 | 심볼 조회/필터링 (CSV/JSON) |
-| sync_csv | 120 | KRX CSV 동기화 |
-| **총계** | **729줄** | |
-
-#### 📊 기타 개선
-
-- **journal_integration.rs** (280줄): 매매 일지 백테스트 통합
-- **26개 전략 리팩토링**: 평균 ~50줄씩 감소
-- **API 라우트 정리**: strategies.rs 163줄 감소
-- **Symbol 타입 확장**: Yahoo 변환 로직 추가
-
-#### 📚 문서
-
-| 문서 | 줄 수 | 내용 |
-|------|------:|------|
-| tick_size_guide.md | 245 | 시장별 틱 사이즈 가이드 |
-| development_rules.md | +299 | v1.1: 180+ 규칙 체계화 |
-| prd.md | +67 | 전략 스키마 시스템 명세 |
+> 상세 내용: [8. 완료된 작업](#8-완료된-작업) 참조
 
 ---
 
-### v0.5.5 완료 (2026-02-01)
+##### 6.9.3 성능 최적화 ✅ (2026-02-04 완료)
 
-| 모듈 | 상태 | 비고 |
-|------|:----:|------|
-| Backend API (24개 라우트) | 98% | Journal 14개 API 포함 |
-| Frontend (7 페이지, 15+ 컴포넌트) | 95%+ | |
-| 전략 (26개 구현) | 100% | |
-| ML (훈련 + ONNX 추론) | 95% | |
-| 거래소 (Binance, KIS) | 90-95% | |
-| 테스트 (258개 단위 + 28개 통합) | ✅ | |
+**Lazy Loading 적용** ✅
+- 11개 페이지 모두 `lazy()` + `Suspense` 적용
+- `PageLoader` 컴포넌트로 로딩 UI 제공
 
-### v0.5.5 신규 구현
+**코드 스플리팅 (manualChunks)** ✅
+- 벤더 라이브러리 별도 청크 분리로 캐싱 효율화
 
-| 기능 | 상태 |
-|------|:----:|
-| Trading Journal 백엔드 (14개 API) | ✅ |
-| FIFO 원가 추적 (CostBasisTracker) | ✅ |
-| API Retry 시스템 (지수 백오프, 지터) | ✅ |
-| Circuit Breaker 에러 분류 (4개 카테고리) | ✅ |
-| 동적 슬리피지 모델 (4개 모델) | ✅ |
-| 브라켓 주문 (스탑/익절 OCO) | ✅ |
-| 포지션 동기화 (PositionSync) | ✅ |
-| SQL Injection 방지 | ✅ |
-| 시간대별 거래 제한 (TradingTimezone) | ✅ |
-
-### v0.4.x 완료
-
-| 기능 | 버전 |
-|------|------|
-| OpenAPI/Swagger 문서화 | v0.4.4 |
-| StrategyType enum (26개) | v0.4.4 |
-| Repository 9개 구현 | v0.4.3~v0.4.5 |
-| Graceful Shutdown | v0.4.5 |
-| rustfmt/clippy 설정 | v0.4.5 |
-| 입력 검증 강화 | v0.4.5 |
-| unwrap() 39개 제거 | v0.4.5 |
-
----
-
-## 📊 예상 시간 요약
-
-| Phase | 카테고리 | 예상 시간 | 의존성 |
-|:-----:|----------|----------:|:------:|
-| ⚙️ 0 | **기반 작업** (레지스트리, 공통 로직, StrategyContext, TickSize, **공통 모듈**) | **2.5주** | - |
-| 🔴 1 | 핵심 기능 (Features, RouteState, **REGIME**, **TRIGGER**, **TTM**, Global Score, **SignalMarker**, 전략 연계) | **4주** | Phase 0 |
-| 🟡 2 | 프론트엔드 UI (Journal, Screening, Ranking, **신호 시각화**) | **3.5주** | Phase 1 |
-| 🟢 3 | 품질/성능 개선 | **51시간** | 병행 가능 |
-| 🟣 4 | 선택적 | - | - |
-
-**v0.6.0 목표 (Phase 0 + 1 + 2)**: ~10주
-
-### Phase 0 상세 시간 (기반 작업 - 코드 재사용의 핵심)
-
-| 항목 | 예상 시간 | 효과 |
-|------|----------:|------|
-| 전략 레지스트리 | 28시간 | 전략 추가 2시간→30분, 모든 전략에 일괄 기능 적용 |
-| 공통 로직 추출 | 12시간 | 보일러플레이트 80% 감소 |
-| **StrategyContext** | **20시간** | **거래소 정보 + 분석 결과 통합, 충돌 방지** |
-| TickSizeProvider | 4시간 | 백테스트/주문 정확도 향상 |
-| **Journal-Backtest 공통 모듈** | **12시간** | **P&L/통계 로직 통합, 코드 중복 40-50% 감소** |
-| **총계** | **76시간 (2.5주)** | |
-
-### Phase 1 상세 시간
-
-| 항목 | 예상 시간 | 효과 |
-|------|----------:|------|
-| StructuralFeatures | 1주 | 구조적 피처 6개, 공통 모듈 재사용 |
-| RouteState | 0.5주 | 5단계 상태 판정 |
-| **MarketRegime** | **4시간** | 5단계 추세 분류 |
-| **TRIGGER 시스템** | **8시간** | 진입 트리거 + 캔들 패턴 |
-| **TTM Squeeze 상세** | **6시간** | KC vs BB 로직, 연속일수 |
-| **Macro Filter** | **6시간** | USD/KRW, 나스닥 모니터링 |
-| **Market Breadth** | **4시간** | 시장 온도, Above_MA20 비율 |
-| **추가 기술적 지표** | **8시간** | HMA, OBV, SuperTrend, 캔들패턴 |
-| **Sector RS** | **4시간** | 섹터 상대강도 |
-| **Reality Check** | **6시간** | 추천 검증 시스템 |
-| Global Score | 1주 | 7개 팩터 + 페널티 시스템 |
-| **SignalMarker + 알림** | **20시간** | **기술 신호 저장 + 텔레그램 알림 연동** |
-| 전략 연계 | 8시간 | 스크리닝+포지션 연동 |
-| **총계** | **~4주** | |
-
-### Phase 2 상세 시간
-
-| 항목 | 예상 시간 | 효과 |
-|------|----------:|------|
-| Trading Journal UI | 1주 | 보유현황, 체결내역, 손익분석 |
-| Screening UI | 1주 | 필터, 프리셋, RouteState 뱃지 |
-| Global Ranking UI | 0.5주 | TOP 10, 점수 시각화 |
-| **캔들 차트 신호 시각화** | **1주** | **신호 마커, 지표 필터링** |
-| 프론트엔드 공통 개선 | 0.5주 | 상태 관리, 컴포넌트 구조화 |
-
----
-
-## 🔵 핵심 워크플로우 (v0.6.0)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Phase 0 완료 후                                            │
-│  ┌─────────────┐                                            │
-│  │ 전략 등록   │ ← register_strategy! 매크로로 1줄 등록    │
-│  └──────┬──────┘                                            │
-│         ▼                                                    │
-│  ┌─────────────┐     ┌─────────────┐                        │
-│  │ 스크리닝    │ ──▶ │ RouteState  │ ATTACK 종목 필터      │
-│  └──────┬──────┘     └──────┬──────┘                        │
-│         │                   │                               │
-│         ▼                   ▼                               │
-│  ┌─────────────┐     ┌─────────────┐                        │
-│  │ Global Score│ ──▶ │ TOP 10     │ 자동 포지션 사이징    │
-│  └──────┬──────┘     └──────┬──────┘                        │
-│         │                   │                               │
-│         ▼                   ▼                               │
-│  ┌─────────────┐     ┌─────────────┐                        │
-│  │ 백테스트    │ ──▶ │ 시뮬레이션  │ TickSize 반영        │
-│  └──────┬──────┘     └─────────────┘                        │
-│         │                                                    │
-│         ▼                                                    │
-│  ┌─────────────┐     ┌─────────────┐                        │
-│  │ 실전 운용   │ ──▶ │ 매매 일지   │ FIFO 손익 추적       │
-│  └─────────────┘     └─────────────┘                        │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 📚 참조 문서
-
-| 문서 | 위치 | 용도 |
+| 청크 | 크기 | 설명 |
 |------|------|------|
-| PRD | `docs/prd.md` | 제품 요구사항 정의서 |
-| Python 전략 모듈 | `docs/python_strategy_modules.md` | Global Score, RouteState 상세 스펙 |
-| 개선 로드맵 | `docs/improvement_todo.md` | 코드베이스 개선 상세 |
-| CLAUDE.md | 루트 | 프로젝트 구조, 에이전트 지침 |
+| `index.js` | 12.5 KB | 진입점 (이전 1,512 KB → **99% 감소**) |
+| `vendor-echarts` | 674 KB | 차트 라이브러리 (필요 시 로드) |
+| `vendor-lightweight-charts` | 175 KB | 캔들 차트 라이브러리 |
+| `vendor-solid` | 45 KB | SolidJS 코어 |
+| `vendor-tanstack` | 37 KB | 쿼리 라이브러리 |
+| `vendor-lucide` | 22 KB | 아이콘 라이브러리 |
+
+> 상세 내용: [8. 완료된 작업](#8-완료된-작업) 참조
+
+**추가 최적화** ✅ (2026-02-04 완료)
+- 가상 스크롤 (`@tanstack/solid-virtual`) → `VirtualizedTable` 컴포넌트
+- 이미지 Lazy Loading → `LazyImage`, `NativeLazyImage` 컴포넌트
+- 디바운스/쓰로틀 → `useDebounce`, `useDebouncedCallback`, `useThrottledCallback` 훅
+
+---
+
+##### 6.1. 통합 및 테스트
+- [ ] 전략 추가 모달에 적용
+- [ ] 백테스트 설정에 적용
+- [ ] 스키마 없는 전략 fallback UI
+- [ ] 브라우저 테스트 (Chrome, Firefox, Safari)
+- [ ] 반응형 레이아웃 확인
+
+---
+
+## 7. 백엔드 API 상세 ✅ (완료)
+
+> 7.1~7.6 백엔드 구현 완료 → [8. 완료된 작업](#8-완료된-작업) 참조
+
+**프론트엔드 연동 완료:**
+- [x] 관심종목 UI (WatchlistSelectModal 컴포넌트) ✅
+- [x] 전략 연결 UI (StrategyLinkModal 컴포넌트) ✅
+- [x] 프리셋 저장/삭제 모달 UI (PresetModal 컴포넌트) ✅
+- [x] 7Factor 레이더 차트 7축 확장 (RadarChart.tsx) ✅
+- [x] FIFO 원가 표시 (PositionDetailModal) ✅
+- [x] 고급 통계 표시 (TradingInsightsResponse) ✅
+
+---
+
+## 8. 완료된 작업
+
+> 이 섹션은 완료된 작업들의 기록입니다.
+
+### Phase 2 프론트엔드 UI (완료)
+
+#### 2.1. Screening UI ✅
+**페이지**: `Screening.tsx`
+- 필터 조건 입력 폼, 프리셋 선택 UI
+- 결과 테이블 (정렬/페이지네이션)
+- RouteState 뱃지, 종목 상세 모달
+- 시장별 필터 (KOSPI/KOSDAQ), RouteState 다중 선택, RSI 필터
+
+#### 2.2. Global Ranking UI ✅
+**페이지**: `GlobalRanking.tsx`
+- 시장별 필터, 레이더 차트, RouteState 필터링
+- `RankingWidget.tsx` → Dashboard.tsx 통합
+
+#### 2.3. 캔들 차트 신호 시각화 ✅
+- `SignalMarkerOverlay` 컴포넌트
+- `IndicatorFilterPanel` 컴포넌트
+- 백테스트 결과 페이지 차트+신호 통합
+
+---
+
+### Phase 3 백엔드 API (완료)
+
+#### 3.1 관심종목 API ✅
+- `watchlist` 테이블 마이그레이션
+- `WatchlistRepository` 구현
+- API: `GET/POST /watchlist`, `POST/DELETE /watchlist/{id}/items`
+
+#### 3.2 전략 symbols 연결 API ✅
+- `PUT /api/v1/strategies/{id}/symbols`
+
+#### 3.3 프리셋 저장/삭제 API ✅
+- `POST /api/v1/screening/presets`
+- `DELETE /api/v1/screening/presets/{id}`
+
+#### 3.4 7Factor 데이터 API ✅
+- `SevenFactorCalculator` 구현 (7개 팩터 정규화)
+- `GET /api/v1/ranking/7factor/{ticker}`
+- `POST /api/v1/ranking/7factor/batch`
+
+#### 3.5 FIFO 원가 계산 API ✅
+- `CostBasisTracker` 모듈
+- `GET /api/v1/journal/cost-basis/{symbol}`
+
+#### 3.6 고급 거래 통계 API ✅
+- `max_consecutive_wins`, `max_consecutive_losses` 계산
+- `max_drawdown`, `max_drawdown_pct` 계산
+- `TradingInsightsResponse`에 필드 추가
+
+---
+
+### 매매일지 UI (완료)
+
+#### 6.3.1 보유 현황 테이블 ✅
+- DataTable 정렬, 컬럼 정의
+- 행 클릭 → 상세 모달 (PositionDetailModal)
+- 비중 막대 표시
+
+#### 6.3.2 체결 내역 타임라인 ✅
+- 날짜별 그룹핑, 타임라인 UI
+- 체결 노드 정보, 페이지네이션 연동
+- 날짜 범위/종목/매수매도 필터
+
+#### 6.3.3 포지션 비중 차트 ✅
+- ECharts 도넛 차트
+- 종목별 평가금액 비중, 툴팁, 범례
+- 클릭 시 상세 모달
+
+#### 6.3.4 손익 분석 대시보드 ✅
+- 일별/주별/월별/연도별 손익
+- 누적 손익 차트
+
+---
+
+### Phase 3 프론트엔드 연동 (완료)
+
+#### 3.7 관심종목 UI ✅
+- `WatchlistSelectModal` 컴포넌트 (관심종목 그룹 선택/생성)
+- `SymbolDetailModal` → 관심종목 추가 버튼 연동
+
+#### 3.8 전략 연결 UI ✅
+- `StrategyLinkModal` 컴포넌트 (전략 연결/해제)
+- `SymbolDetailModal` → 전략 연결 버튼 연동
+
+#### 3.9 프리셋 저장/삭제 모달 ✅
+- `PresetModal` 컴포넌트 (저장/삭제/목록)
+- `Screening.tsx` → 프리셋 관리 버튼 연동
+
+#### 3.10 7Factor 레이더 차트 ✅
+- `RadarChart.tsx` LABEL_MAP에 7Factor 키 추가
+- norm_momentum, norm_value, norm_quality, norm_volatility, norm_liquidity, norm_growth, norm_sentiment
+
+#### 3.11 FIFO 원가 표시 ✅
+- `PositionDetailModal`에 FIFO 분석 섹션 추가
+- 평균 원가, 총 원가, 실현손익, 매수/매도 횟수, Lot 수
+
+#### 3.12 고급 통계 표시 ✅
+- `TradingInsightsResponse` 연동 완료
+- max_consecutive_wins, max_consecutive_losses, max_drawdown
+
+---
+
+### Phase 4 시각화 컴포넌트 (완료)
+
+#### 4.1 FearGreedGauge ✅
+- `frontend/src/components/charts/FearGreedGauge.tsx`
+- ECharts Gauge 차트로 반원형 게이지 구현
+- 5단계 색상 구분 (극단적 공포 → 극단적 탐욕)
+- Market Breadth API 연동
+
+#### 4.2 MarketBreadthWidget ✅
+- `frontend/src/components/charts/MarketBreadthWidget.tsx`
+- KOSPI/KOSDAQ/전체 프로그레스 바
+- 온도 뱃지 (과열/중립/냉각)
+- 범례 및 추천 표시
+
+#### 4.3 SurvivalBadge ✅
+- `frontend/src/components/ui/SurvivalBadge.tsx`
+- 4단계 스트릭 레벨 (cold→warm→hot→fire)
+- `DualSurvivalBadge` (승/패 동시 표시)
+- `StreakSummaryCard` (카드 형태 요약)
+
+#### 4.4 ScoreWaterfall ✅
+- `frontend/src/components/charts/ScoreWaterfall.tsx`
+- ECharts 워터폴 차트로 점수 기여도 표시
+- `Factor7Waterfall` (7Factor 전용 래퍼)
+- 양수/음수 색상 구분
+
+#### 4.5 SectorTreemap ✅
+- `frontend/src/components/charts/SectorTreemap.tsx`
+- `TreemapChart` 래퍼 (섹터 전용)
+- 섹터 API 연동 (getSectorRanking)
+- `SectorSummaryCard` (섹터 요약 카드)
+
+#### 4.6 KellyVisualization ✅
+- `frontend/src/components/charts/KellyVisualization.tsx`
+- 켈리 공식 기반 자금관리 시각화
+- Half Kelly / Full Kelly 마커
+- 위험 한도 영역 표시
+- 과대/과소 배분 경고
+
+#### 4.7 CorrelationHeatmap ✅
+- `frontend/src/components/charts/CorrelationHeatmap.tsx`
+- ECharts 히트맵으로 N×N 상관관계 행렬 표시
+- -1~+1 색상 스케일 (빨강-흰색-파랑)
+- `MiniCorrelationMatrix` (간단한 테이블 형식)
+
+#### 4.8 OpportunityMap ✅
+- `frontend/src/components/charts/OpportunityMap.tsx`
+- TOTAL vs TRIGGER 2D 산점도
+- RouteState별 색상 코딩 (ATTACK/ARMED/WATCH/AVOID)
+- 4분면 라벨 표시
+- 점 크기: 시가총액/거래량 기반
+
+#### 4.9 KanbanBoard ✅
+- `frontend/src/components/charts/KanbanBoard.tsx`
+- ATTACK/ARMED/WATCH 3열 칸반 레이아웃
+- 드래그 앤 드롭 상태 변경
+- 종목 카드: 스파크라인, 등락률, 점수
+- 점수 순 자동 정렬
+
+#### 4.10 RegimeSummaryTable ✅
+- `frontend/src/components/charts/RegimeSummaryTable.tsx`
+- Bull/Bear/Sideways 레짐별 성과 테이블
+- 기간, 평균 수익률, 변동성, 최대 DD 표시
+- 현재 레짐 하이라이트
+- 레짐 전환 히스토리 차트
+
+#### 4.11 SectorMomentumBar ✅
+- `frontend/src/components/charts/SectorMomentumBar.tsx`
+- 수평 막대 차트 (5일 수익률)
+- TOP 10 / BOTTOM 10 탭 전환
+- 색상: 양수 초록, 음수 빨강
+- 섹터 클릭 시 상세
+
+#### 4.12 VolumeProfile ✅
+- `frontend/src/components/charts/VolumeProfile.tsx`
+- 가격대별 거래량 수평 막대 차트
+- POC (Point of Control) 강조
+- Value Area (70% 거래량) 표시
+- 캔들 차트 Y축 동기화 지원
+- `VolumeProfileLegend` (범례 컴포넌트)
+
+#### 4.13 MultiSymbolInput 개선 ✅
+- `frontend/src/components/strategy/SDUIRenderer/fields/MultiSymbolInput.tsx`
+- `maxCount` prop으로 최대 개수 제한
+- 드래그 앤 드롭 순서 변경 지원
+- 순서 번호 표시
+- 남은 추가 가능 개수 표시
+
+---
+
+### Phase 4 캔들 차트 신호 시각화 (완료)
+
+#### 4.14 IndicatorFilterPanel ✅
+- `frontend/src/components/charts/IndicatorFilterPanel.tsx` (434줄)
+- 필터 프리셋 저장/불러오기 (localStorage 활용)
+
+#### 4.15 SignalMarkerOverlay ✅
+- `frontend/src/components/charts/SignalMarkerOverlay.tsx` (372줄)
+- 백테스트 결과 차트 통합 (`SyncedChartPanel` + `TradeMarker`)
+- `convertTradesToMarkers()` 함수로 거래 내역을 마커로 변환
+- `filteredTradeMarkers()` 메모로 필터 적용
+
+#### 4.16 SymbolDetail 페이지 ✅
+- `frontend/src/pages/SymbolDetail.tsx` (530줄)
+- 가격 차트 + VolumeProfile 연동
+- 과거 신호 차트 (`SyncedChartPanel` + `TradeMarker` 활용)
+- 최근 N일 신호 목록 테이블
+- 신호 발생 통계 (매수/매도 비율, 체결률, 타입별 카운트)
+
+---
+
+### Phase 4 대시보드 시각화 연동 (완료)
+
+#### 4.17 Dashboard 연동 ✅
+- FearGreedGauge, MarketBreadthWidget 통합
+- 시장 심리 지표 섹션 추가
+
+#### 4.18 Backtest VolumeProfile ✅
+- VolumeProfile 차트 통합
+
+#### 4.19 Screening 연동 ✅
+- OpportunityMap (2D 산점도)
+- KanbanBoard (ATTACK/ARMED/WATCH 3열)
+- 뷰 모드 전환 (테이블/맵/칸반)
+
+#### 4.20 Simulation 연동 ✅
+- KellyVisualization (켈리 공식 시각화)
+- MiniCorrelationMatrix (상관관계 행렬)
+
+---
+
+### Phase 6 사용성 개선 (완료)
+
+#### 6.5 추가 기능 ✅
+- `RankChangeIndicator.tsx` - 순위 변동 표시 (↑↓ 화살표 + 변동폭)
+- `FavoriteButton.tsx` - 종목 즐겨찾기 토글 (localStorage 기반)
+- `ExportButton.tsx` - Excel 내보내기 버튼 (CSV UTF-8 BOM)
+- `AutoRefreshToggle.tsx` - 자동 갱신 토글 (30초/1분/5분)
+
+#### 6.6 대시보드 추가 컴포넌트 연동 ✅
+| 컴포넌트 | 연동 페이지 |
+|----------|------------|
+| ScoreWaterfall | GlobalRanking.tsx |
+| RegimeSummaryTable | Dashboard.tsx |
+| SectorTreemap | Dashboard.tsx |
+| SectorMomentumBar | Dashboard.tsx |
+
+> mock 데이터로 연동됨. 백엔드 collector가 실제 지표를 제공하면 자동 반영.
+
+#### 6.7 차트 시각화 개선 ✅
+- `TradeConnectionOverlay.tsx` - 진입/청산 연결선 + 손익 구간 배경색
+  - SVG 오버레이 방식으로 차트 위에 렌더링
+  - 곡선 연결선 (Bezier curve)
+  - 손익에 따른 배경색 (녹색/빨간색)
+  - 호버 시 손익률 표시
+- `SignalCorrelationChart.tsx` - 신호-수익률 상관관계 산점도
+  - Pearson 상관계수 계산
+  - 선형 회귀선 표시
+  - 매수/매도 분리 시각화
+  - R² 결정계수 표시
+
+#### 6.8 Multi Timeframe UI ✅
+- `MultiTimeframeSelector.tsx` - Primary/Secondary TF 선택 컴포넌트
+  - Primary TF 드롭다운 (8개 타임프레임)
+  - Secondary TF 다중 선택 (체크박스 그룹)
+  - 제약 조건 검증 (Secondary > Primary)
+  - 최대 3개 Secondary 선택
+- `MultiTimeframeChart.tsx` - 멀티 TF 차트 동기화
+  - 메인/서브 차트 패널
+  - 크로스헤어 동기화
+  - 줌/팬 동기화 (LogicalRange)
+  - 레이아웃 옵션 (세로/가로/그리드)
+- `useMultiTimeframeKlines.ts` - API 연동 훅
+  - `GET /api/v1/market/klines/multi` 연동
+  - 타임프레임별 TTL 캐싱 (1분봉 30초 ~ 월봉 24시간)
+  - 에러 처리 (부분 실패 시 성공 데이터 유지)
+- `MultiTimeframeField.tsx` - SDUI 필드 컴포넌트
+  - `field_type: 'multi_timeframe'` 지원
+  - `MultiTimeframeValue` 타입 (primary + secondary[])
+
+---
+
+### Phase 1 핵심 기능 (완료)
+
+#### 1.4 Multiple KLine Period (다중 타임프레임) ✅
+**완료일**: 2026-02-04
+
+**백엔드 구현**
+- Strategy Trait 확장 - `multi_timeframe_config()`, `on_multi_timeframe_data()` 추가
+- `register_strategy!` 매크로에 `secondary_timeframes` 필드 지원
+- StrategyMeta 확장 - JSON 응답에 `isMultiTimeframe` 필드
+- Redis 멀티키 조회 최적화 (`get_multi_klines()` 병렬 GET)
+- `CachedHistoricalDataProvider` 확장 - `warmup_multi_timeframe()`, `get_multi_timeframe_klines()`
+- `TimeframeAligner` 모듈 생성 - Look-Ahead Bias 방지
+- 백테스트 엔진 `run_multi_timeframe()` 메서드 추가
+- `RsiMultiTimeframeStrategy` 예제 전략 구현
+- 헬퍼 함수 작성 (`analyze_trend`, `combine_signals`, `detect_divergence`) - `multi_timeframe_helpers.rs`
+- DB 스키마 확장 (`strategies.multi_timeframe_config` 컬럼) - `migrations/18_multi_timeframe.sql`
+
+**API 엔드포인트**
+- `GET /api/v1/market/klines/multi` - 다중 타임프레임 Kline 조회
+- `POST /api/v1/strategies` - `multiTimeframeConfig` 필드 추가
+- `GET/PUT /api/v1/strategies/{id}/timeframes` - TF 설정 조회/수정
+
+**WebSocket**
+- Kline 브로드캐스트 활성화 - `ServerMessage::Kline`, `KlineData`
+
+**프론트엔드**
+- `MultiTimeframeSelector.tsx` - Primary/Secondary TF 선택 컴포넌트
+- `MultiTimeframeChart.tsx` - 멀티 TF 차트 동기화
+- `useMultiTimeframeKlines.ts` - API 연동 훅 (TTL 캐싱)
+- `MultiTimeframeField.tsx` - SDUI 필드 컴포넌트
+
+**성능 최적화**
+- 병렬 쿼리 최적화 (`join_all` + Redis 캐시)
+- 타임프레임별 차등 TTL 설정
+- 성능 테스트 통과 (0.8ms < 50ms 목표)
+- `StrategyExecutor`에서 멀티 데이터 자동 로드
+- Primary TF 완료 시에만 전략 재평가
+
+#### 6.8.5 Multi Timeframe 후속 작업 ✅
+**완료일**: 2026-02-04
+- 전략 생성 시 TF 설정 저장 (`AddStrategyModal` + `MultiTimeframeSelector` 연동)
+- 전략 수정 시 TF 설정 저장/로드 (`EditStrategyModal` - 이미 구현됨)
+- 백테스트 설정에서 TF 선택 UI (`Backtest.tsx` + `MultiTimeframeSelector`)
+- `BacktestRequest` 타입에 `multi_timeframe_config` 필드 추가
+
+#### 6.8.6 백테스트 API Multi Timeframe 지원 ✅
+**완료일**: 2026-02-04
+- `types.rs`: `MultiTimeframeRequest`, `SecondaryTimeframeConfig` API 타입 추가
+- `types.rs`: `BacktestRunRequest`에 `multi_timeframe_config` 필드 추가
+- `loader.rs`: `load_klines_with_timeframe()` - 특정 타임프레임 데이터 로드
+- `loader.rs`: `load_secondary_timeframe_klines()` - Secondary TF 병렬 로드
+- 통합 테스트 3건 작성 (`backtest_integration.rs`):
+  - `test_multi_timeframe_with_empty_secondary` - 빈 Secondary로 기존 동작 유지 확인
+  - `test_multi_timeframe_with_secondary_data` - 실제 다중 TF 데이터 동작 확인
+  - `test_all_strategies_via_multi_timeframe_path` - 모든 전략 다중 TF 경로 호환 확인
+
+#### 6.9.1 createStore 리팩토링 ✅
+**완료일**: 2026-02-04
+- 5개 주요 페이지의 분산된 `createSignal`을 논리적 `createStore` 그룹으로 통합
+- **Strategies.tsx**: ~15 signals → 4 stores (FilterState, UIState, ModalState, FormState)
+- **TradingJournal.tsx**: ~20 signals → 5 stores (FilterState, UIState, StatsState, ModalState, PaginationState)
+- **Screening.tsx**: 29 signals → 4 stores (CustomFilterState, ClientFilterState, UIState, ModalState)
+- **Backtest.tsx**: 19 signals → 4 stores (FormState, UIState, MultiTfState, ResultsState) + BacktestResultCard 3 stores
+- **Dashboard.tsx**: 4 signals → 2 stores (UIState, NotificationState)
+- 함수형 업데이트 패턴: `setStore('items', items => [...items, newItem])`
+- 타입 안전성 강화 (TypeScript 인터페이스로 상태 구조 명시)
+
+#### 6.9.2 커스텀 훅 추출 ✅
+**완료일**: 2026-02-04
+- **useStrategies** (`hooks/useStrategies.ts`)
+  - `createResource`로 전략 목록 자동 로딩
+  - CRUD 메서드: `create()`, `remove()`, `toggle()`, `clone()`
+  - 설정 업데이트: `updateConfig()`, `updateSymbols()`, `updateTimeframe()`
+  - 파생 상태: `total()`, `runningCount()`, `filtered()`
+  - 작업 상태 추적: `togglingId`, `deletingId`, `cloningId`
+- **useJournal** (`hooks/useJournal.ts`)
+  - 데이터 조회: `positions()`, `executions()`, `pnlSummary()`
+  - PnL 데이터: `dailyPnL()`, `weeklyPnL()`, `monthlyPnL()`, `yearlyPnL()`, `cumulativePnL()`
+  - 부가 데이터: `insights()`, `strategyPerformance()`
+  - 필터 관리: `filter`, `setFilter()` (페이지 자동 리셋)
+- **useScreening** (`hooks/useScreening.ts`)
+  - 데이터: `results()`, `presets()`
+  - 필터: `filter`, `setFilter()`
+  - 프리셋 CRUD: `savePreset()`, `deletePreset()`, `loadPreset()`
+  - 검색 실행: `search()`
+- **useMarketSentiment** (`hooks/useMarketSentiment.ts`)
+  - 지표: `fearGreedIndex()`, `marketBreadth()`, `marketTemperature()`
+  - 섹터: `topSectors()`, `bottomSectors()`
+  - 자동 갱신: 5분 간격 (`setInterval`)
+
+#### 6.9.1 createMemo 최적화 ✅
+**완료일**: 2026-02-04
+- 4개 페이지 분석 완료, 대부분 이미 최적화된 상태 확인
+- **Strategies.tsx**: 3개 createMemo (필터링, runningCount, stoppedCount)
+- **TradingJournal.tsx**: 1개 createMemo (executionFilter 객체 메모이제이션)
+- **Screening.tsx**: 6개 createMemo - **모범 사례**
+  - `currentResults()` → `sortedResults()` → `paginatedResults()` 의존성 체인
+  - 7개 필터 조건 + 정렬 + 페이지네이션
+  - `opportunityMapData()`, `kanbanBoardData()` 차트 데이터 변환
+- **GlobalRanking.tsx**: 5개 createMemo
+  - `top10()`, `stats()`, `waterfallData()`, `entries()`, `chartColors()`
+  - `chartColors()` 함수를 createMemo로 변환하여 객체 생성 최적화
+
+#### 6.9.3 성능 최적화 (Lazy Loading + manualChunks) ✅
+**완료일**: 2026-02-04
+- **App.tsx 전면 개편**: 모든 페이지 lazy loading 적용
+  - 11개 페이지 `lazy(() => import())` 적용
+  - `Suspense` + `PageLoader` 로딩 UI 제공
+  - 각 페이지에 `export default` 추가
+- **vite.config.ts manualChunks 설정**:
+  - `vendor-echarts`: ECharts 라이브러리 분리
+  - `vendor-lightweight-charts`: 캔들 차트 라이브러리 분리
+  - `vendor-solid`: SolidJS 코어 분리
+  - `vendor-tanstack`: TanStack Query 분리
+  - `vendor-lucide`: 아이콘 라이브러리 분리
+- **번들 크기 최적화 결과**:
+  - 이전: `index.js` 1,512 KB (단일 번들)
+  - 이후: `index.js` 12.5 KB (**99% 감소**)
+  - 각 페이지가 별도 청크로 분리 (10-90 KB)
+  - 벤더 청크 캐싱 가능 (변경 빈도 낮음)
+
+#### 6.9.3 추가 최적화 (가상 스크롤 + 디바운스) ✅
+**완료일**: 2026-02-04
+- **VirtualizedTable 컴포넌트** (`components/ui/VirtualizedTable.tsx`)
+  - `@tanstack/solid-virtual` 기반 가상화 테이블
+  - 대용량 데이터(1,000+ 행)에서 60fps 스크롤 성능 유지
+  - 컬럼 정의, 행 클릭, 커스텀 렌더러 지원
+- **LazyImage 컴포넌트** (`components/ui/LazyImage.tsx`)
+  - Intersection Observer 기반 지연 로딩
+  - 플레이스홀더, 에러 fallback 지원
+  - `NativeLazyImage`: 브라우저 네이티브 lazy 속성 활용
+- **디바운스/쓰로틀 훅** (`hooks/useDebounce.ts`)
+  - `useDebounce`: 값 디바운스 (검색 입력 등)
+  - `useDebouncedCallback`: 콜백 디바운스 (API 호출 등)
+  - `useThrottledCallback`: 쓰로틀 (스크롤 이벤트 등)

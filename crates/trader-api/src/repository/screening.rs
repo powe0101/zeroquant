@@ -4,8 +4,11 @@
 //! 다양한 조건으로 종목을 필터링합니다.
 
 use chrono::{DateTime, Duration, Utc};
+use futures::FutureExt;
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{FromRow, PgPool, QueryBuilder};
 use tracing::debug;
 use utoipa::ToSchema;
@@ -14,9 +17,7 @@ use uuid::Uuid;
 // 구조적 피처 계산을 위한 import
 use crate::cache::StructuralFeaturesCache;
 use trader_analytics::indicators::{IndicatorEngine, StructuralFeatures};
-use trader_analytics::RouteStateCalculator;
-use trader_core::types::Timeframe;
-use trader_core::RouteState;
+use trader_core::{types::Timeframe, Kline};
 use trader_data::cache::{CachedHistoricalDataProvider, RedisCache, RedisConfig};
 
 /// 스크리닝 결과 레코드
@@ -64,6 +65,12 @@ pub struct ScreeningResult {
     pub bb_width: Option<f64>,
     pub rsi_14: Option<f64>,
     pub breakout_score: Option<f64>,
+
+    // MACD 지표
+    pub macd: Option<f64>,
+    pub macd_signal: Option<f64>,
+    pub macd_histogram: Option<f64>,
+    pub macd_cross: Option<String>,
 
     // RouteState (매매 단계)
     pub route_state: Option<String>,
@@ -223,12 +230,16 @@ impl ScreeningRepository {
                 NULL::double precision as bb_width,
                 NULL::double precision as rsi_14,
                 NULL::double precision as breakout_score,
-                NULL::varchar as route_state,
-                NULL::varchar as regime,
+                NULL::double precision as macd,
+                NULL::double precision as macd_signal,
+                NULL::double precision as macd_histogram,
+                NULL::varchar as macd_cross,
+                sf.route_state::varchar as route_state,
+                sf.regime as regime,
                 NULL::decimal as sector_rs,
                 NULL::integer as sector_rank,
-                sf.ttm_squeeze,
-                sf.ttm_squeeze_cnt,
+                sf.ttm_squeeze as ttm_squeeze,
+                sf.ttm_squeeze_cnt as ttm_squeeze_cnt,
                 NULL::double precision as trigger_score,
                 NULL::varchar as trigger_label,
                 sgs.overall_score,
@@ -401,6 +412,28 @@ impl ScreeningRepository {
             );
             builder.push_bind(v);
         }
+
+        // RouteState 필터 (DB 캐시 값 사용)
+        if let Some(ref state) = filter.filter_route_state {
+            builder.push(" AND sf.route_state::text = ");
+            builder.push_bind(state.clone());
+        }
+
+        // MarketRegime 필터 (DB 캐시 값 사용)
+        if let Some(ref regime) = filter.filter_regime {
+            builder.push(" AND sf.regime = ");
+            builder.push_bind(regime.clone());
+        }
+
+        // TTM Squeeze 필터 (DB 캐시 값 사용)
+        if let Some(squeeze) = filter.filter_ttm_squeeze {
+            builder.push(" AND sf.ttm_squeeze = ");
+            builder.push_bind(squeeze);
+        }
+        if let Some(min_cnt) = filter.min_ttm_squeeze_cnt {
+            builder.push(" AND sf.ttm_squeeze_cnt >= ");
+            builder.push_bind(min_cnt);
+        }
     }
 
     /// 구조적 피처 기반 필터링 적용 (7단계)
@@ -413,12 +446,11 @@ impl ScreeningRepository {
         filter: &ScreeningFilter,
     ) -> Result<Vec<ScreeningResult>, sqlx::Error> {
         // 구조적 필터가 없으면 원본 그대로 반환
+        // 참고: route_state, regime, ttm_squeeze 필터는 이제 SQL 레벨에서 처리됨 (DB 캐시 사용)
         let has_structural_filter = filter.min_low_trend.is_some()
             || filter.min_vol_quality.is_some()
             || filter.min_breakout_score.is_some()
-            || filter.only_alive_consolidation.unwrap_or(false)
-            || filter.filter_route_state.is_some()
-            || filter.filter_regime.is_some();
+            || filter.only_alive_consolidation.unwrap_or(false);
 
         if !has_structural_filter {
             return Ok(candidates);
@@ -439,8 +471,6 @@ impl ScreeningRepository {
         let features_cache = StructuralFeaturesCache::new(redis.clone());
         let data_provider = CachedHistoricalDataProvider::new(pool.clone());
         let indicator_engine = IndicatorEngine::new();
-        let route_state_calculator = RouteStateCalculator::new();
-        let regime_calculator = trader_analytics::MarketRegimeCalculator::new();
 
         let mut filtered_results = Vec::new();
         let total_count = candidates.len(); // 루프 전에 저장
@@ -488,58 +518,11 @@ impl ScreeningRepository {
                 }
             };
 
-            // RouteState 계산 (필터가 있을 때만)
-            let needs_candles_for_calc = filter.filter_route_state.is_some() || filter.filter_regime.is_some();
-            let candles_for_calc = if needs_candles_for_calc {
-                match candles_opt {
-                    Some(c) => Some(c),
-                    None => {
-                        // 캐시 히트 시 candles 조회 (70개 이상 - MarketRegime용)
-                        match data_provider.get_klines(&symbol, Timeframe::D1, 80).await {
-                            Ok(c) if c.len() >= 40 => Some(c),
-                            _ => {
-                                debug!("계산용 candles 조회 실패: {}", symbol);
-                                None
-                            }
-                        }
-                    }
-                }
-            } else {
-                None
-            };
+            // 참고: route_state, regime, ttm_squeeze는 이제 SQL에서 필터링됨 (DB 캐시 사용)
+            // 여기서는 StructuralFeatures 기반 필터만 처리
 
-            let route_state = if filter.filter_route_state.is_some() {
-                if let Some(ref candles) = candles_for_calc {
-                    match route_state_calculator.calculate(candles) {
-                        Ok(state) => Some(state),
-                        Err(e) => {
-                            debug!("RouteState 계산 실패 ({}): {}", symbol, e);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // MarketRegime 계산 (필터가 있을 때만)
-            let regime = if filter.filter_regime.is_some() {
-                if let Some(ref candles) = candles_for_calc {
-                    match regime_calculator.calculate(candles) {
-                        Ok(result) => Some(result.regime),
-                        Err(e) => {
-                            debug!("MarketRegime 계산 실패 ({}): {}", symbol, e);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            // candles는 MACD 계산용으로만 사용
+            let candles_for_calc: Option<Vec<Kline>> = candles_opt;
 
             // 필터 조건 매칭
             let mut pass = true;
@@ -568,27 +551,8 @@ impl ScreeningRepository {
                 }
             }
 
-            // RouteState 필터링
-            if let Some(ref target_state) = filter.filter_route_state {
-                if let Some(ref state) = route_state {
-                    if &state.to_string() != target_state {
-                        pass = false;
-                    }
-                } else {
-                    pass = false; // RouteState 계산 실패 시 제외
-                }
-            }
-
-            // MarketRegime 필터링
-            if let Some(ref target_regime) = filter.filter_regime {
-                if let Some(ref r) = regime {
-                    if &r.to_string() != target_regime {
-                        pass = false;
-                    }
-                } else {
-                    pass = false; // MarketRegime 계산 실패 시 제외
-                }
-            }
+            // 참고: RouteState, MarketRegime, TTM Squeeze 필터링은 SQL 레벨에서 처리됨
+            // DB 캐시 값을 사용하므로 여기서는 추가 필터링 불필요
 
             if pass {
                 // 피처를 결과에 추가
@@ -599,8 +563,47 @@ impl ScreeningRepository {
                 candidate.bb_width = Some(features.bb_width);
                 candidate.rsi_14 = Some(features.rsi);
                 candidate.breakout_score = Some(features.breakout_score());
-                candidate.route_state = route_state.map(|s| s.to_string());
-                candidate.regime = regime.map(|r| r.to_string());
+                // route_state, regime, ttm_squeeze는 SQL 쿼리에서 이미 설정됨 (DB 캐시 값)
+
+                // MACD 계산 (candles가 있을 때만)
+                let macd_candles = candles_for_calc
+                    .as_ref()
+                    .cloned()
+                    .or_else(|| data_provider.get_klines(&symbol, Timeframe::D1, 50).now_or_never()?.ok());
+
+                if let Some(ref candles) = macd_candles {
+                    if candles.len() >= 35 {
+                        // MACD 기본 파라미터 (12, 26, 9)
+                        let closes: Vec<Decimal> = candles.iter().map(|c| c.close).collect();
+                        let macd_params = trader_analytics::MacdParams::default();
+
+                        if let Ok(macd_results) = indicator_engine.macd(&closes, macd_params) {
+                            // 최신 MACD 값 (마지막 인덱스)
+                            if let Some(latest) = macd_results.last() {
+                                candidate.macd = latest.macd.map(|d| d.to_f64().unwrap_or(0.0));
+                                candidate.macd_signal = latest.signal.map(|d| d.to_f64().unwrap_or(0.0));
+                                candidate.macd_histogram = latest.histogram.map(|d| d.to_f64().unwrap_or(0.0));
+
+                                // 골든크로스/데드크로스 감지 (최근 2개 봉 비교)
+                                if macd_results.len() >= 2 {
+                                    let prev = &macd_results[macd_results.len() - 2];
+                                    if let (Some(curr_macd), Some(curr_sig), Some(prev_macd), Some(prev_sig)) =
+                                        (latest.macd, latest.signal, prev.macd, prev.signal)
+                                    {
+                                        // 골든크로스: 이전에 MACD < Signal, 현재 MACD > Signal
+                                        if prev_macd < prev_sig && curr_macd > curr_sig {
+                                            candidate.macd_cross = Some("golden".to_string());
+                                        }
+                                        // 데드크로스: 이전에 MACD > Signal, 현재 MACD < Signal
+                                        else if prev_macd > prev_sig && curr_macd < curr_sig {
+                                            candidate.macd_cross = Some("dead".to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // TRIGGER 계산 (candles가 있을 때만)
                 let trigger_calculator = trader_analytics::TriggerCalculator::new();
@@ -667,16 +670,17 @@ impl ScreeningRepository {
         let query = r#"
             WITH sector_prices AS (
                 -- 섹터별 종목의 시작/종료 가격 계산
-                SELECT 
+                SELECT
                     sf.sector,
                     sf.ticker,
                     sf.yahoo_symbol,
+                    sf.market_cap,
                     first_value(o.close) OVER (
-                        PARTITION BY sf.ticker 
+                        PARTITION BY sf.ticker
                         ORDER BY o.open_time ASC
                     ) as start_price,
                     first_value(o.close) OVER (
-                        PARTITION BY sf.ticker 
+                        PARTITION BY sf.ticker
                         ORDER BY o.open_time DESC
                     ) as end_price
                 FROM v_symbol_with_fundamental sf
@@ -692,19 +696,21 @@ impl ScreeningRepository {
                 SELECT DISTINCT ON (sector, ticker)
                     sector,
                     ticker,
-                    CASE 
-                        WHEN start_price > 0 
+                    market_cap,
+                    CASE
+                        WHEN start_price > 0
                         THEN ((end_price - start_price) / start_price) * 100
-                        ELSE 0 
+                        ELSE 0
                     END as return_pct
                 FROM sector_prices
             ),
             sector_avg_returns AS (
-                -- 섹터별 평균 수익률
-                SELECT 
+                -- 섹터별 평균 수익률 및 총 시가총액
+                SELECT
                     sector,
                     COUNT(*) as symbol_count,
-                    AVG(return_pct) as avg_return_pct
+                    AVG(return_pct) as avg_return_pct,
+                    SUM(market_cap) as total_market_cap
                 FROM sector_returns
                 GROUP BY sector
                 HAVING COUNT(*) >= 3  -- 최소 3종목 이상
@@ -714,22 +720,25 @@ impl ScreeningRepository {
                 SELECT AVG(avg_return_pct) as market_return
                 FROM sector_avg_returns
             )
-            SELECT 
+            SELECT
                 s.sector,
                 s.symbol_count,
                 s.avg_return_pct,
                 m.market_return,
-                CASE 
-                    WHEN m.market_return > 0 
+                CASE
+                    WHEN m.market_return > 0
                     THEN s.avg_return_pct / m.market_return
-                    ELSE 1.0 
+                    ELSE 1.0
                 END as relative_strength,
                 -- 종합 점수 = RS * 0.6 + 단순수익 * 0.4
-                CASE 
-                    WHEN m.market_return > 0 
+                CASE
+                    WHEN m.market_return > 0
                     THEN (s.avg_return_pct / m.market_return) * 0.6 + (s.avg_return_pct / 10.0) * 0.4
                     ELSE s.avg_return_pct / 10.0
-                END as composite_score
+                END as composite_score,
+                -- 추가 필드 (시각화 컴포넌트용)
+                NULL::DECIMAL as avg_return_5d_pct,  -- collector에서 제공 예정
+                s.total_market_cap
             FROM sector_avg_returns s
             CROSS JOIN market_avg m
             ORDER BY composite_score DESC
@@ -1044,14 +1053,129 @@ pub struct SectorRsResult {
     /// 순위
     #[sqlx(default)]
     pub rank: i32,
+    /// 5일 평균 수익률 (%) - SectorMomentumBar 용
+    #[sqlx(default)]
+    pub avg_return_5d_pct: Option<Decimal>,
+    /// 섹터 총 시가총액 - SectorTreemap 용
+    #[sqlx(default)]
+    pub total_market_cap: Option<Decimal>,
 }
 
-/// 스크리닝 프리셋 정보
+/// 스크리닝 프리셋 정보 (레거시 - 하드코딩 프리셋용)
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ScreeningPreset {
     pub id: String,
     pub name: String,
     pub description: String,
+}
+
+/// DB에 저장된 스크리닝 프리셋 레코드
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow, ToSchema)]
+pub struct ScreeningPresetRecord {
+    pub id: Uuid,
+    pub name: String,
+    #[sqlx(default)]
+    pub description: Option<String>,
+    pub filters: Value,
+    #[sqlx(default)]
+    pub is_default: Option<bool>,
+    pub sort_order: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// 새 프리셋 생성 요청
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreatePresetRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub filters: Value,
+}
+
+impl ScreeningRepository {
+    /// 모든 프리셋 조회 (DB + 하드코딩)
+    pub async fn get_all_presets(pool: &PgPool) -> Result<Vec<ScreeningPresetRecord>, sqlx::Error> {
+        let records = sqlx::query_as::<_, ScreeningPresetRecord>(
+            r#"
+            SELECT * FROM screening_preset
+            ORDER BY sort_order, name
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(records)
+    }
+
+    /// 프리셋 저장
+    pub async fn save_preset(
+        pool: &PgPool,
+        request: CreatePresetRequest,
+    ) -> Result<ScreeningPresetRecord, sqlx::Error> {
+        // 현재 최대 sort_order 조회
+        let max_order: Option<i32> = sqlx::query_scalar(
+            "SELECT MAX(sort_order) FROM screening_preset",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        let next_order = max_order.unwrap_or(-1) + 1;
+
+        let record = sqlx::query_as::<_, ScreeningPresetRecord>(
+            r#"
+            INSERT INTO screening_preset (name, description, filters, is_default, sort_order)
+            VALUES ($1, $2, $3, false, $4)
+            RETURNING *
+            "#,
+        )
+        .bind(&request.name)
+        .bind(&request.description)
+        .bind(&request.filters)
+        .bind(next_order)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(record)
+    }
+
+    /// 프리셋 삭제 (기본 프리셋은 삭제 불가)
+    pub async fn delete_preset(pool: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
+        // 기본 프리셋 여부 확인
+        let is_default: Option<bool> = sqlx::query_scalar(
+            "SELECT is_default FROM screening_preset WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
+
+        if is_default == Some(true) {
+            return Ok(false); // 기본 프리셋은 삭제 불가
+        }
+
+        let result = sqlx::query("DELETE FROM screening_preset WHERE id = $1 AND is_default = false")
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 이름으로 프리셋 조회
+    pub async fn get_preset_by_name(
+        pool: &PgPool,
+        name: &str,
+    ) -> Result<Option<ScreeningPresetRecord>, sqlx::Error> {
+        let record = sqlx::query_as::<_, ScreeningPresetRecord>(
+            "SELECT * FROM screening_preset WHERE name = $1",
+        )
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(record)
+    }
 }
 
 // =====================================================

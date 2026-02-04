@@ -15,11 +15,12 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use sha2::Sha256;
 use std::fmt;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use trader_core::{
     Kline, MarketType, OrderBook, OrderBookLevel, OrderRequest, OrderStatus, OrderType, Position,
-    Side, Symbol, Ticker, Timeframe, TradeTick,
+    RoundMethod, Side, Symbol, Ticker, TickSizeProvider, Timeframe, TradeTick,
 };
 
 type HmacSha256 = Hmac<Sha256>;
@@ -244,6 +245,8 @@ pub struct BinanceClient {
     config: BinanceConfig,
     client: Client,
     connected: bool,
+    /// 호가 단위 제공자 (옵션, 설정 시 주문 가격 자동 라운딩)
+    tick_size_provider: Option<Arc<dyn TickSizeProvider>>,
 }
 
 impl BinanceClient {
@@ -263,7 +266,21 @@ impl BinanceClient {
             config,
             client,
             connected: false,
+            tick_size_provider: None,
         })
+    }
+
+    /// 호가 단위 제공자를 설정합니다.
+    ///
+    /// 설정 시 주문 가격이 자동으로 호가 단위로 라운딩됩니다.
+    /// - 매수 주문: Floor (내림) - 보수적으로 더 낮은 가격
+    /// - 매도 주문: Ceil (올림) - 보수적으로 더 높은 가격
+    ///
+    /// # Arguments
+    /// * `provider` - 호가 단위 제공자 (예: `BinanceTickSize`)
+    pub fn with_tick_size_provider(mut self, provider: Arc<dyn TickSizeProvider>) -> Self {
+        self.tick_size_provider = Some(provider);
+        self
     }
 
     /// 환경 변수에서 생성.
@@ -479,8 +496,9 @@ impl BinanceClient {
     }
 
     /// 내부 Symbol을 Binance 심볼 형식으로 변환.
-    fn from_symbol(symbol: &Symbol) -> String {
-        format!("{}{}", symbol.base, symbol.quote)
+    fn from_symbol(ticker: &str) -> String {
+        // "BTC/USDT" -> "BTCUSDT"
+        ticker.replace("/", "")
     }
 
     /// 문자열에서 Decimal 파싱.
@@ -509,7 +527,7 @@ impl BinanceClient {
         OrderStatus {
             order_id: resp.order_id.to_string(),
             client_order_id: Some(resp.client_order_id.clone()),
-            symbol: Some(Self::to_symbol(&resp.symbol)),
+            ticker: Some(resp.symbol.clone()),
             side,
             quantity: Some(Self::parse_decimal(&resp.orig_qty)),
             price: Some(Self::parse_decimal(&resp.price)),
@@ -599,14 +617,14 @@ impl Exchange for BinanceClient {
             .ok_or_else(|| ExchangeError::AssetNotFound(asset.to_string()))
     }
 
-    async fn get_ticker(&self, symbol: &Symbol) -> ExchangeResult<Ticker> {
+    async fn get_ticker(&self, symbol: &str) -> ExchangeResult<Ticker> {
         let binance_symbol = Self::from_symbol(symbol);
         let resp: BinanceTicker = self
             .public_get("/api/v3/ticker/24hr", &[("symbol", binance_symbol)])
             .await?;
 
         Ok(Ticker {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             bid: Self::parse_decimal(&resp.bid_price),
             ask: Self::parse_decimal(&resp.ask_price),
             last: Self::parse_decimal(&resp.last_price),
@@ -621,7 +639,7 @@ impl Exchange for BinanceClient {
 
     async fn get_order_book(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         limit: Option<u32>,
     ) -> ExchangeResult<OrderBook> {
         let binance_symbol = Self::from_symbol(symbol);
@@ -653,7 +671,7 @@ impl Exchange for BinanceClient {
             .collect();
 
         Ok(OrderBook {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             bids,
             asks,
             timestamp: Utc::now(),
@@ -662,7 +680,7 @@ impl Exchange for BinanceClient {
 
     async fn get_recent_trades(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         limit: Option<u32>,
     ) -> ExchangeResult<Vec<TradeTick>> {
         let binance_symbol = Self::from_symbol(symbol);
@@ -678,7 +696,7 @@ impl Exchange for BinanceClient {
         Ok(resp
             .into_iter()
             .map(|t| TradeTick {
-                symbol: symbol.clone(),
+                ticker: symbol.to_string(),
                 id: t.id.to_string(),
                 price: Self::parse_decimal(&t.price),
                 quantity: Self::parse_decimal(&t.qty),
@@ -694,7 +712,7 @@ impl Exchange for BinanceClient {
 
     async fn get_klines(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
         limit: Option<u32>,
     ) -> ExchangeResult<Vec<Kline>> {
@@ -716,7 +734,7 @@ impl Exchange for BinanceClient {
         Ok(resp
             .into_iter()
             .map(|k| Kline {
-                symbol: symbol.clone(),
+                ticker: symbol.to_string(),
                 timeframe,
                 open_time: DateTime::from_timestamp_millis(k.0).unwrap_or_else(Utc::now),
                 open: Self::parse_decimal(&k.1),
@@ -732,7 +750,8 @@ impl Exchange for BinanceClient {
     }
 
     async fn place_order(&self, request: &OrderRequest) -> ExchangeResult<String> {
-        let binance_symbol = Self::from_symbol(&request.symbol);
+        // TODO: SymbolResolver로 ticker → Symbol 변환 후 from_symbol 사용
+        let binance_symbol = request.ticker.clone();
 
         let side = match request.side {
             Side::Buy => "BUY",
@@ -749,6 +768,34 @@ impl Exchange for BinanceClient {
             OrderType::TrailingStop => "TRAILING_STOP_MARKET",
         };
 
+        // 호가 단위 라운딩 헬퍼 (클로저)
+        let round_price = |price: Decimal, is_buy: bool| -> Decimal {
+            if let Some(ref provider) = self.tick_size_provider {
+                // 매수: Floor (내림) - 보수적으로 더 낮은 가격
+                // 매도: Ceil (올림) - 보수적으로 더 높은 가격
+                let method = if is_buy {
+                    RoundMethod::Floor
+                } else {
+                    RoundMethod::Ceil
+                };
+                let adjusted = provider.round_to_tick(price, method);
+                if adjusted != price {
+                    warn!(
+                        "주문 가격 호가 단위 조정: {} -> {} (종목: {}, 방향: {})",
+                        price,
+                        adjusted,
+                        request.ticker,
+                        if is_buy { "매수" } else { "매도" }
+                    );
+                }
+                adjusted
+            } else {
+                price
+            }
+        };
+
+        let is_buy = matches!(request.side, Side::Buy);
+
         let mut params = vec![
             ("symbol", binance_symbol),
             ("side", side.to_string()),
@@ -756,15 +803,17 @@ impl Exchange for BinanceClient {
             ("quantity", request.quantity.to_string()),
         ];
 
-        // 지정가 주문에 가격 추가
+        // 지정가 주문에 가격 추가 (라운딩 적용)
         if let Some(price) = request.price {
-            params.push(("price", price.to_string()));
+            let rounded_price = round_price(price, is_buy);
+            params.push(("price", rounded_price.to_string()));
             params.push(("timeInForce", "GTC".to_string()));
         }
 
-        // 스톱 가격이 있으면 추가
+        // 스톱 가격이 있으면 추가 (라운딩 적용)
         if let Some(stop_price) = request.stop_price {
-            params.push(("stopPrice", stop_price.to_string()));
+            let rounded_stop = round_price(stop_price, is_buy);
+            params.push(("stopPrice", rounded_stop.to_string()));
         }
 
         // 클라이언트 주문 ID가 있으면 추가
@@ -774,7 +823,7 @@ impl Exchange for BinanceClient {
 
         info!(
             "Placing {} {} order for {} {} @ {:?}",
-            side, order_type, request.quantity, request.symbol, request.price
+            side, order_type, request.quantity, request.ticker, request.price
         );
 
         let resp: BinanceOrderResponse = self.signed_post("/api/v3/order", &params).await?;
@@ -783,7 +832,7 @@ impl Exchange for BinanceClient {
         Ok(resp.order_id.to_string())
     }
 
-    async fn cancel_order(&self, symbol: &Symbol, order_id: &str) -> ExchangeResult<()> {
+    async fn cancel_order(&self, symbol: &str, order_id: &str) -> ExchangeResult<()> {
         let binance_symbol = Self::from_symbol(symbol);
 
         let params = vec![
@@ -797,7 +846,7 @@ impl Exchange for BinanceClient {
         Ok(())
     }
 
-    async fn get_order(&self, symbol: &Symbol, order_id: &str) -> ExchangeResult<OrderStatus> {
+    async fn get_order(&self, symbol: &str, order_id: &str) -> ExchangeResult<OrderStatus> {
         let binance_symbol = Self::from_symbol(symbol);
 
         let params = vec![
@@ -810,7 +859,7 @@ impl Exchange for BinanceClient {
         Ok(Self::parse_order_status(&resp))
     }
 
-    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> ExchangeResult<Vec<OrderStatus>> {
+    async fn get_open_orders(&self, symbol: Option<&str>) -> ExchangeResult<Vec<OrderStatus>> {
         let params: Vec<(&str, String)> = if let Some(s) = symbol {
             vec![("symbol", Self::from_symbol(s))]
         } else {
@@ -835,8 +884,8 @@ mod tests {
 
     #[test]
     fn test_symbol_conversion() {
-        let symbol = Symbol::new("BTC", "USDT", MarketType::Crypto);
-        assert_eq!(BinanceClient::from_symbol(&symbol), "BTCUSDT");
+        let ticker = "BTC/USDT";
+        assert_eq!(BinanceClient::from_symbol(ticker), "BTCUSDT");
 
         let parsed = BinanceClient::to_symbol("ETHUSDT");
         assert_eq!(parsed.base, "ETH");

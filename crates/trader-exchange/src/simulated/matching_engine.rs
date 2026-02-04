@@ -5,7 +5,7 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
 use std::sync::Arc;
-use trader_core::{Kline, OrderRequest, OrderType, RoundMethod, Side, Symbol, TickSizeProvider};
+use trader_core::{Kline, OrderRequest, OrderType, RoundMethod, Side, TickSizeProvider};
 
 /// 주문 체결 유형.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub struct PendingOrder {
     /// 주문 ID
     pub order_id: String,
     /// 심볼
-    pub symbol: Symbol,
+    pub symbol: String,
     /// 주문 방향
     pub side: Side,
     /// 주문 유형
@@ -63,7 +63,7 @@ pub struct PendingOrder {
 /// 시뮬레이션 거래소를 위한 주문 매칭 엔진.
 pub struct MatchingEngine {
     /// 심볼별 대기 주문
-    pending_orders: HashMap<Symbol, Vec<PendingOrder>>,
+    pending_orders: HashMap<String, Vec<PendingOrder>>,
     /// 수수료율 (예: 0.1%의 경우 0.001)
     fee_rate: Decimal,
     /// 슬리피지율 (예: 0.05%의 경우 0.0005)
@@ -84,6 +84,15 @@ impl MatchingEngine {
             tick_size_provider: None,
             next_order_id: 1,
         }
+    }
+
+    /// ticker String에서 quote 통화를 추출합니다 (예: "BTC/USDT" -> "USDT").
+    fn parse_quote(ticker: &str) -> String {
+        ticker
+            .split('/')
+            .nth(1)
+            .unwrap_or("USDT")
+            .to_string()
     }
 
     /// 호가 단위 제공자를 설정합니다.
@@ -134,7 +143,7 @@ impl MatchingEngine {
                 };
 
                 let commission = request.quantity * fill_price * self.fee_rate;
-                let commission_asset = request.symbol.quote.clone();
+                let commission_asset = Self::parse_quote(&request.ticker);
 
                 OrderMatch {
                     order_id,
@@ -164,7 +173,7 @@ impl MatchingEngine {
                 if can_fill {
                     // 지정가로 체결 (트레이더에게 더 유리함)
                     let commission = request.quantity * limit_price * self.fee_rate;
-                    let commission_asset = request.symbol.quote.clone();
+                    let commission_asset = Self::parse_quote(&request.ticker);
 
                     OrderMatch {
                         order_id,
@@ -179,7 +188,7 @@ impl MatchingEngine {
                     // 대기 주문에 추가
                     let pending = PendingOrder {
                         order_id: order_id.clone(),
-                        symbol: request.symbol.clone(),
+                        symbol: request.ticker.clone(),
                         side: request.side,
                         order_type: request.order_type,
                         original_quantity: request.quantity,
@@ -190,7 +199,7 @@ impl MatchingEngine {
                     };
 
                     self.pending_orders
-                        .entry(request.symbol.clone())
+                        .entry(request.ticker.clone())
                         .or_default()
                         .push(pending);
 
@@ -200,7 +209,7 @@ impl MatchingEngine {
                         filled_quantity: dec!(0),
                         fill_price: dec!(0),
                         commission: dec!(0),
-                        commission_asset: request.symbol.quote.clone(),
+                        commission_asset: Self::parse_quote(&request.ticker),
                         timestamp,
                     }
                 }
@@ -209,7 +218,7 @@ impl MatchingEngine {
                 // 대기 주문에 추가 (스탑 가격 도달 시 트리거됨)
                 let pending = PendingOrder {
                     order_id: order_id.clone(),
-                    symbol: request.symbol.clone(),
+                    symbol: request.ticker.clone(),
                     side: request.side,
                     order_type: request.order_type,
                     original_quantity: request.quantity,
@@ -220,7 +229,7 @@ impl MatchingEngine {
                 };
 
                 self.pending_orders
-                    .entry(request.symbol.clone())
+                    .entry(request.ticker.clone())
                     .or_default()
                     .push(pending);
 
@@ -230,7 +239,7 @@ impl MatchingEngine {
                     filled_quantity: dec!(0),
                     fill_price: dec!(0),
                     commission: dec!(0),
-                    commission_asset: request.symbol.quote.clone(),
+                    commission_asset: Self::parse_quote(&request.ticker),
                     timestamp,
                 }
             }
@@ -238,7 +247,7 @@ impl MatchingEngine {
                 // 대기 주문에 추가 (이익실현 가격 도달 시 트리거됨)
                 let pending = PendingOrder {
                     order_id: order_id.clone(),
-                    symbol: request.symbol.clone(),
+                    symbol: request.ticker.clone(),
                     side: request.side,
                     order_type: request.order_type,
                     original_quantity: request.quantity,
@@ -249,7 +258,7 @@ impl MatchingEngine {
                 };
 
                 self.pending_orders
-                    .entry(request.symbol.clone())
+                    .entry(request.ticker.clone())
                     .or_default()
                     .push(pending);
 
@@ -259,7 +268,7 @@ impl MatchingEngine {
                     filled_quantity: dec!(0),
                     fill_price: dec!(0),
                     commission: dec!(0),
-                    commission_asset: request.symbol.quote.clone(),
+                    commission_asset: Self::parse_quote(&request.ticker),
                     timestamp,
                 }
             }
@@ -267,7 +276,7 @@ impl MatchingEngine {
                 // 트레일링 스탑은 완전히 구현되지 않음 - 손절매로 처리
                 let pending = PendingOrder {
                     order_id: order_id.clone(),
-                    symbol: request.symbol.clone(),
+                    symbol: request.ticker.clone(),
                     side: request.side,
                     order_type: request.order_type,
                     original_quantity: request.quantity,
@@ -278,7 +287,7 @@ impl MatchingEngine {
                 };
 
                 self.pending_orders
-                    .entry(request.symbol.clone())
+                    .entry(request.ticker.clone())
                     .or_default()
                     .push(pending);
 
@@ -288,7 +297,7 @@ impl MatchingEngine {
                     filled_quantity: dec!(0),
                     fill_price: dec!(0),
                     commission: dec!(0),
-                    commission_asset: request.symbol.quote.clone(),
+                    commission_asset: Self::parse_quote(&request.ticker),
                     timestamp,
                 }
             }
@@ -297,7 +306,7 @@ impl MatchingEngine {
 
     /// 새로운 Kline을 처리하고 주문 체결을 확인합니다.
     /// 매칭된 주문 목록을 반환합니다.
-    pub fn process_kline(&mut self, symbol: &Symbol, kline: &Kline) -> Vec<OrderMatch> {
+    pub fn process_kline(&mut self, symbol: &String, kline: &Kline) -> Vec<OrderMatch> {
         let mut matches = Vec::new();
         let mut to_remove = Vec::new();
 
@@ -345,7 +354,7 @@ impl MatchingEngine {
                         filled_quantity: order.remaining_quantity,
                         fill_price: limit_price,
                         commission,
-                        commission_asset: order.symbol.quote.clone(),
+                        commission_asset: order.symbol.clone(),
                         timestamp: kline.close_time,
                     })
                 } else {
@@ -383,7 +392,7 @@ impl MatchingEngine {
                         filled_quantity: order.remaining_quantity,
                         fill_price,
                         commission,
-                        commission_asset: order.symbol.quote.clone(),
+                        commission_asset: Self::parse_quote(&order.symbol),
                         timestamp: kline.close_time,
                     })
                 } else {
@@ -416,7 +425,7 @@ impl MatchingEngine {
                         filled_quantity: order.remaining_quantity,
                         fill_price,
                         commission,
-                        commission_asset: order.symbol.quote.clone(),
+                        commission_asset: Self::parse_quote(&order.symbol),
                         timestamp: kline.close_time,
                     })
                 } else {
@@ -431,7 +440,7 @@ impl MatchingEngine {
     }
 
     /// 대기 주문을 취소합니다.
-    pub fn cancel_order(&mut self, symbol: &Symbol, order_id: &str) -> bool {
+    pub fn cancel_order(&mut self, symbol: &String, order_id: &str) -> bool {
         if let Some(orders) = self.pending_orders.get_mut(symbol) {
             if let Some(pos) = orders.iter().position(|o| o.order_id == order_id) {
                 orders.remove(pos);
@@ -442,7 +451,7 @@ impl MatchingEngine {
     }
 
     /// 심볼의 모든 대기 주문을 가져옵니다.
-    pub fn get_pending_orders(&self, symbol: Option<&Symbol>) -> Vec<&PendingOrder> {
+    pub fn get_pending_orders(&self, symbol: Option<&String>) -> Vec<&PendingOrder> {
         match symbol {
             Some(s) => self
                 .pending_orders
@@ -458,7 +467,7 @@ impl MatchingEngine {
     }
 
     /// 특정 대기 주문을 가져옵니다.
-    pub fn get_order(&self, symbol: &Symbol, order_id: &str) -> Option<&PendingOrder> {
+    pub fn get_order(&self, symbol: &String, order_id: &str) -> Option<&PendingOrder> {
         self.pending_orders
             .get(symbol)?
             .iter()
@@ -476,14 +485,14 @@ mod tests {
     use super::*;
     use trader_core::{TimeInForce, Timeframe};
 
-    fn create_test_symbol() -> Symbol {
-        Symbol::crypto("BTC", "USDT")
+    fn create_test_symbol() -> String {
+        "BTC/USDT".to_string()
     }
 
     fn create_test_kline(open: f64, high: f64, low: f64, close: f64) -> Kline {
         let now = Utc::now();
         Kline {
-            symbol: create_test_symbol(),
+            ticker: create_test_symbol(),
             timeframe: Timeframe::M1,
             open_time: now,
             close_time: now + chrono::Duration::minutes(1),
@@ -504,7 +513,7 @@ mod tests {
         let current_price = dec!(50000);
 
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Market,
             quantity: dec!(0.1),
@@ -533,7 +542,7 @@ mod tests {
 
         // 현재 가격 이상의 지정가 매수 -> 즉시 체결
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Limit,
             quantity: dec!(0.1),
@@ -558,7 +567,7 @@ mod tests {
 
         // 현재 가격 이하의 지정가 매수 -> 대기
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Limit,
             quantity: dec!(0.1),
@@ -583,7 +592,7 @@ mod tests {
 
         // 49000에 지정가 매수
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Limit,
             quantity: dec!(0.1),
@@ -613,7 +622,7 @@ mod tests {
 
         // 48000에 손절매 매도
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Sell,
             order_type: OrderType::StopLoss,
             quantity: dec!(0.1),
@@ -642,7 +651,7 @@ mod tests {
         let symbol = create_test_symbol();
 
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Limit,
             quantity: dec!(0.1),

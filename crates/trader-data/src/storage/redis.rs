@@ -8,7 +8,7 @@ use redis::{aio::MultiplexedConnection, AsyncCommands, Client};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 use trader_core::{Kline, OrderBook, Ticker, Timeframe};
 
 /// Redis 설정.
@@ -194,7 +194,7 @@ impl RedisCache {
     /// ticker를 cache에 저장합니다.
     #[instrument(skip(self, ticker))]
     pub async fn set_ticker(&self, exchange: &str, ticker: &Ticker) -> Result<()> {
-        let key = Self::ticker_key(exchange, &ticker.symbol.to_string());
+        let key = Self::ticker_key(exchange, &ticker.ticker.to_string());
         // Ticker 데이터는 시간에 매우 민감하므로 짧은 TTL 사용
         self.set_with_ttl(&key, ticker, 10).await
     }
@@ -217,7 +217,7 @@ impl RedisCache {
     /// order book을 cache에 저장합니다.
     #[instrument(skip(self, orderbook))]
     pub async fn set_orderbook(&self, exchange: &str, orderbook: &OrderBook) -> Result<()> {
-        let key = Self::orderbook_key(exchange, &orderbook.symbol.to_string());
+        let key = Self::orderbook_key(exchange, &orderbook.ticker);
         // Order book 데이터는 시간에 매우 민감하므로 짧은 TTL 사용
         self.set_with_ttl(&key, orderbook, 5).await
     }
@@ -308,6 +308,115 @@ impl RedisCache {
         }
 
         self.set_klines(exchange, symbol, timeframe, &klines).await
+    }
+
+    /// 여러 타임프레임의 kline을 병렬로 조회합니다.
+    ///
+    /// # 인자
+    ///
+    /// * `exchange` - 거래소 ID
+    /// * `symbol` - 심볼
+    /// * `timeframes` - 조회할 타임프레임 목록
+    ///
+    /// # 반환
+    ///
+    /// 타임프레임별 캔들 데이터 HashMap. 캐시 미스인 경우 해당 TF는 빈 Vec.
+    ///
+    /// # 예시
+    ///
+    /// ```rust,ignore
+    /// let klines = cache.get_multi_klines(
+    ///     "binance",
+    ///     "BTCUSDT",
+    ///     &[Timeframe::M5, Timeframe::H1, Timeframe::D1],
+    /// ).await?;
+    ///
+    /// for (tf, data) in &klines {
+    ///     println!("{:?}: {} candles", tf, data.len());
+    /// }
+    /// ```
+    #[instrument(skip(self), fields(timeframe_count = timeframes.len()))]
+    pub async fn get_multi_klines(
+        &self,
+        exchange: &str,
+        symbol: &str,
+        timeframes: &[Timeframe],
+    ) -> Result<std::collections::HashMap<Timeframe, Vec<Kline>>> {
+        use futures::future::join_all;
+
+        // 각 타임프레임별 조회를 병렬로 실행
+        let futures: Vec<_> = timeframes
+            .iter()
+            .map(|tf| {
+                let exchange = exchange.to_string();
+                let symbol = symbol.to_string();
+                let tf = *tf;
+                async move {
+                    let result = self.get_klines(&exchange, &symbol, &tf).await;
+                    (tf, result)
+                }
+            })
+            .collect();
+
+        let results = join_all(futures).await;
+
+        // 결과를 HashMap으로 변환
+        let mut map = std::collections::HashMap::new();
+        for (tf, result) in results {
+            match result {
+                Ok(Some(klines)) => {
+                    map.insert(tf, klines);
+                }
+                Ok(None) => {
+                    // 캐시 미스: 빈 Vec 삽입
+                    map.insert(tf, Vec::new());
+                }
+                Err(e) => {
+                    // 에러 발생 시 경고 로그 후 빈 Vec
+                    warn!("Failed to get klines for {:?}: {}", tf, e);
+                    map.insert(tf, Vec::new());
+                }
+            }
+        }
+
+        Ok(map)
+    }
+
+    /// 여러 타임프레임의 kline을 병렬로 저장합니다.
+    ///
+    /// # 인자
+    ///
+    /// * `exchange` - 거래소 ID
+    /// * `symbol` - 심볼
+    /// * `data` - 타임프레임별 캔들 데이터
+    #[instrument(skip(self, data), fields(timeframe_count = data.len()))]
+    pub async fn set_multi_klines(
+        &self,
+        exchange: &str,
+        symbol: &str,
+        data: &[(Timeframe, Vec<Kline>)],
+    ) -> Result<()> {
+        use futures::future::join_all;
+
+        let futures: Vec<_> = data
+            .iter()
+            .map(|(tf, klines)| {
+                let exchange = exchange.to_string();
+                let symbol = symbol.to_string();
+                let tf = *tf;
+                let klines = klines.clone();
+                async move { self.set_klines(&exchange, &symbol, &tf, &klines).await }
+            })
+            .collect();
+
+        let results = join_all(futures).await;
+
+        // 하나라도 실패하면 에러 반환
+        for result in results {
+            result?;
+        }
+
+        Ok(())
     }
 
     // =========================================================================

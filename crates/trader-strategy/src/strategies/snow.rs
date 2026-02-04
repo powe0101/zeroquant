@@ -32,7 +32,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::{
     domain::StrategyContext,
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// Snow 전략 시장 타입
@@ -138,7 +138,7 @@ impl SnowAssets {
         }
     }
 
-    fn all_symbols(&self) -> Vec<&str> {
+    fn all_tickers(&self) -> Vec<&str> {
         vec![&self.tip, &self.attack, &self.safe, &self.crisis]
     }
 }
@@ -165,7 +165,7 @@ pub struct SnowState {
     pub attack_ma: Option<Decimal>,
     /// 마지막 리밸런싱 시간
     pub last_rebalance: Option<DateTime<Utc>>,
-    /// 현재 보유 심볼
+    /// 현재 보유 티커
     pub current_holding: Option<String>,
     /// 현재 보유 수량
     pub current_quantity: Decimal,
@@ -191,7 +191,7 @@ pub struct SnowStrategy {
     state: SnowState,
     /// 전략 실행 컨텍스트 (MacroEnvironment, MarketRegime)
     context: Option<Arc<RwLock<StrategyContext>>>,
-    /// 심볼별 가격 히스토리
+    /// 티커별 가격 히스토리
     price_history: HashMap<String, VecDeque<Decimal>>,
     initialized: bool,
 }
@@ -373,12 +373,12 @@ impl Strategy for SnowStrategy {
             None => return Ok(vec![]),
         };
 
-        // base 심볼만 추출 (SPY/USD -> SPY)
-        let symbol = data.symbol.base.clone();
+        // base 티커만 추출 (SPY/USD -> SPY)
+        let ticker = data.ticker.clone();
         let now = data.timestamp;
 
         // 이 전략의 자산인지 확인
-        if !assets.all_symbols().contains(&symbol.as_str()) {
+        if !assets.all_tickers().contains(&ticker.as_str()) {
             return Ok(vec![]);
         }
 
@@ -391,7 +391,7 @@ impl Strategy for SnowStrategy {
         };
 
         // 가격 히스토리 업데이트
-        let prices = self.price_history.entry(symbol.clone()).or_default();
+        let prices = self.price_history.entry(ticker.clone()).or_default();
         prices.push_front(close);
 
         // 히스토리 길이 제한 (최대 250일)
@@ -400,12 +400,12 @@ impl Strategy for SnowStrategy {
         }
 
         // TIP 데이터 업데이트
-        if symbol == assets.tip {
+        if ticker == assets.tip {
             self.state.tip_ma = Self::calculate_ma(prices, config.tip_ma_period);
         }
 
         // 공격 자산 데이터 업데이트
-        if symbol == assets.attack {
+        if ticker == assets.attack {
             self.state.attack_ma = Self::calculate_ma(prices, config.attack_ma_period);
         }
 
@@ -421,7 +421,7 @@ impl Strategy for SnowStrategy {
         }
 
         // 공격 자산에서만 신호 생성
-        if symbol != assets.attack {
+        if ticker != assets.attack {
             return Ok(vec![]);
         }
 
@@ -441,12 +441,12 @@ impl Strategy for SnowStrategy {
             self.state.current_mode = new_mode;
             self.state.last_rebalance = Some(now);
 
-            let (market_type, quote_currency) = match config.market {
-                SnowMarket::KR => (MarketType::Stock, "KRW"),
-                SnowMarket::US => (MarketType::Stock, "USD"),
+            let quote_currency = match config.market {
+                SnowMarket::KR => "KRW",
+                SnowMarket::US => "USD",
             };
 
-            let sym = Symbol::new(&target_asset, quote_currency, market_type);
+            let sym = format!("{}/{}", target_asset, quote_currency);
 
             // 새 자산 매수 신호
             let signal = Signal::new("snow", sym, Side::Buy, SignalType::Entry)
@@ -484,7 +484,7 @@ impl Strategy for SnowStrategy {
                 self.state.current_quantity += order.quantity;
                 info!(
                     "[Snow] 매수 체결: {} {} @ {}",
-                    order.symbol, order.quantity, fill_price
+                    order.ticker, order.quantity, fill_price
                 );
             }
             Side::Sell => {
@@ -495,7 +495,7 @@ impl Strategy for SnowStrategy {
                 }
                 info!(
                     "[Snow] 매도 체결: {} {} @ {}",
-                    order.symbol, order.quantity, fill_price
+                    order.ticker, order.quantity, fill_price
                 );
             }
         }
@@ -508,7 +508,7 @@ impl Strategy for SnowStrategy {
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         debug!(
-            symbol = %position.symbol,
+            ticker = %position.ticker,
             quantity = %position.quantity,
             "Position updated"
         );
@@ -593,7 +593,7 @@ register_strategy! {
     name: "스노우",
     description: "스노우 모멘텀 자산배분 전략입니다.",
     timeframe: "1d",
-    symbols: ["TIP", "UPRO", "TLT", "BIL"],
+    tickers: ["TIP", "UPRO", "TLT", "BIL"],
     category: Monthly,
     markets: [Stock, Stock],
     type: SnowStrategy

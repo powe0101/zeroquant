@@ -31,6 +31,9 @@ pub use types::{
     BatchBacktestResultItem,
     EquityCurvePoint,
     ExecutionSchedule,
+    // 다중 타임프레임
+    MultiTimeframeRequest,
+    SecondaryTimeframeConfig,
     SymbolCategory,
     TradeHistoryItem,
     UiCondition,

@@ -2,13 +2,70 @@ import axios from 'axios';
 import type {
   Position,
   Order,
-  Strategy,
   PortfolioSummary,
   MarketStatus,
   SupportedExchange,
   ExchangeCredential,
   TelegramSettings,
 } from '../types';
+
+// 자동 생성된 타입 import (ts-rs)
+import type {
+  // Journal 타입
+  JournalPositionResponse,
+  JournalPositionsResponse,
+  ExecutionResponse,
+  ExecutionsListResponse,
+  PnLSummaryResponse,
+  PositionsSummary,
+  DailyPnLItem,
+  DailyPnLResponse,
+  SymbolPnLItem,
+  SymbolPnLResponse,
+  SyncResponse as JournalSyncResponseGenerated,
+  // Screening 타입
+  ScreeningRequest as GeneratedScreeningRequest,
+  ScreeningResponse as GeneratedScreeningResponse,
+  ScreeningResultDto as GeneratedScreeningResultDto,
+  MomentumQuery as GeneratedMomentumQuery,
+  MomentumResponse as GeneratedMomentumResponse,
+  MomentumResultDto as GeneratedMomentumResultDto,
+  // Ranking 타입
+  RankingResponse as GeneratedRankingResponse,
+  RankedSymbol as GeneratedRankedSymbol,
+  FilterInfo,
+  // Strategies 타입
+  StrategyListItem,
+  StrategiesListResponse,
+  CreateStrategyRequest as GeneratedCreateStrategyRequest,
+  CreateStrategyResponse as GeneratedCreateStrategyResponse,
+  CloneStrategyRequest as GeneratedCloneStrategyRequest,
+  CloneStrategyResponse as GeneratedCloneStrategyResponse,
+  // Backtest 타입
+  BacktestableStrategy,
+  BacktestStrategiesResponse as GeneratedBacktestStrategiesResponse,
+} from '../types/generated';
+
+// ==================== 자동 생성 타입 재export (하위 호환성) ====================
+// Journal
+export type JournalPosition = JournalPositionResponse;
+export type JournalExecution = ExecutionResponse;
+export type { JournalPositionsResponse } from '../types/generated/journal';
+export type JournalExecutionsResponse = ExecutionsListResponse;
+export type JournalPnLSummary = PnLSummaryResponse;
+export type { PositionsSummary, DailyPnLItem, DailyPnLResponse, SymbolPnLItem, SymbolPnLResponse } from '../types/generated/journal';
+// Screening
+export type ScreeningResultDto = GeneratedScreeningResultDto;
+export type ScreeningResponse = GeneratedScreeningResponse;
+export type MomentumResultDto = GeneratedMomentumResultDto;
+export type MomentumResponse = GeneratedMomentumResponse;
+// Ranking
+export type RankedSymbol = GeneratedRankedSymbol;
+export type RankingApiResponse = GeneratedRankingResponse;
+// Strategies
+export type Strategy = StrategyListItem;
+// Backtest
+export type BacktestStrategy = BacktestableStrategy;
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -119,6 +176,32 @@ export const getMarketStatus = async (market: 'KR' | 'US'): Promise<MarketStatus
   return response.data;
 };
 
+// ==================== 시장 온도 (Market Breadth) ====================
+
+/** 시장 온도 응답 */
+export interface MarketBreadthResponse {
+  /** 전체 시장 Above_MA20 비율 (%) */
+  all: string;
+  /** KOSPI Above_MA20 비율 (%) */
+  kospi: string;
+  /** KOSDAQ Above_MA20 비율 (%) */
+  kosdaq: string;
+  /** 시장 온도 (OVERHEAT/NEUTRAL/COLD) */
+  temperature: string;
+  /** 온도 아이콘 (🔥/🌤/🧊) */
+  temperatureIcon: string;
+  /** 매매 권장사항 */
+  recommendation: string;
+  /** 계산 시각 (ISO 8601) */
+  calculatedAt: string;
+}
+
+/** 시장 온도 조회 */
+export const getMarketBreadth = async (): Promise<MarketBreadthResponse> => {
+  const response = await api.get('/market/breadth');
+  return response.data;
+};
+
 // ==================== 캔들스틱 데이터 ====================
 
 export interface CandleData {
@@ -142,6 +225,50 @@ export const getKlines = async (params: {
   limit?: number;
 }): Promise<KlinesResponse> => {
   const response = await api.get('/market/klines', { params });
+  return response.data;
+};
+
+// ==================== 다중 타임프레임 캔들스틱 (Multi-Timeframe) ====================
+
+/** 다중 타임프레임 캔들 데이터 응답 */
+export interface MultiTimeframeKlinesResponse {
+  symbol: string;
+  klines: Record<string, CandleData[]>;
+}
+
+/** 타임프레임 타입 */
+export type Timeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w' | '1M';
+
+/**
+ * 다중 타임프레임 캔들 데이터 조회.
+ *
+ * 여러 타임프레임의 캔들 데이터를 한 번에 조회합니다.
+ *
+ * @param symbol - 심볼 (예: "005930", "BTCUSDT")
+ * @param timeframes - 조회할 타임프레임 목록 (예: ["1h", "4h", "1d"])
+ * @param limit - 각 타임프레임당 캔들 개수 (기본값: 100)
+ * @returns 타임프레임별 캔들 데이터
+ *
+ * @example
+ * ```typescript
+ * const data = await fetchMultiTimeframeKlines("BTCUSDT", ["1h", "4h", "1d"], 60);
+ * // data.klines["1h"] - 1시간봉 60개
+ * // data.klines["4h"] - 4시간봉 60개
+ * // data.klines["1d"] - 일봉 60개
+ * ```
+ */
+export const fetchMultiTimeframeKlines = async (
+  symbol: string,
+  timeframes: Timeframe[],
+  limit: number = 100
+): Promise<MultiTimeframeKlinesResponse> => {
+  const response = await api.get('/market/klines/multi', {
+    params: {
+      symbol,
+      timeframes: timeframes.join(','),
+      limit,
+    },
+  });
   return response.data;
 };
 
@@ -209,10 +336,20 @@ export const stopStrategy = async (strategyId: string) => {
   return response.data;
 };
 
+/** 다중 타임프레임 설정 */
+export interface MultiTimeframeConfig {
+  /** Primary 타임프레임 (전략 실행 기준) */
+  primary: Timeframe;
+  /** Secondary 타임프레임 목록 (추세 확인용) */
+  secondary: Array<{ timeframe: Timeframe; candle_count?: number }>;
+}
+
 export interface CreateStrategyRequest {
   strategy_type: string;
   name?: string;
   parameters: Record<string, unknown>;
+  /** 다중 타임프레임 설정 (옵션) */
+  multiTimeframeConfig?: MultiTimeframeConfig;
 }
 
 export interface CreateStrategyResponse {
@@ -292,6 +429,53 @@ export const updateStrategyConfig = async (
   return response.data;
 };
 
+/** 전략 심볼 목록 업데이트 응답 */
+export interface UpdateSymbolsResponse {
+  success: boolean;
+  strategy_id: string;
+  action: string;
+  message: string;
+}
+
+/** 전략의 심볼 목록 업데이트 */
+export const updateStrategySymbols = async (
+  strategyId: string,
+  symbols: string[]
+): Promise<UpdateSymbolsResponse> => {
+  const response = await api.put(`/strategies/${strategyId}/symbols`, { symbols });
+  return response.data;
+};
+
+// ==================== 타임프레임 설정 ====================
+
+/** 타임프레임 설정 응답 */
+export interface TimeframeConfigResponse {
+  strategy_id: string;
+  primary_timeframe: Timeframe;
+  is_multi_timeframe: boolean;
+  multi_timeframe_config?: MultiTimeframeConfig;
+  secondary_timeframes: Timeframe[];
+}
+
+/** 전략의 타임프레임 설정 조회 */
+export const getStrategyTimeframeConfig = async (
+  strategyId: string
+): Promise<TimeframeConfigResponse> => {
+  const response = await api.get(`/strategies/${strategyId}/timeframes`);
+  return response.data;
+};
+
+/** 전략의 타임프레임 설정 업데이트 */
+export const updateStrategyTimeframeConfig = async (
+  strategyId: string,
+  config: MultiTimeframeConfig | null
+): Promise<TimeframeConfigResponse> => {
+  const response = await api.put(`/strategies/${strategyId}/timeframes`, {
+    multiTimeframeConfig: config,
+  });
+  return response.data;
+};
+
 // ==================== 백테스트 ====================
 
 export interface BacktestRequest {
@@ -303,6 +487,8 @@ export interface BacktestRequest {
   commission_rate?: number;
   slippage_rate?: number;
   parameters?: Record<string, unknown>;
+  /** 다중 타임프레임 설정 (옵션) */
+  multi_timeframe_config?: MultiTimeframeConfig;
 }
 
 // 다중 자산 백테스트 요청 (Simple Power, HAA, XAA, Stock Rotation 등)
@@ -315,6 +501,8 @@ export interface BacktestMultiRequest {
   commission_rate?: number;
   slippage_rate?: number;
   parameters?: Record<string, unknown>;
+  /** 다중 타임프레임 설정 (옵션) */
+  multi_timeframe_config?: MultiTimeframeConfig;
 }
 
 // 다중 자산 백테스트 결과 (심볼별 데이터 포인트 포함)
@@ -479,6 +667,10 @@ export interface BacktestStrategy {
   schedule_detail?: string;
   /** 작동 방식 상세 설명 */
   how_it_works?: string;
+  /** 다중 타임프레임 전략 여부 */
+  isMultiTimeframe?: boolean;
+  /** 기본 다중 타임프레임 설정 */
+  defaultMultiTimeframeConfig?: MultiTimeframeConfig;
 }
 
 export interface BacktestStrategiesResponse {
@@ -541,6 +733,8 @@ export interface BacktestResult {
   equity_curve: EquityCurvePoint[];
   trades: TradeHistoryItem[];
   config_summary: BacktestConfigSummary;
+  /** 백테스트에 사용된 타임프레임 설정 (다중 TF 백테스트 시) */
+  timeframes_used?: MultiTimeframeConfig;
 }
 
 export const runBacktest = async (request: BacktestRequest): Promise<BacktestResult> => {
@@ -583,6 +777,8 @@ export interface SaveBacktestResultRequest {
   equity_curve: EquityCurvePoint[];
   trades: TradeHistoryItem[];
   success: boolean;
+  /** 백테스트에 사용된 타임프레임 설정 (다중 TF 백테스트 시) */
+  timeframes_used?: MultiTimeframeConfig;
 }
 
 /** 백테스트 결과 저장 응답 */
@@ -624,12 +820,21 @@ export type SimulationStateEnum = 'stopped' | 'running' | 'paused';
 /** 시뮬레이션 시작 요청 */
 export interface SimulationStartRequest {
   strategy_id: string;
+  /** 전략 파라미터 (JSON) */
+  parameters?: Record<string, unknown>;
+  /** 대상 심볼 목록 (미지정 시 전략 기본값 사용) */
+  symbols?: string[];
   initial_balance?: number;
+  /** 배속 (1.0 = 1초에 1캔들, 10.0 = 1초에 10캔들) */
   speed?: number;
   /** 시뮬레이션(백테스트) 시작 날짜 (YYYY-MM-DD) */
   start_date?: string;
   /** 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD) */
   end_date?: string;
+  /** 수수료율 (기본값: 0.001 = 0.1%) */
+  commission_rate?: number;
+  /** 슬리피지율 (기본값: 0.0005 = 0.05%) */
+  slippage_rate?: number;
 }
 
 /** 시뮬레이션 시작 응답 */
@@ -637,6 +842,8 @@ export interface SimulationStartResponse {
   success: boolean;
   message: string;
   started_at: string;
+  /** 전체 캔들 수 (진행률 계산용) */
+  total_candles: number;
 }
 
 /** 시뮬레이션 중지 응답 */
@@ -668,6 +875,12 @@ export interface SimulationStatusResponse {
   simulation_start_date: string | null;
   /** 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD) */
   simulation_end_date: string | null;
+  /** 진행률 (0.0 ~ 100.0) */
+  progress_pct: number;
+  /** 현재 캔들 인덱스 */
+  current_candle_index: number;
+  /** 전체 캔들 수 */
+  total_candles: number;
 }
 
 /** 시뮬레이션 포지션 */
@@ -710,19 +923,34 @@ export interface SimulationTradesResponse {
   total_commission: string;
 }
 
-/** 시뮬레이션 주문 요청 */
-export interface SimulationOrderRequest {
-  symbol: string;
-  side: string;  // "Buy" | "Sell"
-  quantity: number;
-  price?: number;
+/** 시뮬레이션 자본 곡선 포인트 */
+export interface SimulationEquityPoint {
+  timestamp: string;
+  equity: string;
+  drawdown_pct: string;
 }
 
-/** 시뮬레이션 주문 응답 */
-export interface SimulationOrderResponse {
-  success: boolean;
-  trade?: SimulationTrade;
-  error?: string;
+/** 시뮬레이션 자본 곡선 응답 */
+export interface SimulationEquityResponse {
+  points: SimulationEquityPoint[];
+  peak_equity: string;
+  max_drawdown_pct: string;
+}
+
+/** 시뮬레이션 신호 마커 */
+export interface SimulationSignalMarker {
+  symbol: string;
+  timestamp: string;
+  signal_type: string;  // "BuyEntry" | "SellEntry" | "BuyExit" | "SellExit"
+  price: string;
+  strength: number;
+  reason: string | null;
+}
+
+/** 시뮬레이션 신호 마커 응답 */
+export interface SimulationSignalsResponse {
+  signals: SimulationSignalMarker[];
+  total: number;
 }
 
 /** 시뮬레이션 일시정지/재개 응답 */
@@ -773,8 +1001,15 @@ export const getSimulationTrades = async (): Promise<SimulationTradesResponse> =
   return response.data;
 };
 
-export const placeSimulationOrder = async (order: SimulationOrderRequest): Promise<SimulationOrderResponse> => {
-  const response = await api.post('/simulation/order', order);
+/** 시뮬레이션 자본 곡선 조회 */
+export const getSimulationEquity = async (): Promise<SimulationEquityResponse> => {
+  const response = await api.get('/simulation/equity');
+  return response.data;
+};
+
+/** 시뮬레이션 신호 마커 조회 */
+export const getSimulationSignals = async (): Promise<SimulationSignalsResponse> => {
+  const response = await api.get('/simulation/signals');
   return response.data;
 };
 
@@ -1121,78 +1356,28 @@ export const searchSymbols = async (query: string, limit: number = 10): Promise<
   return response.data?.results || [];
 };
 
+/** 심볼 배치 조회 응답 */
+export interface SymbolBatchResponse {
+  symbols: SymbolSearchResult[];
+  total: number;
+}
+
+/**
+ * 여러 티커의 심볼 정보 일괄 조회
+ * @param tickers 조회할 티커 목록 (최대 100개)
+ * @returns 심볼 정보 배열
+ */
+export const getSymbolsBatch = async (tickers: string[]): Promise<SymbolSearchResult[]> => {
+  if (tickers.length === 0) return [];
+
+  const response = await api.post<SymbolBatchResponse>('/dataset/symbols/batch', { tickers });
+  return response.data?.symbols || [];
+};
+
 // ==================== 매매일지 (Journal) ====================
+// 타입은 types/generated/journal에서 import됨
 
-/** 매매일지 포지션 */
-export interface JournalPosition {
-  id: string;
-  exchange: string;
-  symbol: string;
-  symbol_name: string | null;
-  side: string;
-  quantity: string;
-  entry_price: string;
-  current_price: string | null;
-  cost_basis: string;
-  market_value: string | null;
-  unrealized_pnl: string | null;
-  unrealized_pnl_pct: string | null;
-  realized_pnl: string | null;
-  weight_pct: string | null;
-  first_trade_at: string | null;
-  last_trade_at: string | null;
-  trade_count: number | null;
-  strategy_id: string | null;
-  snapshot_time: string;
-}
-
-/** 포지션 요약 */
-export interface PositionsSummary {
-  total_positions: number;
-  total_cost_basis: string;
-  total_market_value: string;
-  total_unrealized_pnl: string;
-  total_unrealized_pnl_pct: string;
-}
-
-/** 포지션 목록 응답 */
-export interface JournalPositionsResponse {
-  positions: JournalPosition[];
-  total: number;
-  summary: PositionsSummary;
-}
-
-/** 체결 내역 */
-export interface JournalExecution {
-  id: string;
-  exchange: string;
-  symbol: string;
-  symbol_name: string | null;
-  side: string;
-  order_type: string;
-  quantity: string;
-  price: string;
-  notional_value: string;
-  fee: string | null;
-  fee_currency: string | null;
-  position_effect: string | null;
-  realized_pnl: string | null;
-  strategy_id: string | null;
-  strategy_name: string | null;
-  executed_at: string;
-  memo: string | null;
-  tags: string[] | null;
-}
-
-/** 체결 내역 목록 응답 */
-export interface JournalExecutionsResponse {
-  executions: JournalExecution[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-/** 체결 내역 조회 필터 */
+/** 체결 내역 조회 필터 (자동 생성 타입에 없음) */
 export interface ExecutionFilter {
   symbol?: string;
   side?: string;
@@ -1203,62 +1388,7 @@ export interface ExecutionFilter {
   offset?: number;
 }
 
-/** PnL 요약 응답 */
-export interface JournalPnLSummary {
-  total_realized_pnl: string;
-  total_fees: string;
-  net_pnl: string;
-  total_trades: number;
-  buy_trades: number;
-  sell_trades: number;
-  winning_trades: number;
-  losing_trades: number;
-  win_rate: string;
-  total_volume: string;
-  first_trade_at: string | null;
-  last_trade_at: string | null;
-}
-
-/** 일별 손익 항목 */
-export interface DailyPnLItem {
-  date: string;
-  total_trades: number;
-  buy_count: number;
-  sell_count: number;
-  total_volume: string;
-  total_fees: string;
-  realized_pnl: string;
-  symbol_count: number;
-}
-
-/** 일별 손익 응답 */
-export interface DailyPnLResponse {
-  daily: DailyPnLItem[];
-  total_days: number;
-}
-
-/** 종목별 손익 항목 */
-export interface SymbolPnLItem {
-  symbol: string;
-  symbol_name: string | null;
-  total_trades: number;
-  total_buy_qty: string;
-  total_sell_qty: string;
-  total_buy_value: string;
-  total_sell_value: string;
-  total_fees: string;
-  realized_pnl: string;
-  first_trade_at: string | null;
-  last_trade_at: string | null;
-}
-
-/** 종목별 손익 응답 */
-export interface SymbolPnLResponse {
-  symbols: SymbolPnLItem[];
-  total: number;
-}
-
-/** 동기화 응답 */
+/** 동기화 응답 (자동 생성 타입과 필드명 다름) */
 export interface JournalSyncResponse {
   success: boolean;
   inserted: number;
@@ -1410,6 +1540,11 @@ export interface TradingInsightsResponse {
   active_trading_days: number;
   first_trade_at: string | null;
   last_trade_at: string | null;
+  // 고급 통계 (연속 승/패, Max Drawdown)
+  max_consecutive_wins: number | null;
+  max_consecutive_losses: number | null;
+  max_drawdown: string | null;
+  max_drawdown_pct: string | null;
 }
 
 /** 전략별 성과 항목 */
@@ -1478,114 +1613,172 @@ export const getJournalStrategyPerformance = async (): Promise<StrategyPerforman
   return response.data;
 };
 
-// ==================== 스크리닝 (Screening) ====================
+// ==================== FIFO 원가 계산 ====================
 
-/** 스크리닝 필터 요청 */
-export interface ScreeningRequest {
-  market?: string;
-  exchange?: string;
-  sector?: string;
-  min_market_cap?: string;
-  max_market_cap?: string;
-  min_per?: string;
-  max_per?: string;
-  min_pbr?: string;
-  max_pbr?: string;
-  min_roe?: string;
-  max_roe?: string;
-  min_roa?: string;
-  max_roa?: string;
-  min_dividend_yield?: string;
-  max_dividend_yield?: string;
-  max_debt_ratio?: string;
-  min_revenue_growth?: string;
-  min_earnings_growth?: string;
-  max_distance_from_52w_high?: string;
-  min_distance_from_52w_low?: string;
-  min_volume_ratio?: string;
-  sort_by?: string;
-  sort_order?: string;
-  limit?: number;
-  offset?: number;
+/** FIFO 원가 계산 응답 */
+export interface FifoCostBasisResponse {
+  /** 심볼 */
+  symbol: string;
+  /** 총 보유 수량 */
+  total_quantity: string;
+  /** 평균 비용 (FIFO 기준) */
+  average_cost: string;
+  /** 평균 가격 */
+  average_price: string;
+  /** 총 비용 기준 */
+  total_cost_basis: string;
+  /** 시장 가치 (현재가 기준) */
+  market_value?: string;
+  /** 미실현 손익 */
+  unrealized_pnl?: string;
+  /** 미실현 손익률 (%) */
+  unrealized_pnl_pct?: string;
+  /** 총 실현 손익 */
+  total_realized_pnl: string;
+  /** 총 매도 금액 */
+  total_sales: string;
+  /** 매수 거래 수 */
+  buy_count: number;
+  /** 매도 거래 수 */
+  sell_count: number;
+  /** 현재 남은 로트 수 */
+  lot_count: number;
 }
 
-/** 스크리닝 결과 DTO */
-export interface ScreeningResultDto {
-  ticker: string;
+/** FIFO 원가 계산 조회 */
+export const getFifoCostBasis = async (
+  symbol: string,
+  market: string = 'KR',
+  currentPrice?: string
+): Promise<FifoCostBasisResponse> => {
+  const params: Record<string, string> = { market };
+  if (currentPrice) params.current_price = currentPrice;
+  const response = await api.get(`/journal/cost-basis/${symbol}`, { params });
+  return response.data;
+};
+
+// ==================== 관심종목 (Watchlist) ====================
+
+/** 관심종목 그룹 */
+export interface WatchlistGroup {
+  id: string;
   name: string;
+  description: string | null;
+  color: string | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 관심종목 그룹 (개수 포함) */
+export interface WatchlistWithCount extends WatchlistGroup {
+  item_count: number;
+}
+
+/** 관심종목 아이템 */
+export interface WatchlistItem {
+  id: string;
+  watchlist_id: string;
+  symbol: string;
   market: string;
-  exchange: string | null;
-  sector: string | null;
-  market_cap: string | null;
-  per: string | null;
-  pbr: string | null;
-  roe: string | null;
-  roa: string | null;
-  eps: string | null;
-  dividend_yield: string | null;
-  operating_margin: string | null;
-  debt_ratio: string | null;
-  revenue_growth_yoy: string | null;
-  earnings_growth_yoy: string | null;
-  current_price: string | null;
-  week_52_high: string | null;
-  week_52_low: string | null;
-  distance_from_52w_high: string | null;
-  distance_from_52w_low: string | null;
+  memo: string | null;
+  target_price: string | null;
+  stop_loss: string | null;
+  added_at: string;
+  updated_at: string;
 }
 
-/** 스크리닝 응답 */
-export interface ScreeningResponse {
+/** 관심종목 그룹 목록 응답 */
+export interface WatchlistListResponse {
+  watchlists: WatchlistWithCount[];
   total: number;
-  results: ScreeningResultDto[];
-  filter_summary: string;
 }
 
-/** 스크리닝 프리셋 */
+/** 관심종목 그룹 상세 응답 */
+export interface WatchlistDetailResponse {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string | null;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+  items: WatchlistItem[];
+  item_count: number;
+}
+
+/** 새 관심종목 아이템 */
+export interface NewWatchlistItem {
+  symbol: string;
+  market: string;
+  memo?: string | null;
+  target_price?: string | null;
+  stop_loss?: string | null;
+}
+
+/** 아이템 추가 응답 */
+export interface AddItemsResponse {
+  added: WatchlistItem[];
+  count: number;
+}
+
+/** 관심종목 그룹 목록 조회 */
+export const getWatchlists = async (): Promise<WatchlistListResponse> => {
+  const response = await api.get('/watchlist');
+  return response.data;
+};
+
+/** 관심종목 그룹 생성 */
+export const createWatchlist = async (name: string, description?: string, color?: string): Promise<WatchlistGroup> => {
+  const response = await api.post('/watchlist', { name, description, color });
+  return response.data;
+};
+
+/** 관심종목 그룹 상세 조회 */
+export const getWatchlistDetail = async (id: string): Promise<WatchlistDetailResponse> => {
+  const response = await api.get(`/watchlist/${id}`);
+  return response.data;
+};
+
+/** 관심종목 그룹 삭제 */
+export const deleteWatchlist = async (id: string): Promise<void> => {
+  await api.delete(`/watchlist/${id}`);
+};
+
+/** 관심종목에 아이템 추가 */
+export const addWatchlistItems = async (watchlistId: string, items: NewWatchlistItem[]): Promise<AddItemsResponse> => {
+  const response = await api.post(`/watchlist/${watchlistId}/items`, { items });
+  return response.data;
+};
+
+/** 관심종목에서 아이템 삭제 */
+export const removeWatchlistItem = async (watchlistId: string, symbol: string, market: string = 'KR'): Promise<void> => {
+  await api.delete(`/watchlist/${watchlistId}/items/${symbol}`, { params: { market } });
+};
+
+/** 특정 종목이 포함된 관심종목 그룹 조회 */
+export const findWatchlistsContainingSymbol = async (symbol: string, market: string = 'KR'): Promise<WatchlistGroup[]> => {
+  const response = await api.get(`/watchlist/symbol/${symbol}`, { params: { market } });
+  return response.data;
+};
+
+// ==================== 스크리닝 (Screening) ====================
+// 타입은 types/generated/screening에서 import됨
+
+/** 스크리닝 프리셋 (자동 생성 타입에 없음) */
 export interface ScreeningPreset {
   id: string;
   name: string;
   description: string;
 }
 
-/** 프리셋 목록 응답 */
+/** 프리셋 목록 응답 (자동 생성 타입에 없음) */
 export interface PresetsListResponse {
   presets: ScreeningPreset[];
 }
 
-/** 모멘텀 스크리닝 쿼리 */
-export interface MomentumQuery {
-  market?: string;
-  days?: number;
-  min_change_pct?: string;
-  min_volume_ratio?: string;
-  limit?: number;
-}
-
-/** 모멘텀 스크리닝 결과 DTO */
-export interface MomentumResultDto {
-  symbol: string;
-  name: string;
-  market: string;
-  exchange: string | null;
-  start_price: string;
-  end_price: string;
-  change_pct: string;
-  avg_volume: string;
-  current_volume: string;
-  volume_ratio: string;
-}
-
-/** 모멘텀 스크리닝 응답 */
-export interface MomentumResponse {
-  total: number;
-  days: number;
-  min_change_pct: string;
-  results: MomentumResultDto[];
-}
-
 /** 커스텀 스크리닝 실행 */
-export const runScreening = async (request: ScreeningRequest): Promise<ScreeningResponse> => {
+export const runScreening = async (request: GeneratedScreeningRequest): Promise<GeneratedScreeningResponse> => {
   const response = await api.post('/screening', request);
   return response.data;
 };
@@ -1596,12 +1789,68 @@ export const getScreeningPresets = async (): Promise<PresetsListResponse> => {
   return response.data;
 };
 
+/** 프리셋 상세 정보 (필터 포함) */
+export interface ScreeningPresetDetail {
+  id: string;
+  name: string;
+  description: string | null;
+  filters: Record<string, unknown>;
+  is_default: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 프리셋 목록 응답 (상세 정보 포함) */
+export interface PresetsDetailListResponse {
+  presets: ScreeningPresetDetail[];
+  total: number;
+}
+
+/** 프리셋 생성 요청 */
+export interface CreatePresetRequest {
+  name: string;
+  description?: string;
+  filters: Record<string, unknown>;
+}
+
+/** 프리셋 저장 응답 */
+export interface SavePresetResponse {
+  success: boolean;
+  preset: ScreeningPresetDetail;
+  message: string;
+}
+
+/** 프리셋 삭제 응답 */
+export interface DeletePresetResponse {
+  success: boolean;
+  message: string;
+}
+
+/** 프리셋 목록 조회 (상세 정보 포함) */
+export const getScreeningPresetsDetail = async (): Promise<PresetsDetailListResponse> => {
+  const response = await api.get('/screening/presets/all');
+  return response.data;
+};
+
+/** 프리셋 저장 */
+export const saveScreeningPreset = async (request: CreatePresetRequest): Promise<SavePresetResponse> => {
+  const response = await api.post('/screening/presets', request);
+  return response.data;
+};
+
+/** 프리셋 삭제 */
+export const deleteScreeningPreset = async (id: string): Promise<DeletePresetResponse> => {
+  const response = await api.delete(`/screening/presets/id/${id}`);
+  return response.data;
+};
+
 /** 프리셋 스크리닝 실행 */
 export const runPresetScreening = async (
   preset: string,
   market?: string,
   limit?: number
-): Promise<ScreeningResponse> => {
+): Promise<GeneratedScreeningResponse> => {
   const params: Record<string, string | number> = {};
   if (market) params.market = market;
   if (limit) params.limit = limit;
@@ -1610,8 +1859,171 @@ export const runPresetScreening = async (
 };
 
 /** 모멘텀 스크리닝 실행 */
-export const runMomentumScreening = async (query: MomentumQuery): Promise<MomentumResponse> => {
+export const runMomentumScreening = async (query: GeneratedMomentumQuery): Promise<GeneratedMomentumResponse> => {
   const response = await api.get('/screening/momentum', { params: query });
+  return response.data;
+};
+
+// ==================== Global Ranking (GlobalScore) ====================
+// 타입은 types/generated/ranking에서 import됨
+
+/** 랭킹 조회 쿼리 (자동 생성 타입에 없음) */
+export interface RankingQuery {
+  market?: string;
+  grade?: string;
+  min_score?: string;
+  limit?: number;
+}
+
+/** 상위 랭킹 조회 */
+export const getTopRanked = async (query?: RankingQuery): Promise<GeneratedRankingResponse> => {
+  const response = await api.get('/ranking/top', { params: query });
+  return response.data;
+};
+
+/** 모든 심볼 GlobalScore 계산 (관리자용) */
+export const calculateGlobalScore = async (): Promise<{ processed: number; started_at: string; completed_at: string }> => {
+  const response = await api.post('/ranking/global');
+  return response.data;
+};
+
+// ==================== Signals (신호 마커) ====================
+
+/** 지표 필터 조건 연산자 */
+export interface IndicatorCondition {
+  $gte?: number;  // >=
+  $lte?: number;  // <=
+  $gt?: number;   // >
+  $lt?: number;   // <
+  $eq?: number;   // =
+}
+
+/** 지표 기반 신호 검색 요청 */
+export interface SignalSearchRequest {
+  /** 지표 필터 (JSONB 쿼리) - 예: { "rsi": { "$gte": 70 }, "macd": { "$gt": 0 } } */
+  indicator_filter: Record<string, IndicatorCondition>;
+  /** 신호 유형 필터 (선택) */
+  signal_type?: string;
+  /** 최대 결과 개수 (기본 100, 최대 1000) */
+  limit?: number;
+}
+
+/** 심볼별 신호 조회 요청 */
+export interface SymbolSignalsQuery {
+  /** 심볼 (예: "005930") */
+  symbol: string;
+  /** 거래소 (예: "KRX") */
+  exchange: string;
+  /** 시작 시각 (ISO 8601) */
+  start_time?: string;
+  /** 종료 시각 (ISO 8601) */
+  end_time?: string;
+  /** 최대 결과 개수 */
+  limit?: number;
+}
+
+/** 전략별 신호 조회 요청 */
+export interface StrategySignalsQuery {
+  /** 전략 ID */
+  strategy_id: string;
+  /** 시작 시각 (ISO 8601) */
+  start_time?: string;
+  /** 종료 시각 (ISO 8601) */
+  end_time?: string;
+  /** 최대 결과 개수 */
+  limit?: number;
+}
+
+/** 신호 마커 DTO */
+export interface SignalMarkerDto {
+  id: string;
+  symbol: string;
+  timestamp: string;
+  signal_type: string;
+  side?: string;
+  price: string;
+  strength: number;
+  indicators: Record<string, number | undefined>;
+  reason: string;
+  strategy_id: string;
+  strategy_name: string;
+  executed: boolean;
+}
+
+/** 신호 검색 응답 */
+export interface SignalSearchResponse {
+  total: number;
+  signals: SignalMarkerDto[];
+}
+
+/** 백테스트 신호 응답 */
+export interface BacktestSignalsResponse {
+  backtest_id: string;
+  strategy_id: string;
+  strategy_type: string;
+  symbol: string;
+  total_trades: number;
+  trades: unknown;  // JSON 형태
+}
+
+/** 지표 기반 신호 검색 (POST) */
+export const searchSignals = async (request: SignalSearchRequest): Promise<SignalSearchResponse> => {
+  const response = await api.post('/signals/search', request);
+  return response.data;
+};
+
+/** 특정 심볼의 신호 조회 */
+export const getSymbolSignals = async (query: SymbolSignalsQuery): Promise<SignalSearchResponse> => {
+  const response = await api.get('/signals/by-symbol', { params: query });
+  return response.data;
+};
+
+/** 특정 전략의 신호 조회 */
+export const getStrategySignals = async (query: StrategySignalsQuery): Promise<SignalSearchResponse> => {
+  const response = await api.get('/signals/by-strategy', { params: query });
+  return response.data;
+};
+
+/** 백테스트 신호(거래) 조회 */
+export const getBacktestSignals = async (backtestId: string): Promise<BacktestSignalsResponse> => {
+  const response = await api.get(`/signals/markers/backtest/${backtestId}`);
+  return response.data;
+};
+
+// ==================== Sectors (섹터 분석) ====================
+
+/** 섹터 RS (상대강도) DTO */
+export interface SectorRsDto {
+  sector: string;
+  symbol_count: number;
+  avg_return_pct: string;
+  market_return: string;
+  relative_strength: string;
+  composite_score: string;
+  rank: number;
+  /** 5일 평균 수익률 (%) - SectorMomentumBar 용 */
+  avg_return_5d_pct?: string;
+  /** 섹터 총 시가총액 - SectorTreemap 용 */
+  total_market_cap?: string;
+}
+
+/** 섹터 순위 응답 */
+export interface SectorRankingResponse {
+  total: number;
+  days: number;
+  market?: string;
+  results: SectorRsDto[];
+}
+
+/** 섹터 순위 조회 */
+export const getSectorRanking = async (
+  market?: string,
+  days?: number
+): Promise<SectorRankingResponse> => {
+  const params: Record<string, string | number> = {};
+  if (market) params.market = market;
+  if (days) params.days = days;
+  const response = await api.get('/sectors/ranking', { params });
   return response.data;
 };
 

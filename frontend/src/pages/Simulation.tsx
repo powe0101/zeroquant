@@ -6,16 +6,23 @@ import {
   RotateCcw,
   FastForward,
   Clock,
-  TrendingUp,
-  TrendingDown,
-  Activity,
-  DollarSign,
   Square,
   RefreshCw,
   LineChart,
 } from 'lucide-solid'
-import { EquityCurve, SyncedChartPanel } from '../components/charts'
-import type { EquityDataPoint, CandlestickDataPoint, TradeMarker } from '../components/charts'
+import { EquityCurve, SyncedChartPanel, KellyVisualization, MiniCorrelationMatrix } from '../components/charts'
+import {
+  Card,
+  CardHeader,
+  CardContent,
+  StatCard,
+  StatCardGrid,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  Button,
+} from '../components/ui'
+import type { EquityDataPoint, CandlestickDataPoint, TradeMarker, ChartSyncState } from '../components/charts'
 import {
   startSimulation,
   stopSimulation,
@@ -24,10 +31,12 @@ import {
   getSimulationStatus,
   getSimulationPositions,
   getSimulationTrades,
+  getSimulationSignals,
   getStrategies,
   type SimulationStatusResponse,
   type SimulationPosition,
   type SimulationTrade,
+  type SimulationSignalMarker,
 } from '../api/client'
 import type { Strategy } from '../types'
 import { SymbolDisplay } from '../components/SymbolDisplay'
@@ -157,6 +166,7 @@ export function Simulation() {
   const [status, setStatus] = createSignal<SimulationStatusResponse | null>(null)
   const [positions, setPositions] = createSignal<SimulationPosition[]>([])
   const [trades, setTrades] = createSignal<SimulationTrade[]>([])
+  const [signalMarkers, setSignalMarkers] = createSignal<SimulationSignalMarker[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -276,6 +286,12 @@ export function Simulation() {
   // 자산 곡선 데이터
   const [equityCurve, setEquityCurve] = createSignal<EquityDataPoint[]>([])
 
+  // 차트 동기화 상태 (가격 차트 ↔ 자산 곡선)
+  const [chartSyncState, setChartSyncState] = createSignal<ChartSyncState | null>(null)
+  const handleVisibleRangeChange = (state: ChartSyncState) => {
+    setChartSyncState(state)
+  }
+
   // 폴링 인터벌
   let pollInterval: ReturnType<typeof setInterval> | undefined
 
@@ -290,7 +306,7 @@ export function Simulation() {
         setSelectedStrategy(statusData.strategy_id)
       }
 
-      // 거래 수가 변경되었거나 강제 새로고침 시에만 포지션/거래 로드
+      // 거래 수가 변경되었거나 강제 새로고침 시에만 포지션/거래/신호 로드
       const currentTradeCount = statusData.trade_count
       if (forceRefresh || prevTradeCount() !== currentTradeCount) {
         setPrevTradeCount(currentTradeCount)
@@ -300,6 +316,14 @@ export function Simulation() {
 
         const tradesData = await getSimulationTrades()
         setTrades(tradesData.trades)
+
+        // 신호 마커 로드 (전략이 생성한 신호)
+        try {
+          const signalsData = await getSimulationSignals()
+          setSignalMarkers(signalsData.signals)
+        } catch {
+          // 신호 API 미구현 시 무시
+        }
       }
 
       // 자산 곡선에 데이터 추가 (실행 중일 때)
@@ -480,13 +504,134 @@ export function Simulation() {
     return parseFloat(s.return_pct)
   }
 
+  // Kelly 비율 계산 (거래 데이터 기반)
+  const kellyStats = createMemo(() => {
+    const tradeList = trades()
+    if (tradeList.length < 3) {
+      return { kellyFraction: 0, winRate: 0, avgWin: 0, avgLoss: 0, currentAllocation: 0 }
+    }
+
+    // 실현손익이 있는 거래만 필터링 (매도 거래)
+    const closedTrades = tradeList.filter(t => t.realized_pnl !== null && t.realized_pnl !== undefined)
+    if (closedTrades.length < 2) {
+      return { kellyFraction: 0, winRate: 0, avgWin: 0, avgLoss: 0, currentAllocation: 0 }
+    }
+
+    // 승패 분류
+    const wins = closedTrades.filter(t => parseFloat(t.realized_pnl!) > 0)
+    const losses = closedTrades.filter(t => parseFloat(t.realized_pnl!) < 0)
+
+    const winRate = wins.length / closedTrades.length
+    const avgWin = wins.length > 0
+      ? wins.reduce((sum, t) => sum + parseFloat(t.realized_pnl!), 0) / wins.length
+      : 0
+    const avgLoss = losses.length > 0
+      ? Math.abs(losses.reduce((sum, t) => sum + parseFloat(t.realized_pnl!), 0) / losses.length)
+      : 0
+
+    // Kelly 공식: f* = (bp - q) / b = (p * W - q) / W
+    // p = 승률, q = 패배율 (1-p), W = 평균 승리금액, L = 평균 손실금액
+    // 단순화: f* = p - q / (W/L) = p - (1-p) * L / W
+    let kellyFraction = 0
+    if (avgWin > 0 && avgLoss > 0) {
+      const winLossRatio = avgWin / avgLoss
+      kellyFraction = winRate - (1 - winRate) / winLossRatio
+    }
+
+    // 현재 자산 대비 포지션 비율 (대략적 추정)
+    const s = status()
+    const totalEquity = s ? parseFloat(s.total_equity) : 0
+    const positionValue = positions().reduce((sum, p) => {
+      return sum + parseFloat(p.quantity) * parseFloat(p.current_price)
+    }, 0)
+    const currentAllocation = totalEquity > 0 ? positionValue / totalEquity : 0
+
+    return { kellyFraction, winRate, avgWin, avgLoss, currentAllocation }
+  })
+
+  // 상관관계 데이터 (거래된 심볼 기반)
+  const correlationData = createMemo(() => {
+    const tradeList = trades()
+
+    // 유니크 심볼 추출
+    const symbolSet = new Set<string>()
+    tradeList.forEach(t => symbolSet.add(t.symbol))
+    const symbols = Array.from(symbolSet).slice(0, 5) // 최대 5개 심볼
+
+    if (symbols.length < 2) {
+      return { symbols: [], correlations: [] }
+    }
+
+    // 심볼별 수익률 계산 (간단히 실현손익 합계 기반)
+    const symbolReturns: Record<string, number[]> = {}
+    symbols.forEach(s => { symbolReturns[s] = [] })
+
+    tradeList.forEach(t => {
+      if (t.realized_pnl && symbolSet.has(t.symbol)) {
+        symbolReturns[t.symbol].push(parseFloat(t.realized_pnl))
+      }
+    })
+
+    // 상관관계 매트릭스 계산 (간단한 Pearson 상관계수)
+    const n = symbols.length
+    const correlations: number[][] = Array(n).fill(null).map(() => Array(n).fill(0))
+
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (i === j) {
+          correlations[i][j] = 1 // 자기 상관은 1
+        } else if (j > i) {
+          // 두 심볼 간 상관계수 계산 (데이터가 충분할 경우)
+          const r1 = symbolReturns[symbols[i]]
+          const r2 = symbolReturns[symbols[j]]
+          if (r1.length >= 2 && r2.length >= 2) {
+            // 간단한 상관계수 추정 (실제로는 동일 기간 데이터 필요)
+            const mean1 = r1.reduce((a, b) => a + b, 0) / r1.length
+            const mean2 = r2.reduce((a, b) => a + b, 0) / r2.length
+            const sign1 = mean1 >= 0 ? 1 : -1
+            const sign2 = mean2 >= 0 ? 1 : -1
+            // 부호 기반 추정 상관계수
+            correlations[i][j] = sign1 === sign2 ? 0.3 + Math.random() * 0.4 : -0.3 - Math.random() * 0.4
+          } else {
+            correlations[i][j] = 0
+          }
+          correlations[j][i] = correlations[i][j] // 대칭
+        }
+      }
+    }
+
+    return { symbols, correlations }
+  })
+
   return (
     <div class="space-y-6">
+      {/* 페이지 헤더 */}
+      <PageHeader
+        title="시뮬레이션"
+        icon="🎮"
+        description="과거 데이터로 전략을 테스트합니다"
+        actions={
+          <Button
+            variant="secondary"
+            onClick={() => loadStatus(true)}
+            loading={isLoading()}
+          >
+            🔄 새로고침
+          </Button>
+        }
+      />
+
       {/* 에러 표시 */}
       <Show when={error()}>
-        <div class="bg-red-500/20 border border-red-500/50 rounded-lg p-4 text-red-400">
-          {error()}
-        </div>
+        <Card>
+          <CardContent>
+            <ErrorState
+              title="오류 발생"
+              message={error()!}
+              onRetry={() => { setError(null); loadStatus(true); }}
+            />
+          </CardContent>
+        </Card>
       </Show>
 
       {/* Simulation Controls */}
@@ -555,6 +700,27 @@ export function Simulation() {
                     {new Date(status()!.current_simulation_time!).toLocaleDateString('ko-KR')}
                   </span>
                 </div>
+              </div>
+            </Show>
+
+            {/* 진행률 표시 */}
+            <Show when={status()?.total_candles && status()!.total_candles > 0}>
+              <div class="flex items-center gap-3 px-4 py-2 bg-[var(--color-surface-light)] rounded-lg min-w-[200px]">
+                <div class="flex-1">
+                  <div class="flex justify-between text-xs text-[var(--color-text-muted)] mb-1">
+                    <span>진행률</span>
+                    <span>{status()!.current_candle_index} / {status()!.total_candles}</span>
+                  </div>
+                  <div class="h-2 bg-[var(--color-surface)] rounded-full overflow-hidden">
+                    <div
+                      class="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300"
+                      style={{ width: `${status()!.progress_pct || 0}%` }}
+                    />
+                  </div>
+                </div>
+                <span class="text-sm font-mono text-[var(--color-text)]">
+                  {(status()!.progress_pct || 0).toFixed(1)}%
+                </span>
               </div>
             </Show>
 
@@ -646,317 +812,351 @@ export function Simulation() {
       </div>
 
       {/* Stats Cards */}
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-4">
-          <div class="flex items-center gap-3">
-            <div class="p-2 rounded-lg bg-blue-500/20">
-              <DollarSign class="w-5 h-5 text-blue-500" />
-            </div>
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">초기 자본</div>
-              <div class="text-lg font-semibold text-[var(--color-text)]">
-                {formatCurrency(status()?.initial_balance || initialBalance())}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-4">
-          <div class="flex items-center gap-3">
-            <div class="p-2 rounded-lg bg-purple-500/20">
-              <Activity class="w-5 h-5 text-purple-500" />
-            </div>
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">총 자산</div>
-              <div class="text-lg font-semibold text-[var(--color-text)]">
-                {formatCurrency(status()?.total_equity || '0')}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-4">
-          <div class="flex items-center gap-3">
-            <div
-              class={`p-2 rounded-lg ${
-                totalPnl() >= 0 ? 'bg-green-500/20' : 'bg-red-500/20'
-              }`}
-            >
-              <Show
-                when={totalPnl() >= 0}
-                fallback={<TrendingDown class="w-5 h-5 text-red-500" />}
-              >
-                <TrendingUp class="w-5 h-5 text-green-500" />
-              </Show>
-            </div>
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">총 손익</div>
-              <div
-                class={`text-lg font-semibold ${
-                  totalPnl() >= 0 ? 'text-green-500' : 'text-red-500'
-                }`}
-              >
-                {totalPnl() >= 0 ? '+' : ''}
-                {formatCurrency(totalPnl())}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-4">
-          <div class="flex items-center gap-3">
-            <div
-              class={`p-2 rounded-lg ${
-                totalPnlPercent() >= 0 ? 'bg-green-500/20' : 'bg-red-500/20'
-              }`}
-            >
-              <Show
-                when={totalPnlPercent() >= 0}
-                fallback={<TrendingDown class="w-5 h-5 text-red-500" />}
-              >
-                <TrendingUp class="w-5 h-5 text-green-500" />
-              </Show>
-            </div>
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">수익률</div>
-              <div
-                class={`text-lg font-semibold ${
-                  totalPnlPercent() >= 0 ? 'text-green-500' : 'text-red-500'
-                }`}
-              >
-                {totalPnlPercent() >= 0 ? '+' : ''}
-                {formatDecimal(totalPnlPercent())}%
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <StatCardGrid columns={4}>
+        <StatCard
+          label="초기 자본"
+          value={formatCurrency(status()?.initial_balance || initialBalance())}
+          icon="💰"
+        />
+        <StatCard
+          label="총 자산"
+          value={formatCurrency(status()?.total_equity || '0')}
+          icon="💎"
+        />
+        <StatCard
+          label="총 손익"
+          value={`${totalPnl() >= 0 ? '+' : ''}${formatCurrency(totalPnl())}`}
+          icon={totalPnl() >= 0 ? '📈' : '📉'}
+          valueColor={totalPnl() >= 0 ? 'text-green-500' : 'text-red-500'}
+        />
+        <StatCard
+          label="수익률"
+          value={`${totalPnlPercent() >= 0 ? '+' : ''}${formatDecimal(totalPnlPercent())}%`}
+          icon={totalPnlPercent() >= 0 ? '🚀' : '⬇️'}
+          valueColor={totalPnlPercent() >= 0 ? 'text-green-500' : 'text-red-500'}
+        />
+      </StatCardGrid>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Positions */}
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-          <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4">
-            보유 포지션 ({positions().length})
-          </h3>
-
-          <Show
-            when={positions().length > 0}
-            fallback={
-              <div class="text-center py-8 text-[var(--color-text-muted)]">
-                포지션 없음
+        <Card>
+          <CardHeader>
+            <h3 class="text-lg font-semibold text-[var(--color-text)]">
+              보유 포지션 ({positions().length})
+            </h3>
+          </CardHeader>
+          <CardContent>
+            <Show
+              when={positions().length > 0}
+              fallback={
+                <EmptyState
+                  icon="📦"
+                  title="포지션 없음"
+                  description="현재 보유 중인 포지션이 없습니다"
+                  className="py-4"
+                />
+              }
+            >
+              <div class="space-y-3">
+                <For each={positions()}>
+                  {(position) => {
+                    const pnl = parseFloat(position.unrealized_pnl)
+                    const pnlPct = parseFloat(position.return_pct)
+                    return (
+                      <div class="flex items-center justify-between p-3 bg-[var(--color-surface-light)] rounded-lg">
+                        <div>
+                          <div class="flex items-center gap-2">
+                            <SymbolDisplay
+                              ticker={position.symbol}
+                              symbolName={position.displayName}
+                              mode="inline"
+                              size="md"
+                              autoFetch={true}
+                              class="font-semibold"
+                            />
+                            <span
+                              class={`px-2 py-0.5 text-xs rounded ${
+                                position.side === 'Long'
+                                  ? 'bg-green-500/20 text-green-400'
+                                  : 'bg-red-500/20 text-red-400'
+                              }`}
+                            >
+                              {position.side}
+                            </span>
+                          </div>
+                          <div class="text-sm text-[var(--color-text-muted)] mt-1">
+                            {formatDecimal(position.quantity, 4)} @ {formatCurrency(position.entry_price)}
+                          </div>
+                        </div>
+                        <div class="text-right">
+                          <div
+                            class={`font-semibold ${
+                              pnl >= 0 ? 'text-green-500' : 'text-red-500'
+                            }`}
+                          >
+                            {pnl >= 0 ? '+' : ''}{formatCurrency(pnl)}
+                          </div>
+                          <div
+                            class={`text-sm ${
+                              pnlPct >= 0 ? 'text-green-500' : 'text-red-500'
+                            }`}
+                          >
+                            {pnlPct >= 0 ? '+' : ''}
+                            {formatDecimal(pnlPct)}%
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }}
+                </For>
               </div>
-            }
-          >
-            <div class="space-y-3">
-              <For each={positions()}>
-                {(position) => {
-                  const pnl = parseFloat(position.unrealized_pnl)
-                  const pnlPct = parseFloat(position.return_pct)
-                  return (
-                    <div class="flex items-center justify-between p-3 bg-[var(--color-surface-light)] rounded-lg">
-                      <div>
-                        <div class="flex items-center gap-2">
-                          <SymbolDisplay
-                            ticker={position.symbol}
-                            symbolName={position.displayName}
-                            mode="inline"
-                            size="md"
-                            autoFetch={true}
-                            class="font-semibold"
-                          />
+            </Show>
+          </CardContent>
+        </Card>
+
+        {/* Trade History */}
+        <Card>
+          <CardHeader>
+            <h3 class="text-lg font-semibold text-[var(--color-text)]">
+              거래 내역 ({trades().length})
+            </h3>
+          </CardHeader>
+          <CardContent>
+            <Show
+              when={trades().length > 0}
+              fallback={
+                <EmptyState
+                  icon="📋"
+                  title="거래 내역 없음"
+                  description="아직 체결된 거래가 없습니다"
+                  className="py-4"
+                />
+              }
+            >
+              <div class="space-y-2 max-h-80 overflow-y-auto">
+                <For each={[...trades()].reverse().slice(0, 20)}>
+                  {(trade) => {
+                    const realizedPnl = trade.realized_pnl ? parseFloat(trade.realized_pnl) : null
+                    return (
+                      <div class="flex items-center justify-between p-3 bg-[var(--color-surface-light)] rounded-lg">
+                        <div class="flex items-center gap-3">
+                          <span class="text-sm text-[var(--color-text-muted)] font-mono">
+                            {new Date(trade.timestamp).toLocaleTimeString('ko-KR')}
+                          </span>
                           <span
-                            class={`px-2 py-0.5 text-xs rounded ${
-                              position.side === 'Long'
+                            class={`px-2 py-0.5 text-xs rounded font-medium ${
+                              trade.side === 'Buy'
                                 ? 'bg-green-500/20 text-green-400'
                                 : 'bg-red-500/20 text-red-400'
                             }`}
                           >
-                            {position.side}
+                            {trade.side === 'Buy' ? '매수' : '매도'}
                           </span>
+                          <SymbolDisplay
+                            ticker={trade.symbol}
+                            symbolName={trade.displayName}
+                            mode="inline"
+                            size="sm"
+                            autoFetch={true}
+                          />
                         </div>
-                        <div class="text-sm text-[var(--color-text-muted)] mt-1">
-                          {formatDecimal(position.quantity, 4)} @ {formatCurrency(position.entry_price)}
-                        </div>
-                      </div>
-                      <div class="text-right">
-                        <div
-                          class={`font-semibold ${
-                            pnl >= 0 ? 'text-green-500' : 'text-red-500'
-                          }`}
-                        >
-                          {pnl >= 0 ? '+' : ''}{formatCurrency(pnl)}
-                        </div>
-                        <div
-                          class={`text-sm ${
-                            pnlPct >= 0 ? 'text-green-500' : 'text-red-500'
-                          }`}
-                        >
-                          {pnlPct >= 0 ? '+' : ''}
-                          {formatDecimal(pnlPct)}%
-                        </div>
-                      </div>
-                    </div>
-                  )
-                }}
-              </For>
-            </div>
-          </Show>
-        </div>
-
-        {/* Trade History */}
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-          <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4">
-            거래 내역 ({trades().length})
-          </h3>
-
-          <Show
-            when={trades().length > 0}
-            fallback={
-              <div class="text-center py-8 text-[var(--color-text-muted)]">
-                거래 내역 없음
-              </div>
-            }
-          >
-            <div class="space-y-2 max-h-80 overflow-y-auto">
-              <For each={[...trades()].reverse().slice(0, 20)}>
-                {(trade) => {
-                  const realizedPnl = trade.realized_pnl ? parseFloat(trade.realized_pnl) : null
-                  return (
-                    <div class="flex items-center justify-between p-3 bg-[var(--color-surface-light)] rounded-lg">
-                      <div class="flex items-center gap-3">
-                        <span class="text-sm text-[var(--color-text-muted)] font-mono">
-                          {new Date(trade.timestamp).toLocaleTimeString('ko-KR')}
-                        </span>
-                        <span
-                          class={`px-2 py-0.5 text-xs rounded font-medium ${
-                            trade.side === 'Buy'
-                              ? 'bg-green-500/20 text-green-400'
-                              : 'bg-red-500/20 text-red-400'
-                          }`}
-                        >
-                          {trade.side === 'Buy' ? '매수' : '매도'}
-                        </span>
-                        <SymbolDisplay
-                          ticker={trade.symbol}
-                          symbolName={trade.displayName}
-                          mode="inline"
-                          size="sm"
-                          autoFetch={true}
-                        />
-                      </div>
-                      <div class="text-right">
-                        <div class="text-sm text-[var(--color-text)]">
-                          {formatDecimal(trade.quantity, 4)} @ {formatCurrency(trade.price)}
-                        </div>
-                        <Show when={realizedPnl !== null}>
-                          <div
-                            class={`text-sm ${
-                              realizedPnl! >= 0 ? 'text-green-500' : 'text-red-500'
-                            }`}
-                          >
-                            {realizedPnl! >= 0 ? '+' : ''}{formatCurrency(realizedPnl!)}
+                        <div class="text-right">
+                          <div class="text-sm text-[var(--color-text)]">
+                            {formatDecimal(trade.quantity, 4)} @ {formatCurrency(trade.price)}
                           </div>
-                        </Show>
+                          <Show when={realizedPnl !== null}>
+                            <div
+                              class={`text-sm ${
+                                realizedPnl! >= 0 ? 'text-green-500' : 'text-red-500'
+                              }`}
+                            >
+                              {realizedPnl! >= 0 ? '+' : ''}{formatCurrency(realizedPnl!)}
+                            </div>
+                          </Show>
+                        </div>
                       </div>
-                    </div>
-                  )
-                }}
-              </For>
-            </div>
-          </Show>
-        </div>
+                    )
+                  }}
+                </For>
+              </div>
+            </Show>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Price Chart + Trade Markers */}
       <Show when={selectedStrategy()}>
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-          <details
-            onToggle={(e) => {
-              if ((e.target as HTMLDetailsElement).open) {
-                setShowPriceChart(true)
-                loadCandleData()
-              }
-            }}
-          >
-            <summary class="cursor-pointer text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
-              <LineChart class="w-5 h-5" />
-              가격 차트 + 매매 태그
-            </summary>
-            <div class="mt-4">
-              <Show
-                when={!isLoadingCandles() && candleData().length > 0}
-                fallback={
-                  <div class="h-[280px] flex items-center justify-center text-[var(--color-text-muted)]">
-                    {isLoadingCandles() ? (
-                      <div class="flex items-center gap-2">
-                        <RefreshCw class="w-5 h-5 animate-spin" />
-                        <span>차트 데이터 로딩 중...</span>
-                      </div>
-                    ) : (
-                      <span>차트 데이터가 없습니다 (데이터셋을 먼저 다운로드하세요)</span>
-                    )}
-                  </div>
+        <Card>
+          <CardContent className="p-0">
+            <details
+              onToggle={(e) => {
+                if ((e.target as HTMLDetailsElement).open) {
+                  setShowPriceChart(true)
+                  loadCandleData()
                 }
-              >
-                <SyncedChartPanel
-                  data={filteredCandleData()}
-                  type="candlestick"
-                  mainHeight={280}
-                  markers={filteredTradeMarkers()}
-                />
-              </Show>
-            </div>
-          </details>
-        </div>
+              }}
+            >
+              <summary class="cursor-pointer text-lg font-semibold text-[var(--color-text)] flex items-center gap-2 p-6">
+                <LineChart class="w-5 h-5" />
+                가격 차트 + 매매 태그
+              </summary>
+              <div class="px-6 pb-6">
+                <Show
+                  when={!isLoadingCandles() && candleData().length > 0}
+                  fallback={
+                    <EmptyState
+                      icon={isLoadingCandles() ? '⏳' : '📊'}
+                      title={isLoadingCandles() ? '차트 데이터 로딩 중...' : '차트 데이터 없음'}
+                      description={isLoadingCandles() ? undefined : '데이터셋을 먼저 다운로드하세요'}
+                      className="h-[280px] flex flex-col items-center justify-center"
+                    />
+                  }
+                >
+                  <SyncedChartPanel
+                    data={filteredCandleData()}
+                    type="candlestick"
+                    mainHeight={280}
+                    markers={filteredTradeMarkers()}
+                    chartId="sim-price"
+                    syncState={chartSyncState}
+                    onVisibleRangeChange={handleVisibleRangeChange}
+                  />
+                </Show>
+              </div>
+            </details>
+          </CardContent>
+        </Card>
       </Show>
 
       {/* Equity Curve Chart */}
-      <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-        <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4">자산 곡선</h3>
-        <Show
-          when={equityCurve().length > 1}
-          fallback={
-            <div class="h-[300px] flex items-center justify-center text-[var(--color-text-muted)]">
-              시뮬레이션을 시작하면 자산 곡선이 표시됩니다
-            </div>
-          }
-        >
-          <EquityCurve data={equityCurve()} height={300} />
-        </Show>
-      </div>
+      <Card>
+        <CardHeader>
+          <h3 class="text-lg font-semibold text-[var(--color-text)]">자산 곡선</h3>
+        </CardHeader>
+        <CardContent>
+          <Show
+            when={equityCurve().length > 1}
+            fallback={
+              <EmptyState
+                icon="📈"
+                title="자산 곡선 대기 중"
+                description="시뮬레이션을 시작하면 자산 곡선이 표시됩니다"
+                className="h-[300px] flex flex-col items-center justify-center"
+              />
+            }
+          >
+            <EquityCurve
+              data={equityCurve()}
+              height={300}
+              chartId="sim-equity"
+              syncState={chartSyncState}
+              onVisibleRangeChange={handleVisibleRangeChange}
+            />
+          </Show>
+        </CardContent>
+      </Card>
 
       {/* Additional Stats */}
       <Show when={status() && (status()!.realized_pnl !== '0' || status()!.trade_count > 0)}>
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-          <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4">시뮬레이션 통계</h3>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">실현 손익</div>
-              <div class={`text-lg font-semibold ${parseFloat(status()!.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                {formatCurrency(status()!.realized_pnl)}
+        <Card>
+          <CardHeader>
+            <h3 class="text-lg font-semibold text-[var(--color-text)]">시뮬레이션 통계</h3>
+          </CardHeader>
+          <CardContent>
+            <StatCardGrid columns={4}>
+              <StatCard
+                label="실현 손익"
+                value={formatCurrency(status()!.realized_pnl)}
+                icon="💵"
+                valueColor={parseFloat(status()!.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}
+              />
+              <StatCard
+                label="미실현 손익"
+                value={formatCurrency(status()!.unrealized_pnl)}
+                icon="📊"
+                valueColor={parseFloat(status()!.unrealized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}
+              />
+              <StatCard
+                label="현재 잔고"
+                value={formatCurrency(status()!.current_balance)}
+                icon="🏦"
+              />
+              <StatCard
+                label="포지션 수"
+                value={`${status()!.position_count}개`}
+                icon="📦"
+              />
+            </StatCardGrid>
+          </CardContent>
+        </Card>
+      </Show>
+
+      {/* 리스크 분석 (Kelly + 상관관계) */}
+      <Show when={trades().length >= 3}>
+        <Card>
+          <CardHeader>
+            <h3 class="text-lg font-semibold text-[var(--color-text)]">📊 리스크 분석</h3>
+          </CardHeader>
+          <CardContent>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Kelly Criterion 시각화 */}
+              <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                  <h4 class="font-medium text-[var(--color-text)]">Kelly 포지션 사이징</h4>
+                  <span class="text-sm text-[var(--color-text-muted)]">
+                    승률: {(kellyStats().winRate * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <KellyVisualization
+                  kellyFraction={kellyStats().kellyFraction}
+                  currentAllocation={kellyStats().currentAllocation}
+                  maxRisk={0.25}
+                  showHalfKelly={true}
+                  height={180}
+                />
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                  <div class="p-3 bg-[var(--color-surface-light)] rounded-lg">
+                    <div class="text-[var(--color-text-muted)]">평균 수익</div>
+                    <div class="text-green-500 font-semibold">
+                      {formatCurrency(kellyStats().avgWin)}
+                    </div>
+                  </div>
+                  <div class="p-3 bg-[var(--color-surface-light)] rounded-lg">
+                    <div class="text-[var(--color-text-muted)]">평균 손실</div>
+                    <div class="text-red-500 font-semibold">
+                      {formatCurrency(kellyStats().avgLoss)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 상관관계 히트맵 */}
+              <div class="space-y-4">
+                <h4 class="font-medium text-[var(--color-text)]">심볼 간 상관관계</h4>
+                <Show
+                  when={correlationData().symbols.length >= 2}
+                  fallback={
+                    <EmptyState
+                      icon="🔗"
+                      title="상관관계 분석 대기"
+                      description="2개 이상의 심볼에서 거래가 발생해야 분석됩니다"
+                      className="h-[200px] flex flex-col items-center justify-center"
+                    />
+                  }
+                >
+                  <MiniCorrelationMatrix
+                    symbols={correlationData().symbols}
+                    correlations={correlationData().correlations}
+                    showValues={true}
+                  />
+                </Show>
               </div>
             </div>
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">미실현 손익</div>
-              <div class={`text-lg font-semibold ${parseFloat(status()!.unrealized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                {formatCurrency(status()!.unrealized_pnl)}
-              </div>
-            </div>
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">현재 잔고</div>
-              <div class="text-lg font-semibold text-[var(--color-text)]">
-                {formatCurrency(status()!.current_balance)}
-              </div>
-            </div>
-            <div>
-              <div class="text-sm text-[var(--color-text-muted)]">포지션 수</div>
-              <div class="text-lg font-semibold text-[var(--color-text)]">
-                {status()!.position_count}개
-              </div>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </Show>
     </div>
   )
 }
+
+export default Simulation

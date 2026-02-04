@@ -36,11 +36,17 @@ pub struct StrategyMeta {
     /// 전략 설명
     pub description: &'static str,
 
-    /// 기본 타임프레임
+    /// 기본 타임프레임 (Primary)
     pub default_timeframe: &'static str,
 
+    /// 보조 타임프레임 (Secondary, 다중 TF 전략용)
+    ///
+    /// 빈 배열 = 단일 타임프레임 전략
+    /// 예: ["1h", "1d"] = Primary 외에 1시간봉과 일봉도 사용
+    pub secondary_timeframes: &'static [&'static str],
+
     /// 권장 심볼 (빈 배열 = 단일 종목, 사용자 지정)
-    pub default_symbols: &'static [&'static str],
+    pub default_tickers: &'static [&'static str],
 
     /// 전략 카테고리
     pub category: StrategyCategory,
@@ -99,7 +105,9 @@ impl StrategyRegistry {
                     "name": meta.name,
                     "description": meta.description,
                     "defaultTimeframe": meta.default_timeframe,
-                    "defaultSymbols": meta.default_symbols,
+                    "secondaryTimeframes": meta.secondary_timeframes,
+                    "isMultiTimeframe": !meta.secondary_timeframes.is_empty(),
+                    "defaultStrings": meta.default_tickers,
                     "category": meta.category,
                     "supportedMarkets": meta.supported_markets.iter()
                         .map(|m| format!("{:?}", m)).collect::<Vec<_>>(),

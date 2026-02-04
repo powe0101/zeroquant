@@ -24,6 +24,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use ts_rs::TS;
 use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
@@ -36,7 +37,8 @@ use trader_strategy::{EngineError, EngineStats, Strategy, StrategyStatus};
 // ==================== 응답 타입 ====================
 
 /// 전략 목록 응답.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct StrategiesListResponse {
     /// 전략 목록
     pub strategies: Vec<StrategyListItem>,
@@ -47,7 +49,8 @@ pub struct StrategiesListResponse {
 }
 
 /// 전략 목록 항목.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct StrategyListItem {
     /// 전략 ID
     pub id: String,
@@ -78,10 +81,18 @@ pub struct StrategyListItem {
     /// 할당 자본
     #[serde(rename = "allocatedCapital")]
     pub allocated_capital: Option<f64>,
+    /// 다중 타임프레임 여부
+    #[serde(rename = "isMultiTimeframe")]
+    pub is_multi_timeframe: bool,
+    /// 다중 타임프레임 설정 (NULL이면 단일 TF 전략)
+    #[serde(rename = "multiTimeframeConfig", skip_serializing_if = "Option::is_none")]
+    #[ts(type = "Record<string, unknown> | null")]
+    pub multi_timeframe_config: Option<Value>,
 }
 
 /// 전략 상세 응답.
 // Note: ToSchema not derived due to StrategyStatus dependency from trader-strategy crate
+// Note: TS not derived - StrategyStatus는 외부 crate 타입이라 ts-rs 미지원
 #[derive(Debug, Serialize)]
 pub struct StrategyDetailResponse {
     /// 전략 ID
@@ -96,7 +107,8 @@ pub struct StrategyDetailResponse {
 }
 
 /// 전략 시작/중지 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct StrategyActionResponse {
     /// 성공 여부
     pub success: bool,
@@ -109,17 +121,21 @@ pub struct StrategyActionResponse {
 }
 
 /// 전략 설정 변경 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct UpdateConfigRequest {
     /// 새로운 설정 (JSON)
+    #[ts(type = "Record<string, unknown>")]
     pub config: Value,
 }
 
 /// 리스크 설정 변경 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct UpdateRiskSettingsRequest {
     /// 리스크 설정 (RiskConfig 형식)
     #[serde(default)]
+    #[ts(type = "Record<string, unknown> | null")]
     pub risk_config: Option<Value>,
     /// 할당 자본 (NULL이면 전체 계좌 잔고 사용)
     #[serde(default)]
@@ -129,16 +145,27 @@ pub struct UpdateRiskSettingsRequest {
     pub risk_profile: Option<String>,
 }
 
+/// 전략 심볼 변경 요청.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "strategies/")]
+pub struct UpdateSymbolsRequest {
+    /// 새로운 심볼 목록
+    pub symbols: Vec<String>,
+}
+
 /// 전략 복사 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct CloneStrategyRequest {
     /// 새 전략 이름
     pub new_name: String,
     /// 파라미터 오버라이드 (옵션)
     #[serde(default)]
+    #[ts(type = "Record<string, unknown> | null")]
     pub override_params: Option<Value>,
     /// 리스크 설정 오버라이드 (옵션)
     #[serde(default)]
+    #[ts(type = "Record<string, unknown> | null")]
     pub override_risk_config: Option<Value>,
     /// 할당 자본 오버라이드 (옵션)
     #[serde(default)]
@@ -146,7 +173,8 @@ pub struct CloneStrategyRequest {
 }
 
 /// 전략 복사 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct CloneStrategyResponse {
     /// 성공 여부
     pub success: bool,
@@ -161,7 +189,8 @@ pub struct CloneStrategyResponse {
 }
 
 /// 전략 생성 요청.
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct CreateStrategyRequest {
     /// 전략 타입 (예: "grid_trading", "rsi", "bollinger" 등)
     #[validate(length(min = 1, max = 50, message = "전략 타입은 1-50자여야 합니다"))]
@@ -170,9 +199,11 @@ pub struct CreateStrategyRequest {
     #[validate(length(max = 100, message = "전략 이름은 100자 이하여야 합니다"))]
     pub name: Option<String>,
     /// 전략 파라미터
+    #[ts(type = "Record<string, unknown>")]
     pub parameters: Value,
     /// 리스크 설정 (옵션, RiskConfig 형식)
     #[serde(default)]
+    #[ts(type = "Record<string, unknown> | null")]
     pub risk_config: Option<Value>,
     /// 할당 자본 (옵션, NULL이면 전체 계좌 잔고 사용)
     #[serde(default)]
@@ -182,10 +213,16 @@ pub struct CreateStrategyRequest {
     #[serde(default)]
     #[validate(custom(function = "validate_risk_profile"))]
     pub risk_profile: Option<String>,
+    /// 다중 타임프레임 설정 (옵션)
+    /// 형식: {"primary": "5m", "secondary": [{"timeframe": "1h", "candle_count": 24}]}
+    #[serde(default, rename = "multiTimeframeConfig")]
+    #[ts(type = "Record<string, unknown> | null")]
+    pub multi_timeframe_config: Option<Value>,
 }
 
 /// 전략 생성 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct CreateStrategyResponse {
     /// 성공 여부
     pub success: bool,
@@ -198,7 +235,8 @@ pub struct CreateStrategyResponse {
 }
 
 /// 엔진 통계 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "strategies/")]
 pub struct EngineStatsResponse {
     /// 전체 전략 수
     pub total_strategies: usize,
@@ -313,7 +351,7 @@ fn get_strategy_default_timeframe(strategy_type: &str) -> &'static str {
 /// StrategyRegistry를 통해 등록된 전략의 권장 심볼 목록을 조회합니다.
 fn get_strategy_default_symbols(strategy_type: &str) -> Vec<String> {
     trader_strategy::StrategyRegistry::find(strategy_type)
-        .map(|meta| meta.default_symbols.iter().map(|s| s.to_string()).collect())
+        .map(|meta| meta.default_tickers.iter().map(|s| s.to_string()).collect())
         .unwrap_or_default()
 }
 
@@ -424,6 +462,7 @@ pub async fn create_strategy(
             risk_config: request.risk_config.clone(),
             allocated_capital,
             risk_profile: request.risk_profile.clone(),
+            multi_timeframe_config: request.multi_timeframe_config.clone(),
         };
 
         StrategyRepository::create(pool, input).await.map_err(|e| {
@@ -581,6 +620,8 @@ pub async fn list_strategies(State(state): State<Arc<AppState>>) -> impl IntoRes
             trades_count: status.stats.signals_generated, // 신호 수를 거래 수로 사용
             risk_profile: None,                           // 향후 DB에서 조회하여 연동
             allocated_capital: None,                      // 향후 DB에서 조회하여 연동
+            is_multi_timeframe: false,                    // 향후 DB에서 조회하여 연동
+            multi_timeframe_config: None,                 // 향후 DB에서 조회하여 연동
         });
     }
 
@@ -636,6 +677,8 @@ pub async fn get_strategy(
 /// 전략 시작.
 ///
 /// POST /api/v1/strategies/{id}/start
+///
+/// 다중 타임프레임 전략의 경우, 시작 전에 필요한 캔들 데이터를 자동으로 로드합니다.
 pub async fn start_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -648,6 +691,17 @@ pub async fn start_strategy(
         .await
         .map(|s| s.name)
         .unwrap_or_else(|_| id.clone());
+
+    // 다중 타임프레임 전략인 경우 데이터 자동 로드
+    if let Ok(Some(mtf_config)) = engine.get_strategy_multi_tf_config(&id).await {
+        if let Err(e) = load_multi_timeframe_data(&state, &engine, &id, &mtf_config).await {
+            tracing::warn!(
+                strategy_id = %id,
+                error = %e,
+                "다중 타임프레임 데이터 로드 실패 (전략은 계속 시작됨)"
+            );
+        }
+    }
 
     match engine.start_strategy(&id).await {
         Ok(()) => {
@@ -670,6 +724,83 @@ pub async fn start_strategy(
         }
         Err(err) => Err(engine_error_to_response(err)),
     }
+}
+
+/// 다중 타임프레임 데이터 자동 로드 (전략 시작 전).
+///
+/// 전략의 설정에서 심볼 목록을 가져와 각 심볼에 대해
+/// 다중 타임프레임 캔들 데이터를 로드하고 컨텍스트에 업데이트합니다.
+async fn load_multi_timeframe_data(
+    state: &AppState,
+    engine: &trader_strategy::StrategyEngine,
+    strategy_id: &str,
+    mtf_config: &trader_core::domain::MultiTimeframeConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use trader_core::Timeframe;
+
+    // 데이터 프로바이더 확인
+    let data_provider = state.data_provider.as_ref().ok_or("데이터 프로바이더 없음")?;
+
+    // 전략 설정에서 심볼 목록 가져오기
+    let config = engine.get_strategy_config(strategy_id).await?;
+    let symbols: Vec<String> = config
+        .get("symbols")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if symbols.is_empty() {
+        tracing::debug!(strategy_id = %strategy_id, "심볼 목록 없음, 데이터 로드 스킵");
+        return Ok(());
+    }
+
+    tracing::info!(
+        strategy_id = %strategy_id,
+        symbols = ?symbols,
+        timeframes = ?mtf_config.timeframes.keys().collect::<Vec<_>>(),
+        "다중 타임프레임 데이터 로드 시작"
+    );
+
+    // 각 심볼에 대해 데이터 로드
+    for symbol in &symbols {
+        match data_provider.get_multi_timeframe_klines(symbol, mtf_config).await {
+            Ok(klines_by_tf) => {
+                // Kline 데이터를 (Timeframe, Vec<Kline>) 형태로 변환
+                let data: Vec<(Timeframe, Vec<trader_core::Kline>)> =
+                    klines_by_tf.into_iter().collect();
+
+                // 전략 컨텍스트에 업데이트
+                if let Err(e) = engine.update_strategy_klines(strategy_id, symbol, data).await {
+                    tracing::warn!(
+                        strategy_id = %strategy_id,
+                        symbol = %symbol,
+                        error = %e,
+                        "컨텍스트 업데이트 실패"
+                    );
+                } else {
+                    tracing::info!(
+                        strategy_id = %strategy_id,
+                        symbol = %symbol,
+                        "다중 타임프레임 데이터 로드 완료"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    strategy_id = %strategy_id,
+                    symbol = %symbol,
+                    error = %e,
+                    "데이터 로드 실패"
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// 전략 중지.
@@ -834,6 +965,64 @@ pub async fn update_risk_settings(
     }))
 }
 
+/// 전략 심볼 변경.
+///
+/// PUT /api/v1/strategies/{id}/symbols
+pub async fn update_symbols(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateSymbolsRequest>,
+) -> Result<Json<StrategyActionResponse>, (StatusCode, Json<ApiError>)> {
+    // DB가 연결된 경우에만 동작
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new("DB_NOT_CONNECTED", "Database not connected")),
+        )
+    })?;
+
+    // DB에 심볼 업데이트
+    StrategyRepository::update_symbols(pool, &id, request.symbols.clone())
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to update strategy symbols: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new(
+                    "DB_ERROR",
+                    format!("Failed to update symbols: {}", e),
+                )),
+            )
+        })?;
+
+    // 전략 이름 가져오기 (브로드캐스트용)
+    let engine = state.strategy_engine.read().await;
+    let (strategy_name, is_running) = engine
+        .get_strategy_status(&id)
+        .await
+        .map(|s| (s.name, s.running))
+        .unwrap_or_else(|_| (id.clone(), false));
+
+    // WebSocket 브로드캐스트: 심볼 변경 알림
+    state.broadcast(ServerMessage::StrategyUpdate(StrategyUpdateData {
+        strategy_id: id.clone(),
+        name: strategy_name,
+        running: is_running,
+        event: "symbols_updated".to_string(),
+        data: Some(serde_json::json!({
+            "symbols": request.symbols,
+        })),
+        timestamp: Utc::now().timestamp_millis(),
+    }));
+
+    Ok(Json(StrategyActionResponse {
+        success: true,
+        strategy_id: id.clone(),
+        action: "update_symbols".to_string(),
+        message: format!("Strategy '{}' symbols updated successfully", id),
+    }))
+}
+
 /// 전략 복사 (파생 전략 생성).
 ///
 /// POST /api/v1/strategies/{id}/clone
@@ -936,6 +1125,7 @@ pub async fn clone_strategy(
         risk_config: Some(merged_risk),
         allocated_capital,
         risk_profile: source.risk_profile.clone(),
+        multi_timeframe_config: source.multi_timeframe_config.clone(),
     };
 
     StrategyRepository::create(pool, input).await.map_err(|e| {
@@ -997,21 +1187,218 @@ pub async fn get_engine_stats(State(state): State<Arc<AppState>>) -> impl IntoRe
     Json(EngineStatsResponse::from(stats))
 }
 
+// ==================== 다중 타임프레임 ====================
+
+/// 타임프레임 설정 응답.
+#[derive(Debug, Serialize)]
+pub struct TimeframeConfigResponse {
+    /// 전략 ID
+    pub strategy_id: String,
+    /// 기본 타임프레임
+    pub primary_timeframe: String,
+    /// 다중 타임프레임 여부
+    pub is_multi_timeframe: bool,
+    /// 다중 타임프레임 설정 (NULL이면 단일 TF)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_timeframe_config: Option<Value>,
+    /// Secondary 타임프레임 목록 (편의용)
+    pub secondary_timeframes: Vec<String>,
+}
+
+/// 타임프레임 설정 업데이트 요청.
+#[derive(Debug, Deserialize)]
+pub struct UpdateTimeframeConfigRequest {
+    /// 다중 타임프레임 설정
+    /// 형식: {"primary": "5m", "secondary": [{"timeframe": "1h", "candle_count": 24}]}
+    #[serde(rename = "multiTimeframeConfig")]
+    pub multi_timeframe_config: Option<Value>,
+}
+
+/// 전략 타임프레임 설정 조회.
+///
+/// GET /api/v1/strategies/{id}/timeframes
+pub async fn get_strategy_timeframes(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<TimeframeConfigResponse>, (StatusCode, Json<ApiError>)> {
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new("DB_UNAVAILABLE", "Database not available")),
+        )
+    })?;
+
+    let record = StrategyRepository::get_by_id(pool, &id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to get strategy: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new("DB_ERROR", format!("Database error: {}", e))),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiError::new("NOT_FOUND", format!("Strategy not found: {}", id))),
+            )
+        })?;
+
+    // Secondary 타임프레임 목록 추출
+    let secondary_timeframes: Vec<String> = record
+        .multi_timeframe_config
+        .as_ref()
+        .and_then(|config| config.get("secondary"))
+        .and_then(|sec| sec.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("timeframe").and_then(|tf| tf.as_str()))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let is_multi_tf = record.multi_timeframe_config.is_some()
+        && !secondary_timeframes.is_empty();
+
+    Ok(Json(TimeframeConfigResponse {
+        strategy_id: id,
+        primary_timeframe: record.timeframe.unwrap_or_else(|| "1d".to_string()),
+        is_multi_timeframe: is_multi_tf,
+        multi_timeframe_config: record.multi_timeframe_config,
+        secondary_timeframes,
+    }))
+}
+
+/// 전략 타임프레임 설정 업데이트.
+///
+/// PUT /api/v1/strategies/{id}/timeframes
+pub async fn update_strategy_timeframes(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateTimeframeConfigRequest>,
+) -> Result<Json<TimeframeConfigResponse>, (StatusCode, Json<ApiError>)> {
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new("DB_UNAVAILABLE", "Database not available")),
+        )
+    })?;
+
+    // 전략 존재 확인
+    let exists = StrategyRepository::exists(pool, &id).await.map_err(|e| {
+        tracing::error!("Failed to check strategy existence: {:?}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new("DB_ERROR", format!("Database error: {}", e))),
+        )
+    })?;
+
+    if !exists {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError::new("NOT_FOUND", format!("Strategy not found: {}", id))),
+        ));
+    }
+
+    // 설정 유효성 검증
+    if let Some(ref config) = request.multi_timeframe_config {
+        // primary 필드 확인
+        if config.get("primary").is_none() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError::new("VALIDATION_ERROR", "multi_timeframe_config.primary is required")),
+            ));
+        }
+
+        // secondary 필드 확인 (배열이어야 함)
+        if let Some(secondary) = config.get("secondary") {
+            if !secondary.is_array() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError::new("VALIDATION_ERROR", "multi_timeframe_config.secondary must be an array")),
+                ));
+            }
+        }
+    }
+
+    // DB 업데이트
+    let record = sqlx::query_as::<_, crate::repository::strategies::StrategyRecord>(
+        r#"
+        UPDATE strategies
+        SET multi_timeframe_config = $2, updated_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        "#,
+    )
+    .bind(&id)
+    .bind(&request.multi_timeframe_config)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to update timeframe config: {:?}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError::new("DB_ERROR", format!("Failed to update: {}", e))),
+        )
+    })?;
+
+    // Secondary 타임프레임 목록 추출
+    let secondary_timeframes: Vec<String> = record
+        .multi_timeframe_config
+        .as_ref()
+        .and_then(|config| config.get("secondary"))
+        .and_then(|sec| sec.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("timeframe").and_then(|tf| tf.as_str()))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let is_multi_tf = record.multi_timeframe_config.is_some()
+        && !secondary_timeframes.is_empty();
+
+    tracing::info!(
+        "Updated timeframe config for strategy {}: is_multi_tf={}",
+        id,
+        is_multi_tf
+    );
+
+    Ok(Json(TimeframeConfigResponse {
+        strategy_id: id,
+        primary_timeframe: record.timeframe.unwrap_or_else(|| "1d".to_string()),
+        is_multi_timeframe: is_multi_tf,
+        multi_timeframe_config: record.multi_timeframe_config,
+        secondary_timeframes,
+    }))
+}
+
 // ==================== router ====================
 
 /// 전략 관리 라우터 생성.
 pub fn strategies_router() -> Router<Arc<AppState>> {
+    use super::schema::{get_strategy_schema, list_strategy_meta};
+
     Router::new()
         // 목록, 생성, 통계
         .route("/", get(list_strategies).post(create_strategy))
         .route("/stats", get(get_engine_stats))
+        // 전략 메타데이터 (SDUI 스키마용)
+        .route("/meta", get(list_strategy_meta))
         // 개별 전략 조작
         .route("/{id}", get(get_strategy).delete(delete_strategy))
         .route("/{id}/start", post(start_strategy))
         .route("/{id}/stop", post(stop_strategy))
         .route("/{id}/config", put(update_config))
         .route("/{id}/risk", put(update_risk_settings))
+        .route("/{id}/symbols", put(update_symbols))
         .route("/{id}/clone", post(clone_strategy))
+        // 전략 스키마 (SDUI)
+        .route("/{id}/schema", get(get_strategy_schema))
+        // 다중 타임프레임 설정
+        .route("/{id}/timeframes", get(get_strategy_timeframes).put(update_strategy_timeframes))
 }
 
 // ==================== 테스트 ====================

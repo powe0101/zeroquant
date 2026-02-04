@@ -114,6 +114,8 @@ pub mod tr_id {
     pub const KR_BALANCE_REAL: &str = "TTTC8434R";
     /// 국내 주식 잔고 조회 (모의)
     pub const KR_BALANCE_PAPER: &str = "VTTC8434R";
+    /// 국내 주식 잔고 조회 (실전 - ISA/중개형ISA 계좌)
+    pub const KR_BALANCE_ISA_REAL: &str = "CTSC9015R";
 
     /// 국내 주식 매수 가능 조회 (실전)
     pub const KR_BUYABLE_REAL: &str = "TTTC8908R";

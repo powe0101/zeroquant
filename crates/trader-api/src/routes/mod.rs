@@ -22,6 +22,7 @@
 //! - `/api/v1/reality-check` - 추천 검증 (전일 추천 vs 익일 실제 성과)
 //! - `/api/v1/monitoring` - 모니터링 (에러 추적, 통계)
 //! - `/api/v1/ranking` - GlobalScore 기반 종목 랭킹
+//! - `/api/v1/watchlist` - 관심종목 관리
 
 pub mod analytics;
 pub mod backtest;
@@ -48,6 +49,7 @@ pub mod signal_alerts;
 pub mod signals;
 pub mod simulation;
 pub mod strategies;
+pub mod watchlist;
 
 pub use analytics::{
     analytics_router, ChartResponse, EquityCurveResponse, MonthlyReturnsResponse,
@@ -87,6 +89,7 @@ pub use positions::{
 };
 pub use ranking::{
     ranking_router, CalculateResponse as RankingCalculateResponse, RankingQuery, RankingResponse,
+    SevenFactorBatchRequest, SevenFactorBatchResponse, SevenFactorQuery,
 };
 pub use reality_check::{
     reality_check_router, CalculateRequest, CalculateResponse, ResultsQuery, ResultsResponse,
@@ -102,9 +105,13 @@ pub use signals::{
     StrategySignalsQuery, SymbolSignalsQuery,
 };
 pub use simulation::{
-    simulation_router, SimulationOrderRequest, SimulationStartRequest, SimulationStatusResponse,
+    simulation_router, SimulationStartRequest, SimulationStatusResponse,
 };
 pub use strategies::{strategies_router, ApiError, StrategiesListResponse, StrategyDetailResponse};
+pub use watchlist::{
+    watchlist_router, AddItemsRequest, AddItemsResponse, WatchlistDetailResponse,
+    WatchlistListResponse,
+};
 
 use axum::Router;
 use std::sync::Arc;
@@ -143,7 +150,8 @@ pub fn create_api_router() -> Router<Arc<AppState>> {
         .nest("/api/v1/signal-alerts", signal_alerts::signal_alerts_router())
         .nest("/api/v1/reality-check", reality_check_router())
         .nest("/api/v1/monitoring", monitoring_router())
-        .nest("/api/v1/ranking", ranking_router());
+        .nest("/api/v1/ranking", ranking_router())
+        .nest("/api/v1/watchlist", watchlist_router());
 
     // Feature: notifications - 텔레그램/이메일 알림
     #[cfg(feature = "notifications")]

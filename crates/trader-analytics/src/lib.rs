@@ -22,10 +22,13 @@ pub mod liquidity_gate;
 pub mod market_regime_calculator;
 #[cfg(feature = "ml")]
 pub mod ml;
+pub mod multi_timeframe_helpers;
 pub mod performance;
 pub mod portfolio;
 pub mod route_state_calculator;
+pub mod seven_factor;
 pub mod structural_features;
+pub mod timeframe_alignment;
 pub mod trigger_calculator;
 
 // Performance 모듈 re-exports
@@ -90,8 +93,20 @@ pub use global_scorer::{GlobalScorer, GlobalScorerError, GlobalScorerParams, Glo
 // Liquidity Gate re-export
 pub use liquidity_gate::{LiquidityGate, LiquidityLevel};
 
+// 7Factor re-export
+pub use seven_factor::{SevenFactorCalculator, SevenFactorInput, SevenFactorScores};
+
 // AnalyticsProvider 구현체 re-export
 pub use analytics_provider_impl::AnalyticsProviderImpl;
+
+// Multi-timeframe helpers re-export
+pub use multi_timeframe_helpers::{
+    analyze_trend, combine_signals, default_weights, detect_divergence, CombinedSignal,
+    DivergenceType, SignalDirection, TrendAnalysis, TrendDirection,
+};
+
+// Timeframe Alignment re-export
+pub use timeframe_alignment::TimeframeAligner;
 
 // ML 모듈 re-exports (ml feature 필요)
 #[cfg(feature = "ml")]

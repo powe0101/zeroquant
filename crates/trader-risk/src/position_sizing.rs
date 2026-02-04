@@ -137,7 +137,7 @@ impl PositionSizer {
     pub fn calculate_symbol_exposure(&self, positions: &[Position], symbol: &str) -> Decimal {
         positions
             .iter()
-            .filter(|p| p.is_open() && p.symbol.to_string() == symbol)
+            .filter(|p| p.is_open() && p.ticker == symbol)
             .map(|p| p.notional_value())
             .sum()
     }
@@ -159,7 +159,7 @@ impl PositionSizer {
         balance: Decimal,
         current_price: Decimal,
     ) -> SizingValidation {
-        let symbol = order.symbol.to_string();
+        let symbol = order.ticker.clone();
 
         // 심볼이 활성화되어 있는지 확인
         if !self.config.is_symbol_enabled(&symbol) {
@@ -223,7 +223,7 @@ impl PositionSizer {
         // 검사 4: 최대 동시 포지션 (새 포지션에만 해당)
         let is_new_position = !positions
             .iter()
-            .any(|p| p.is_open() && p.symbol.to_string() == symbol && p.side == order.side);
+            .any(|p| p.is_open() && p.ticker == symbol && p.side == order.side);
 
         if is_new_position {
             let open_position_count = positions.iter().filter(|p| p.is_open()).count();
@@ -332,7 +332,7 @@ impl PositionSizer {
         balance: Decimal,
         current_price: Decimal,
     ) -> Option<Decimal> {
-        let symbol = order.symbol.to_string();
+        let symbol = order.ticker.clone();
 
         if !self.config.is_symbol_enabled(&symbol) {
             return None;
@@ -368,7 +368,7 @@ mod tests {
     use trader_core::{Side, Symbol};
 
     fn create_test_position(symbol: &Symbol, quantity: Decimal, price: Decimal) -> Position {
-        Position::new("test_exchange", symbol.clone(), Side::Buy, quantity, price)
+        Position::new("test_exchange", symbol.to_string(), Side::Buy, quantity, price)
     }
 
     #[test]
@@ -399,7 +399,7 @@ mod tests {
         let sizer = PositionSizer::new(config);
 
         let symbol = Symbol::crypto("BTC", "USDT");
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(0.01));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(0.01));
         let positions: Vec<Position> = vec![];
         let balance = dec!(10000);
         let price = dec!(50000); // Order value = 0.01 * 50000 = 500
@@ -416,7 +416,7 @@ mod tests {
         let sizer = PositionSizer::new(config);
 
         let symbol = Symbol::crypto("BTC", "USDT");
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(1.0));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(1.0));
         let positions: Vec<Position> = vec![];
         let balance = dec!(10000);
         let price = dec!(50000); // Order value = 1.0 * 50000 = 50000 (500% of balance)
@@ -443,7 +443,7 @@ mod tests {
 
         // New order worth 800 (8% of balance) - under single limit (10%)
         // But total would be 45% + 8% = 53% > 50%
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(0.016));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(0.016));
         let balance = dec!(10000);
         let price = dec!(50000); // Order value = 0.016 * 50000 = 800
 
@@ -463,7 +463,7 @@ mod tests {
         let sizer = PositionSizer::new(config);
 
         let symbol = Symbol::crypto("BTC", "USDT");
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(0.0001));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(0.0001));
         let positions: Vec<Position> = vec![];
         let balance = dec!(10000);
         let price = dec!(50000); // Order value = 0.0001 * 50000 = 5
@@ -491,7 +491,7 @@ mod tests {
         ];
 
         // Try to add a third
-        let order = OrderRequest::market_buy(sol_symbol.clone(), dec!(1.0));
+        let order = OrderRequest::market_buy(sol_symbol.to_string(), dec!(1.0));
         let balance = dec!(100000);
         let price = dec!(100);
 
@@ -523,7 +523,7 @@ mod tests {
         let sizer = PositionSizer::new(config);
 
         let symbol = Symbol::crypto("BTC", "USDT");
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(1.0)); // Too large
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(1.0)); // Too large
         let positions: Vec<Position> = vec![];
         let balance = dec!(10000);
         let price = dec!(50000);
@@ -572,7 +572,7 @@ mod tests {
         let sizer = PositionSizer::new(config);
 
         let symbol = Symbol::new("RISKY", "USDT", trader_core::MarketType::Crypto);
-        let order = OrderRequest::market_buy(symbol, dec!(1.0));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(1.0));
         let positions: Vec<Position> = vec![];
         let balance = dec!(10000);
         let price = dec!(100);

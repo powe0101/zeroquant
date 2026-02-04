@@ -16,10 +16,11 @@
 ///
 /// # 선택 필드
 /// - `aliases`: 별칭 배열 (기본값: 빈 배열)
-/// - `symbols`: 기본 심볼 배열 (기본값: 빈 배열 = 사용자 지정)
+/// - `tickers`: 기본 심볼 배열 (기본값: 빈 배열 = 사용자 지정)
 /// - `markets`: 지원 시장 배열 (기본값: [Crypto, Kr, Us])
+/// - `secondary_timeframes`: 보조 타임프레임 (다중 TF 전략용, 기본값: 빈 배열)
 ///
-/// # 예시
+/// # 예시 (단일 타임프레임 전략)
 /// ```ignore
 /// register_strategy! {
 ///     id: "rsi_mean_reversion",
@@ -27,10 +28,26 @@
 ///     name: "RSI 평균회귀",
 ///     description: "RSI 과매수/과매도 구간에서 평균회귀 매매",
 ///     timeframe: "15m",
-///     symbols: [],
+///     tickers: [],
 ///     category: Intraday,
 ///     markets: [Crypto, Kr, Us],
 ///     type: RsiStrategy
+/// }
+/// ```
+///
+/// # 예시 (다중 타임프레임 전략)
+/// ```ignore
+/// register_strategy! {
+///     id: "rsi_multi_tf",
+///     aliases: ["rsi_mtf"],
+///     name: "RSI 다중 타임프레임",
+///     description: "일봉/1시간/5분 RSI 조합 전략",
+///     timeframe: "5m",
+///     secondary_timeframes: ["1h", "1d"],  // 보조 타임프레임 추가
+///     tickers: [],
+///     category: Intraday,
+///     markets: [Crypto, Kr, Us],
+///     type: RsiMultiTimeframeStrategy
 /// }
 /// ```
 ///
@@ -40,13 +57,15 @@
 /// - 별칭을 통한 다중 접근 지원 (하위 호환성)
 #[macro_export]
 macro_rules! register_strategy {
+    // 패턴 1: 다중 타임프레임 전략 (secondary_timeframes 포함)
     (
         id: $id:expr,
         aliases: [$($alias:expr),* $(,)?],
         name: $name:expr,
         description: $desc:expr,
         timeframe: $tf:expr,
-        symbols: [$($symbol:expr),* $(,)?],
+        secondary_timeframes: [$($sec_tf:expr),* $(,)?],
+        tickers: [$($ticker:expr),* $(,)?],
         category: $cat:ident,
         markets: [$($market:ident),* $(,)?],
         type: $ty:ty
@@ -58,7 +77,36 @@ macro_rules! register_strategy {
                 name: $name,
                 description: $desc,
                 default_timeframe: $tf,
-                default_symbols: &[$($symbol),*],
+                secondary_timeframes: &[$($sec_tf),*],
+                default_tickers: &[$($ticker),*],
+                category: $crate::registry::StrategyCategory::$cat,
+                supported_markets: &[$(trader_core::MarketType::$market),*],
+                factory: || Box::new(<$ty>::new()),
+            }
+        }
+    };
+
+    // 패턴 2: 단일 타임프레임 전략 (기존 호환, secondary_timeframes 없음)
+    (
+        id: $id:expr,
+        aliases: [$($alias:expr),* $(,)?],
+        name: $name:expr,
+        description: $desc:expr,
+        timeframe: $tf:expr,
+        tickers: [$($ticker:expr),* $(,)?],
+        category: $cat:ident,
+        markets: [$($market:ident),* $(,)?],
+        type: $ty:ty
+    ) => {
+        inventory::submit! {
+            $crate::registry::StrategyMeta {
+                id: $id,
+                aliases: &[$($alias),*],
+                name: $name,
+                description: $desc,
+                default_timeframe: $tf,
+                secondary_timeframes: &[],  // 기본값: 빈 배열 (단일 TF)
+                default_tickers: &[$($ticker),*],
                 category: $crate::registry::StrategyCategory::$cat,
                 supported_markets: &[$(trader_core::MarketType::$market),*],
                 factory: || Box::new(<$ty>::new()),

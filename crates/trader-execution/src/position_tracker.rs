@@ -10,7 +10,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use trader_core::{Order, Position, PositionSummary, Side, Symbol};
+use trader_core::{Order, Position, PositionSummary, Side};
 use uuid::Uuid;
 
 use crate::order_manager::OrderFill;
@@ -146,7 +146,7 @@ impl PositionTracker {
     /// 새 포지션을 오픈한다.
     pub fn open_position(
         &mut self,
-        symbol: Symbol,
+        symbol: String,
         side: Side,
         quantity: Decimal,
         price: Decimal,
@@ -205,7 +205,7 @@ impl PositionTracker {
         order: &Order,
         fill: &OrderFill,
     ) -> Result<Position, PositionTrackerError> {
-        let symbol_str = order.symbol.to_string();
+        let symbol_str = order.ticker.to_string();
 
         // 포지션이 존재하는지 확인
         if let Some(&pos_id) = self.positions_by_symbol.get(&symbol_str) {
@@ -230,7 +230,7 @@ impl PositionTracker {
         } else {
             // 포지션 없음 - 새로 오픈
             self.open_position(
-                order.symbol.clone(),
+                order.ticker.clone(),
                 order.side,
                 fill.quantity,
                 fill.price,
@@ -363,7 +363,7 @@ impl PositionTracker {
         if position.is_closed() {
             // 포지션 완전 종료
             let final_pnl = position.realized_pnl;
-            let symbol_str = position.symbol.to_string();
+            let symbol_str = position.ticker.to_string();
 
             // 종료된 포지션으로 이동
             let closed_position = self
@@ -587,8 +587,8 @@ mod tests {
         };
     }
 
-    fn create_test_symbol() -> Symbol {
-        Symbol::crypto("BTC", "USDT")
+    fn create_test_symbol() -> String {
+        "BTC/USDT".to_string()
     }
 
     #[test]
@@ -723,7 +723,7 @@ mod tests {
         // BTC 포지션 오픈
         tracker
             .open_position(
-                Symbol::crypto("BTC", "USDT"),
+                "BTC/USDT".to_string(),
                 Side::Buy,
                 dec!(0.1),
                 dec!(50000),
@@ -734,7 +734,7 @@ mod tests {
         // ETH 포지션 오픈
         tracker
             .open_position(
-                Symbol::crypto("ETH", "USDT"),
+                "ETH/USDT".to_string(),
                 Side::Buy,
                 dec!(1.0),
                 dec!(3000),
@@ -758,7 +758,7 @@ mod tests {
 
         tracker
             .open_position(
-                Symbol::crypto("BTC", "USDT"),
+                "BTC/USDT".to_string(),
                 Side::Buy,
                 dec!(0.1),
                 dec!(50000),
@@ -768,7 +768,7 @@ mod tests {
 
         tracker
             .open_position(
-                Symbol::crypto("ETH", "USDT"),
+                "ETH/USDT".to_string(),
                 Side::Sell,
                 dec!(1.0),
                 dec!(3000),
@@ -791,7 +791,7 @@ mod tests {
         // Grid 전략 포지션
         tracker
             .open_position(
-                Symbol::crypto("BTC", "USDT"),
+                "BTC/USDT".to_string(),
                 Side::Buy,
                 dec!(0.1),
                 dec!(50000),
@@ -802,7 +802,7 @@ mod tests {
         // RSI 전략 포지션
         tracker
             .open_position(
-                Symbol::crypto("ETH", "USDT"),
+                "ETH/USDT".to_string(),
                 Side::Buy,
                 dec!(1.0),
                 dec!(3000),
@@ -864,7 +864,7 @@ mod tests {
         let mut tracker = PositionTracker::new("binance");
 
         let order = trader_core::Order::from_request(
-            trader_core::OrderRequest::market_buy(Symbol::crypto("BTC", "USDT"), dec!(0.1))
+            trader_core::OrderRequest::market_buy("BTC/USDT".to_string(), dec!(0.1))
                 .with_strategy("grid"),
             "binance",
         );
@@ -888,16 +888,16 @@ mod tests {
     #[test]
     fn test_apply_fill_increase_position() {
         let mut tracker = PositionTracker::new("binance");
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
 
         // 초기 포지션
         tracker
-            .open_position(symbol.clone(), Side::Buy, dec!(0.1), dec!(50000), None)
+            .open_position(ticker.clone(), Side::Buy, dec!(0.1), dec!(50000), None)
             .unwrap();
 
         // 추가 매수 주문
         let order = trader_core::Order::from_request(
-            trader_core::OrderRequest::market_buy(symbol, dec!(0.1)),
+            trader_core::OrderRequest::market_buy(ticker.clone(), dec!(0.1)),
             "binance",
         );
 
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn test_apply_fill_reduce_position() {
         let mut tracker = PositionTracker::new("binance");
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
 
         // 초기 롱 포지션
         tracker
@@ -927,7 +927,7 @@ mod tests {
 
         // 매도 주문 (포지션 감소)
         let order = trader_core::Order::from_request(
-            trader_core::OrderRequest::market_sell(symbol, dec!(0.1)),
+            trader_core::OrderRequest::market_sell(symbol.clone(), dec!(0.1)),
             "binance",
         );
 

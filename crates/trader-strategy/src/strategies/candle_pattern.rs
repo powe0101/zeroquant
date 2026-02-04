@@ -24,7 +24,7 @@
 //! 2. 패턴 강도 평가 (Volume, Trend 확인)
 //! 3. 다중 패턴 확인 시 강화 신호
 
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -34,7 +34,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use tracing::{debug, info, warn};
 use trader_core::{
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -109,8 +109,8 @@ struct CandleData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandlePatternConfig {
     /// 대상 심볼
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 거래 금액
     #[serde(default = "default_trade_amount")]
@@ -177,7 +177,7 @@ fn default_min_global_score() -> Decimal {
 impl Default for CandlePatternConfig {
     fn default() -> Self {
         Self {
-            symbol: "005930".to_string(),
+            ticker: "005930".to_string(),
             trade_amount: default_trade_amount(),
             min_pattern_strength: default_min_strength(),
             use_volume_confirmation: default_use_volume(),
@@ -221,7 +221,7 @@ impl Default for CandlePatternState {
 /// Candle Pattern 전략
 pub struct CandlePatternStrategy {
     config: Option<CandlePatternConfig>,
-    symbol: Option<Symbol>,
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
     state: CandlePatternState,
     /// 캔들 히스토리
@@ -235,7 +235,7 @@ impl CandlePatternStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             state: CandlePatternState::default(),
             candles: VecDeque::new(),
@@ -249,7 +249,7 @@ impl CandlePatternStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
         let Some(ctx) = self.context.as_ref() else {
             return true;
         };
@@ -710,7 +710,7 @@ impl CandlePatternStrategy {
             Some(c) => c,
             None => return Vec::new(),
         };
-        let symbol = match &self.symbol {
+        let ticker = match &self.ticker {
             Some(s) => s,
             None => return Vec::new(),
         };
@@ -735,7 +735,7 @@ impl CandlePatternStrategy {
 
                 let signal = Signal::new(
                     "candle_pattern",
-                    symbol.clone(),
+                    ticker.clone(),
                     Side::Sell,
                     SignalType::Exit,
                 )
@@ -757,7 +757,7 @@ impl CandlePatternStrategy {
 
                 let signal = Signal::new(
                     "candle_pattern",
-                    symbol.clone(),
+                    ticker.clone(),
                     Side::Sell,
                     SignalType::Exit,
                 )
@@ -833,7 +833,7 @@ impl CandlePatternStrategy {
         self.state.entry_price = Some(current_price);
         self.state.current_quantity = quantity;
 
-        let signal = Signal::new("candle_pattern", symbol.clone(), side, signal_type)
+        let signal = Signal::new("candle_pattern", ticker.clone(), side, signal_type)
             .with_strength(
                 best_pattern
                     .strength
@@ -884,12 +884,12 @@ impl Strategy for CandlePatternStrategy {
         let cp_config: CandlePatternConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %cp_config.symbol,
+            ticker = %cp_config.ticker,
             min_strength = %cp_config.min_pattern_strength,
             "Initializing Candle Pattern strategy"
         );
 
-        self.symbol = Symbol::from_string(&cp_config.symbol, MarketType::Stock);
+        self.ticker = Some(cp_config.ticker.clone());
         self.config = Some(cp_config);
         self.state = CandlePatternState::default();
         self.candles.clear();
@@ -913,7 +913,7 @@ impl Strategy for CandlePatternStrategy {
         };
 
         // 심볼 확인
-        if data.symbol.to_string() != config.symbol {
+        if data.ticker.to_string() != config.ticker {
             return Ok(vec![]);
         }
 
@@ -1017,7 +1017,7 @@ mod tests {
         let mut strategy = CandlePatternStrategy::new();
 
         let config = json!({
-            "symbol": "005930",
+            "ticker": "005930",
             "min_pattern_strength": "0.5"
         });
 
@@ -1041,7 +1041,7 @@ register_strategy! {
     name: "캔들 패턴",
     description: "캔들 패턴 인식으로 매매 신호를 생성합니다.",
     timeframe: "15m",
-    symbols: [],
+    tickers: [],
     category: Intraday,
     markets: [Crypto, Stock, Stock],
     type: CandlePatternStrategy

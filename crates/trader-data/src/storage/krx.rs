@@ -17,7 +17,7 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::str::FromStr;
 use tracing::{debug, info};
-use trader_core::{Kline, Symbol, Timeframe};
+use trader_core::{Kline, Timeframe};
 
 /// KRX API 기본 URL.
 const KRX_API_URL: &str = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd";
@@ -29,11 +29,14 @@ const BLD_STOCK_OHLCV: &str = "dbms/MDC/STAT/standard/MDCSTAT01701";
 #[allow(dead_code)] // 향후 전종목 시세 조회 기능에서 사용 예정
 const BLD_MARKET_OHLCV: &str = "dbms/MDC/STAT/standard/MDCSTAT01501";
 
-/// KRX API 응답 구조.
+/// KRX 정보데이터시스템 API 응답 구조.
+///
+/// 참고: KRX 정보데이터시스템은 "output" 키를 사용하고,
+/// KRX Open API는 "OutBlock_1" 키를 사용합니다.
 #[derive(Debug, Deserialize)]
 struct KrxApiResponse {
-    /// 출력 데이터 배열.
-    #[serde(rename = "OutBlock_1", default)]
+    /// 출력 데이터 배열 (정보데이터시스템 응답 키).
+    #[serde(default)]
     output: Vec<KrxOhlcvRecord>,
 }
 
@@ -113,16 +116,19 @@ impl KrxDataSource {
         // 간단히 종목코드만 사용 (KRX API가 단축코드도 지원)
         let isin_cd = format!("KR7{}003", stock_code);
 
+        // KRX API 파라미터 (날짜는 YYYYMMDD 형식)
         let params = [
             ("bld", BLD_STOCK_OHLCV),
             ("isuCd", &isin_cd),
             ("strtDd", start_date),
             ("endDd", end_date),
+            ("adjStkPrc", "2"),  // 수정주가 사용
         ];
 
         let response = self
             .client
             .post(KRX_API_URL)
+            .header("Referer", "https://data.krx.co.kr/contents/MDC/MDI/outerLoader/index.cmd")
             .form(&params)
             .send()
             .await
@@ -170,7 +176,6 @@ impl KrxDataSource {
         records: &[KrxOhlcvRecord],
     ) -> Result<Vec<Kline>> {
         let mut klines = Vec::with_capacity(records.len());
-        let symbol = Symbol::stock(stock_code, "KRW");
 
         for record in records {
             // 날짜 파싱 (YYYY/MM/DD 또는 YYYYMMDD)
@@ -190,7 +195,7 @@ impl KrxDataSource {
             }
 
             klines.push(Kline {
-                symbol: symbol.clone(),
+                ticker: stock_code.to_string(),
                 timeframe: Timeframe::D1,
                 open_time: date,
                 open,

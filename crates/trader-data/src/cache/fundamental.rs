@@ -4,7 +4,7 @@
 //! 주요 지표: 시가총액, PER, PBR, ROE, 배당수익률 등.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
-use rust_decimal::prelude::{FromPrimitive, ToPrimitive};
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -25,7 +25,7 @@ fn round_decimal_from_f64(value: f64) -> Option<Decimal> {
 fn round_decimal_from_f64_dp2(value: f64) -> Option<Decimal> {
     Decimal::from_f64(value).map(|d| d.round_dp(2))
 }
-use trader_core::{Kline, MarketType, Symbol, Timeframe};
+use trader_core::{Kline, MarketType, Timeframe};
 
 /// Yahoo Finance에서 가져온 Fundamental 데이터.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -559,8 +559,7 @@ impl FundamentalFetcher {
                 let close_time = open_time + chrono::Duration::days(1);
 
                 Some(Kline {
-                    symbol: Symbol::new(canonical_ticker, quote_currency, market_type)
-                        .with_exchange_symbol(yahoo_symbol),
+                    ticker: canonical_ticker.to_string(),
                     timeframe: Timeframe::D1,
                     open_time,
                     open: round_decimal_from_f64(q.open)?,

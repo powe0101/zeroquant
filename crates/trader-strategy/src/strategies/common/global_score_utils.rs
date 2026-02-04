@@ -53,12 +53,12 @@ impl Default for ScoreFilterOptions {
 ///     ..Default::default()
 /// };
 ///
-/// let top_tickers = select_top_symbols(&context, options);
+/// let top_tickers = select_top_tickers(&context, options);
 /// for (ticker, score) in top_tickers {
 ///     println!("{}: {}", ticker, score.overall_score);
 /// }
 /// ```
-pub fn select_top_symbols(
+pub fn select_top_tickers(
     context: &StrategyContext,
     options: ScoreFilterOptions,
 ) -> Vec<(String, GlobalScoreResult)> {
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_top_symbols_with_min_score() {
+    fn test_select_top_tickers_with_min_score() {
         use std::collections::HashMap;
 
         let mut scores = HashMap::new();
@@ -287,7 +287,7 @@ mod tests {
             limit: None,
         };
 
-        let results = select_top_symbols(&context, options);
+        let results = select_top_tickers(&context, options);
 
         // 70점 이상만 선택됨
         assert_eq!(results.len(), 2);
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_top_symbols_with_grade_filter() {
+    fn test_select_top_tickers_with_grade_filter() {
         use std::collections::HashMap;
 
         let mut scores = HashMap::new();
@@ -320,7 +320,7 @@ mod tests {
             limit: None,
         };
 
-        let results = select_top_symbols(&context, options);
+        let results = select_top_tickers(&context, options);
 
         // BUY 등급만 선택됨
         assert_eq!(results.len(), 2);

@@ -9,7 +9,7 @@
 //! - `RouteState`: 진입 가능 여부 판단
 //! - `GlobalScore`: 종목 품질 필터링
 
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -21,15 +21,15 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::{
     domain::{RouteState, StrategyContext},
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// RSI 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RsiConfig {
-    /// 거래할 심볼 (ticker)
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 거래할 티커 (ticker)
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 과매도 임계값 (RSI가 이 값 아래로 떨어지면 매수)
     #[serde(default = "default_oversold")]
@@ -79,7 +79,7 @@ fn default_cooldown() -> usize {
 impl Default for RsiConfig {
     fn default() -> Self {
         Self {
-            symbol: "BTC/USDT".to_string(),
+            ticker: "BTC/USDT".to_string(),
             oversold_threshold: dec!(30),
             overbought_threshold: dec!(70),
             amount: dec!(100),
@@ -111,8 +111,8 @@ pub struct RsiStrategy {
     /// 전략 설정
     config: Option<RsiConfig>,
 
-    /// 거래 중인 심볼
-    symbol: Option<Symbol>,
+    /// 거래 중인 티커
+    ticker: Option<String>,
 
     /// 전략 실행 컨텍스트
     context: Option<Arc<RwLock<StrategyContext>>>,
@@ -153,7 +153,7 @@ impl RsiStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             position_state: PositionState::Flat,
             entry_price: None,
@@ -173,7 +173,7 @@ impl RsiStrategy {
     /// StructuralFeatures.rsi를 사용합니다.
     fn get_current_rsi(&self) -> Option<Decimal> {
         let config = self.config.as_ref()?;
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let ctx = self.context.as_ref()?;
         let ctx_lock = ctx.try_read().ok()?;
@@ -195,7 +195,7 @@ impl RsiStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let Some(ctx) = self.context.as_ref() else {
             warn!("StrategyContext not available - entry blocked");
@@ -253,7 +253,7 @@ impl RsiStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let Some(ctx) = self.context.as_ref() else {
             return false;
@@ -274,7 +274,7 @@ impl RsiStrategy {
         let Some(config) = self.config.as_ref() else {
             return Vec::new();
         };
-        let Some(symbol) = self.symbol.as_ref() else {
+        let Some(ticker) = self.ticker.as_ref() else {
             return Vec::new();
         };
 
@@ -328,7 +328,7 @@ impl RsiStrategy {
 
                         let mut signal = Signal::new(
                             "rsi_mean_reversion",
-                            symbol.clone(),
+                            ticker.clone(),
                             Side::Buy,
                             SignalType::Entry,
                         )
@@ -373,7 +373,7 @@ impl RsiStrategy {
 
                         let signal = Signal::new(
                             "rsi_mean_reversion",
-                            symbol.clone(),
+                            ticker.clone(),
                             Side::Sell,
                             SignalType::Entry,
                         )
@@ -441,7 +441,7 @@ impl RsiStrategy {
 
                     let signal = Signal::new(
                         "rsi_mean_reversion",
-                        symbol.clone(),
+                        ticker.clone(),
                         Side::Sell,
                         SignalType::Exit,
                     )
@@ -471,7 +471,7 @@ impl RsiStrategy {
                 if should_exit {
                     let signal = Signal::new(
                         "rsi_mean_reversion",
-                        symbol.clone(),
+                        ticker.clone(),
                         Side::Buy,
                         SignalType::Exit,
                     )
@@ -547,14 +547,14 @@ impl Strategy for RsiStrategy {
         let rsi_config: RsiConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %rsi_config.symbol,
+            ticker = %rsi_config.ticker,
             oversold = %rsi_config.oversold_threshold,
             overbought = %rsi_config.overbought_threshold,
             min_score = %rsi_config.min_global_score,
             "Initializing RSI Mean Reversion strategy v2.0"
         );
 
-        self.symbol = Symbol::from_string(&rsi_config.symbol, MarketType::Crypto);
+        self.ticker = Some(rsi_config.ticker.clone());
         self.config = Some(rsi_config);
         self.initialized = true;
 
@@ -579,8 +579,8 @@ impl Strategy for RsiStrategy {
             return Ok(vec![]);
         };
 
-        // 심볼 확인
-        if data.symbol.to_string() != config.symbol {
+        // 티커 확인
+        if data.ticker.to_string() != config.ticker {
             return Ok(vec![]);
         }
 
@@ -736,7 +736,7 @@ impl Strategy for RsiStrategy {
 
         json!({
             "initialized": self.initialized,
-            "symbol": self.config.as_ref().map(|c| &c.symbol),
+            "ticker": self.config.as_ref().map(|c| &c.ticker),
             "stats": stats,
         })
     }
@@ -809,10 +809,10 @@ mod tests {
     use rust_decimal_macros::dec;
     use trader_core::{Kline, Timeframe};
 
-    fn create_kline(symbol: &Symbol, close: Decimal) -> MarketData {
+    fn create_kline(ticker: &String, close: Decimal) -> MarketData {
         let now = Utc::now();
         let kline = Kline::new(
-            symbol.clone(),
+            ticker.clone(),
             Timeframe::M1,
             now,
             close,
@@ -825,7 +825,7 @@ mod tests {
 
         MarketData {
             exchange: "test".to_string(),
-            symbol: symbol.clone(),
+            ticker: ticker.clone(),
             timestamp: now,
             data: MarketDataType::Kline(kline),
         }
@@ -844,7 +844,7 @@ mod tests {
         let mut strategy = RsiStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "amount": "100",
             "oversold_threshold": 25,
             "overbought_threshold": 75

@@ -8,7 +8,7 @@
 //! - `OrderRequest` - 주문 요청
 //! - `Order` - 주문 엔티티
 
-use crate::types::{Price, Quantity, Symbol};
+use crate::types::{Price, Quantity};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "sqlx-support", derive(sqlx::Type))]
-#[cfg_attr(feature = "sqlx-support", sqlx(type_name = "text"))]
+#[cfg_attr(feature = "sqlx-support", sqlx(type_name = "text", rename_all = "lowercase"))]
 #[cfg_attr(feature = "utoipa-support", derive(utoipa::ToSchema))]
 pub enum Side {
     /// 매수
@@ -194,8 +194,8 @@ pub struct OrderStatus {
     pub order_id: String,
     /// 클라이언트 주문 ID (있는 경우)
     pub client_order_id: Option<String>,
-    /// 심볼 (거래소가 제공하는 경우)
-    pub symbol: Option<Symbol>,
+    /// 심볼 ticker (거래소가 제공하는 경우)
+    pub ticker: Option<String>,
     /// 주문 방향 (거래소가 제공하는 경우)
     pub side: Option<Side>,
     /// 주문 수량 (거래소가 제공하는 경우)
@@ -230,8 +230,8 @@ pub enum TimeInForce {
 /// 새 주문 생성을 위한 주문 요청.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderRequest {
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 심볼 (ticker)
+    pub ticker: String,
     /// 주문 방향
     pub side: Side,
     /// 주문 유형
@@ -256,9 +256,9 @@ pub struct OrderRequest {
 
 impl OrderRequest {
     /// 시장가 매수 주문을 생성합니다.
-    pub fn market_buy(symbol: Symbol, quantity: Quantity) -> Self {
+    pub fn market_buy(ticker: String, quantity: Quantity) -> Self {
         Self {
-            symbol,
+            ticker,
             side: Side::Buy,
             order_type: OrderType::Market,
             quantity,
@@ -271,9 +271,9 @@ impl OrderRequest {
     }
 
     /// 시장가 매도 주문을 생성합니다.
-    pub fn market_sell(symbol: Symbol, quantity: Quantity) -> Self {
+    pub fn market_sell(ticker: String, quantity: Quantity) -> Self {
         Self {
-            symbol,
+            ticker,
             side: Side::Sell,
             order_type: OrderType::Market,
             quantity,
@@ -286,9 +286,9 @@ impl OrderRequest {
     }
 
     /// 지정가 매수 주문을 생성합니다.
-    pub fn limit_buy(symbol: Symbol, quantity: Quantity, price: Price) -> Self {
+    pub fn limit_buy(ticker: String, quantity: Quantity, price: Price) -> Self {
         Self {
-            symbol,
+            ticker,
             side: Side::Buy,
             order_type: OrderType::Limit,
             quantity,
@@ -301,9 +301,9 @@ impl OrderRequest {
     }
 
     /// 지정가 매도 주문을 생성합니다.
-    pub fn limit_sell(symbol: Symbol, quantity: Quantity, price: Price) -> Self {
+    pub fn limit_sell(ticker: String, quantity: Quantity, price: Price) -> Self {
         Self {
-            symbol,
+            ticker,
             side: Side::Sell,
             order_type: OrderType::Limit,
             quantity,
@@ -338,8 +338,8 @@ pub struct Order {
     /// 거래소 주문 ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exchange_order_id: Option<String>,
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 심볼 (ticker)
+    pub ticker: String,
     /// 주문 방향
     pub side: Side,
     /// 주문 유형
@@ -384,7 +384,7 @@ impl Order {
             id: Uuid::new_v4(),
             exchange: exchange.into(),
             exchange_order_id: None,
-            symbol: request.symbol,
+            ticker: request.ticker.clone(),
             side: request.side,
             order_type: request.order_type,
             quantity: request.quantity,
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_order_request() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let order = OrderRequest::limit_buy(symbol.clone(), dec!(0.1), dec!(50000))
             .with_strategy("grid_trading");
 
@@ -443,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_order_from_request() {
-        let symbol = Symbol::crypto("ETH", "USDT");
+        let symbol = "ETH/USDT".to_string();
         let request = OrderRequest::market_sell(symbol, dec!(1.0));
         let order = Order::from_request(request, "binance");
 

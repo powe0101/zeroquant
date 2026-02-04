@@ -10,7 +10,7 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use trader_core::{Kline, Symbol, Ticker, Timeframe};
+use trader_core::{Kline, Ticker, Timeframe};
 
 use crate::ExchangeError;
 
@@ -46,11 +46,11 @@ struct DataEntry {
 pub struct DataFeed {
     /// 설정
     config: DataFeedConfig,
-    /// 심볼 및 타임프레임별 과거 데이터
+    /// 심볼 및 타임프레임별 과거 데이터 (ticker String 사용)
     /// 타임스탬프 순서 접근을 위한 BTreeMap
-    data: HashMap<(Symbol, Timeframe), BTreeMap<DateTime<Utc>, DataEntry>>,
-    /// 심볼별 현재 재생 위치
-    playback_position: HashMap<Symbol, DateTime<Utc>>,
+    data: HashMap<(String, Timeframe), BTreeMap<DateTime<Utc>, DataEntry>>,
+    /// 심볼별 현재 재생 위치 (ticker String 사용)
+    playback_position: HashMap<String, DateTime<Utc>>,
     /// 데이터 시작 시간
     start_time: Option<DateTime<Utc>>,
     /// 데이터 종료 시간
@@ -73,7 +73,7 @@ impl DataFeed {
     }
 
     /// 심볼의 Kline 데이터를 로드합니다.
-    pub fn load_klines(&mut self, symbol: Symbol, timeframe: Timeframe, klines: Vec<Kline>) {
+    pub fn load_klines(&mut self, symbol: String, timeframe: Timeframe, klines: Vec<Kline>) {
         let mut data_map = BTreeMap::new();
 
         for kline in klines {
@@ -100,7 +100,7 @@ impl DataFeed {
     /// 예상 형식: timestamp,open,high,low,close,volume
     pub fn load_from_csv(
         &mut self,
-        symbol: Symbol,
+        symbol: String,
         timeframe: Timeframe,
         path: impl AsRef<Path>,
     ) -> Result<usize, ExchangeError> {
@@ -136,7 +136,7 @@ impl DataFeed {
             let close_time = open_time + tf_duration;
 
             let kline = Kline {
-                symbol: symbol.clone(),
+                ticker: symbol.to_string(),
                 timeframe,
                 open_time,
                 close_time,
@@ -176,7 +176,7 @@ impl DataFeed {
         };
 
         Ticker {
-            symbol: kline.symbol.clone(),
+            ticker: kline.ticker.clone(),
             last: kline.close,
             bid: kline.close * dec!(0.9999), // 시뮬레이션된 매수호가
             ask: kline.close * dec!(1.0001), // 시뮬레이션된 매도호가
@@ -216,11 +216,11 @@ impl DataFeed {
 
     /// 심볼의 다음 Kline을 가져옵니다.
     /// 재생 위치를 진행시킵니다.
-    pub fn next_kline(&mut self, symbol: &Symbol, timeframe: Timeframe) -> Option<Kline> {
-        let key = (symbol.clone(), timeframe);
+    pub fn next_kline(&mut self, ticker: &str, timeframe: Timeframe) -> Option<Kline> {
+        let key = (ticker.to_string(), timeframe);
         let data = self.data.get(&key)?;
 
-        let current_pos = self.playback_position.get(symbol).copied();
+        let current_pos = self.playback_position.get(ticker).copied();
 
         let next_entry = if let Some(pos) = current_pos {
             // 현재 위치 이후의 첫 번째 항목 찾기
@@ -232,44 +232,45 @@ impl DataFeed {
         };
 
         if let Some((timestamp, entry)) = next_entry {
-            self.playback_position.insert(symbol.clone(), *timestamp);
+            self.playback_position.insert(ticker.to_string(), *timestamp);
             self.current_time = Some(entry.kline.close_time);
             Some(entry.kline.clone())
         } else if self.config.loop_data {
             // 처음으로 되돌아가기
-            self.playback_position.remove(symbol);
-            self.next_kline(symbol, timeframe)
+            self.playback_position.remove(ticker);
+            self.next_kline(ticker, timeframe)
         } else {
             None
         }
     }
 
     /// 심볼의 현재 티커를 가져옵니다.
-    pub fn get_ticker(&self, symbol: &Symbol) -> Option<Ticker> {
-        let key = (symbol.clone(), self.config.default_timeframe);
+    pub fn get_ticker(&self, ticker: &str) -> Option<Ticker> {
+        let key = (ticker.to_string(), self.config.default_timeframe);
         let data = self.data.get(&key)?;
 
-        let pos = self.playback_position.get(symbol)?;
+        let pos = self.playback_position.get(ticker)?;
         data.get(pos).map(|e| e.ticker.clone())
     }
 
     /// 진행 없이 심볼의 현재 Kline을 가져옵니다.
-    pub fn get_current_kline(&self, symbol: &Symbol, timeframe: Timeframe) -> Option<Kline> {
-        let key = (symbol.clone(), timeframe);
+    pub fn get_current_kline(&self, ticker: &str, timeframe: Timeframe) -> Option<Kline> {
+        let key = (ticker.to_string(), timeframe);
         let data = self.data.get(&key)?;
 
-        let pos = self.playback_position.get(symbol)?;
+        let pos = self.playback_position.get(ticker)?;
         data.get(pos).map(|e| e.kline.clone())
     }
 
     /// 현재 시간까지의 과거 Kline을 가져옵니다.
     pub fn get_historical_klines(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
         limit: usize,
     ) -> Vec<Kline> {
-        let key = (symbol.clone(), timeframe);
+        // ticker String으로 직접 키 생성
+        let key = (symbol.to_string(), timeframe);
         let data = match self.data.get(&key) {
             Some(d) => d,
             None => return vec![],
@@ -288,8 +289,8 @@ impl DataFeed {
     }
 
     /// 심볼의 현재 가격을 가져옵니다.
-    pub fn get_current_price(&self, symbol: &Symbol) -> Option<Decimal> {
-        self.get_ticker(symbol).map(|t| t.last)
+    pub fn get_current_price(&self, ticker: &str) -> Option<Decimal> {
+        self.get_ticker(ticker).map(|t| t.last)
     }
 
     /// 모든 심볼의 데이터가 소진되었는지 확인합니다.
@@ -319,26 +320,26 @@ impl DataFeed {
         true
     }
 
-    /// 로드된 모든 심볼을 가져옵니다.
-    pub fn symbols(&self) -> Vec<Symbol> {
+    /// 로드된 모든 심볼 ticker를 가져옵니다.
+    pub fn symbols(&self) -> Vec<String> {
         self.data
             .keys()
-            .map(|(symbol, _)| symbol.clone())
+            .map(|(ticker, _)| ticker.clone())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect()
     }
 
     /// 로드된 데이터 수를 가져옵니다.
-    pub fn data_count(&self, symbol: &Symbol, timeframe: Timeframe) -> usize {
-        let key = (symbol.clone(), timeframe);
+    pub fn data_count(&self, ticker: &str, timeframe: Timeframe) -> usize {
+        let key = (ticker.to_string(), timeframe);
         self.data.get(&key).map(|d| d.len()).unwrap_or(0)
     }
 }
 
 /// 테스트용 샘플 Kline을 생성합니다.
 pub fn generate_sample_klines(
-    symbol: Symbol,
+    symbol: String,
     timeframe: Timeframe,
     count: usize,
     start_price: Decimal,
@@ -374,7 +375,7 @@ pub fn generate_sample_klines(
         let volume = Decimal::from_f64_retain(rng.gen_range(10.0..1000.0)).unwrap_or(dec!(100));
 
         klines.push(Kline {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             timeframe,
             open_time: current_time,
             close_time: current_time + tf_duration,
@@ -398,8 +399,8 @@ pub fn generate_sample_klines(
 mod tests {
     use super::*;
 
-    fn create_test_symbol() -> Symbol {
-        Symbol::crypto("BTC", "USDT")
+    fn create_test_symbol() -> String {
+        "BTC/USDT".to_string()
     }
 
     #[test]

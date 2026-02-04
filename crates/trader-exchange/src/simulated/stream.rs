@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use trader_core::{Symbol, Timeframe};
+use trader_core::Timeframe;
 
 use crate::traits::{ExchangeResult, MarketEvent, MarketStream, UserEvent, UserStream};
 
@@ -17,13 +17,13 @@ pub struct SimulatedMarketStream {
     /// 이벤트 수신기
     event_rx: mpsc::Receiver<MarketEvent>,
     /// 티커 구독 심볼
-    ticker_subscriptions: HashSet<Symbol>,
+    ticker_subscriptions: HashSet<String>,
     /// Kline 구독 심볼 (타임프레임 포함)
-    kline_subscriptions: HashSet<(Symbol, Timeframe)>,
+    kline_subscriptions: HashSet<(String, Timeframe)>,
     /// 호가창 구독 심볼
-    order_book_subscriptions: HashSet<Symbol>,
+    order_book_subscriptions: HashSet<String>,
     /// 거래 구독 심볼
-    trade_subscriptions: HashSet<Symbol>,
+    trade_subscriptions: HashSet<String>,
 }
 
 impl SimulatedMarketStream {
@@ -41,15 +41,15 @@ impl SimulatedMarketStream {
     /// 이벤트가 구독과 일치하는지 확인합니다.
     fn is_subscribed(&self, event: &MarketEvent) -> bool {
         match event {
-            MarketEvent::Ticker(ticker) => self.ticker_subscriptions.contains(&ticker.symbol),
+            MarketEvent::Ticker(ticker) => self.ticker_subscriptions.contains(&ticker.ticker),
             MarketEvent::Kline(kline) => {
                 // 간단하게 심볼만 확인 (타임프레임 매칭은 추가 가능)
                 self.kline_subscriptions
                     .iter()
-                    .any(|(symbol, _)| symbol == &kline.symbol)
+                    .any(|(symbol, _)| symbol == &kline.ticker)
             }
-            MarketEvent::OrderBook(ob) => self.order_book_subscriptions.contains(&ob.symbol),
-            MarketEvent::Trade(trade) => self.trade_subscriptions.contains(&trade.symbol),
+            MarketEvent::OrderBook(ob) => self.order_book_subscriptions.contains(&ob.ticker),
+            MarketEvent::Trade(trade) => self.trade_subscriptions.contains(&trade.ticker),
             MarketEvent::Connected | MarketEvent::Disconnected | MarketEvent::Error(_) => true,
         }
     }
@@ -57,31 +57,31 @@ impl SimulatedMarketStream {
 
 #[async_trait]
 impl MarketStream for SimulatedMarketStream {
-    async fn subscribe_ticker(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
-        self.ticker_subscriptions.insert(symbol.clone());
+    async fn subscribe_ticker(&mut self, symbol: &str) -> ExchangeResult<()> {
+        self.ticker_subscriptions.insert(symbol.to_string());
         Ok(())
     }
 
     async fn subscribe_kline(
         &mut self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
     ) -> ExchangeResult<()> {
-        self.kline_subscriptions.insert((symbol.clone(), timeframe));
+        self.kline_subscriptions.insert((symbol.to_string(), timeframe));
         Ok(())
     }
 
-    async fn subscribe_order_book(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
-        self.order_book_subscriptions.insert(symbol.clone());
+    async fn subscribe_order_book(&mut self, symbol: &str) -> ExchangeResult<()> {
+        self.order_book_subscriptions.insert(symbol.to_string());
         Ok(())
     }
 
-    async fn subscribe_trades(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
-        self.trade_subscriptions.insert(symbol.clone());
+    async fn subscribe_trades(&mut self, symbol: &str) -> ExchangeResult<()> {
+        self.trade_subscriptions.insert(symbol.to_string());
         Ok(())
     }
 
-    async fn unsubscribe(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn unsubscribe(&mut self, symbol: &str) -> ExchangeResult<()> {
         self.ticker_subscriptions.remove(symbol);
         self.kline_subscriptions.retain(|(s, _)| s != symbol);
         self.order_book_subscriptions.remove(symbol);
@@ -193,7 +193,7 @@ impl<T: Clone + Send> Default for EventBroadcaster<T> {
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
-    use trader_core::Ticker;
+    use trader_core::{Symbol, Ticker};
 
     fn create_test_symbol() -> Symbol {
         Symbol::crypto("BTC", "USDT")
@@ -201,7 +201,7 @@ mod tests {
 
     fn create_test_ticker() -> Ticker {
         Ticker {
-            symbol: create_test_symbol(),
+            ticker: "BTC/USDT".to_string(),
             last: dec!(50000),
             bid: dec!(49999),
             ask: dec!(50001),
@@ -218,9 +218,8 @@ mod tests {
     async fn test_market_stream_subscription() {
         let (tx, rx) = mpsc::channel(100);
         let mut stream = SimulatedMarketStream::new(rx);
-        let symbol = create_test_symbol();
 
-        stream.subscribe_ticker(&symbol).await.unwrap();
+        stream.subscribe_ticker("BTC/USDT").await.unwrap();
 
         // 티커 이벤트 전송
         let ticker = create_test_ticker();
@@ -235,15 +234,13 @@ mod tests {
     async fn test_market_stream_filter() {
         let (tx, rx) = mpsc::channel(100);
         let mut stream = SimulatedMarketStream::new(rx);
-        let btc = create_test_symbol();
-        let eth = Symbol::crypto("ETH", "USDT");
 
         // BTC만 구독
-        stream.subscribe_ticker(&btc).await.unwrap();
+        stream.subscribe_ticker("BTC/USDT").await.unwrap();
 
         // ETH 티커 전송 (필터링되어야 함)
         let eth_ticker = Ticker {
-            symbol: eth.clone(),
+            ticker: "ETH/USDT".to_string(),
             ..create_test_ticker()
         };
         tx.send(MarketEvent::Ticker(eth_ticker)).await.unwrap();
@@ -258,7 +255,7 @@ mod tests {
         // BTC 이벤트만 수신해야 함
         let event = stream.next_event().await;
         if let Some(MarketEvent::Ticker(ticker)) = event {
-            assert_eq!(ticker.symbol, btc);
+            assert_eq!(ticker.ticker, "BTC/USDT");
         } else {
             panic!("Expected BTC ticker");
         }

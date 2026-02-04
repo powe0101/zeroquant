@@ -1141,6 +1141,105 @@ impl JournalRepository {
             trade_executions,
         ))
     }
+
+    // =====================================================
+    // 고급 거래 통계 (연속 승/패, Max Drawdown)
+    // =====================================================
+
+    /// 고급 거래 통계 조회.
+    ///
+    /// 연속 승/패 최대 횟수와 최대 낙폭(Max Drawdown)을 계산합니다.
+    pub async fn get_advanced_stats(
+        pool: &PgPool,
+        credential_id: Uuid,
+    ) -> Result<AdvancedTradingStats, sqlx::Error> {
+        // realized_pnl이 있는 거래만 시간순 조회
+        let trades: Vec<(Decimal, DateTime<Utc>)> = sqlx::query_as(
+            r#"
+            SELECT te.realized_pnl, ec.executed_at
+            FROM trade_executions te
+            JOIN execution_cache ec
+                ON ec.credential_id = te.credential_id
+                AND ec.exchange = te.exchange
+                AND ec.trade_id = te.exchange_trade_id
+            WHERE te.credential_id = $1
+                AND te.realized_pnl IS NOT NULL
+            ORDER BY ec.executed_at ASC
+            "#,
+        )
+        .bind(credential_id)
+        .fetch_all(pool)
+        .await?;
+
+        if trades.is_empty() {
+            return Ok(AdvancedTradingStats::default());
+        }
+
+        // 연속 승/패 계산
+        let mut max_consecutive_wins = 0i64;
+        let mut max_consecutive_losses = 0i64;
+        let mut current_wins = 0i64;
+        let mut current_losses = 0i64;
+
+        for (pnl, _) in &trades {
+            if *pnl > Decimal::ZERO {
+                current_wins += 1;
+                current_losses = 0;
+                max_consecutive_wins = max_consecutive_wins.max(current_wins);
+            } else if *pnl < Decimal::ZERO {
+                current_losses += 1;
+                current_wins = 0;
+                max_consecutive_losses = max_consecutive_losses.max(current_losses);
+            }
+            // pnl == 0은 무시 (손익 없음)
+        }
+
+        // Max Drawdown 계산 (누적 손익 기준)
+        let mut cumulative_pnl = Decimal::ZERO;
+        let mut peak = Decimal::ZERO;
+        let mut max_drawdown = Decimal::ZERO;
+        let mut max_drawdown_pct = Decimal::ZERO;
+
+        for (pnl, _) in &trades {
+            cumulative_pnl += pnl;
+
+            if cumulative_pnl > peak {
+                peak = cumulative_pnl;
+            }
+
+            let drawdown = peak - cumulative_pnl;
+            if drawdown > max_drawdown {
+                max_drawdown = drawdown;
+                // 최고점 기준 낙폭 %
+                if peak > Decimal::ZERO {
+                    max_drawdown_pct = (drawdown / peak) * Decimal::from(100);
+                }
+            }
+        }
+
+        Ok(AdvancedTradingStats {
+            max_consecutive_wins,
+            max_consecutive_losses,
+            max_drawdown,
+            max_drawdown_pct,
+            total_analyzed_trades: trades.len() as i64,
+        })
+    }
+}
+
+/// 고급 거래 통계.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AdvancedTradingStats {
+    /// 최대 연속 승리 횟수
+    pub max_consecutive_wins: i64,
+    /// 최대 연속 패배 횟수
+    pub max_consecutive_losses: i64,
+    /// 최대 낙폭 (절대값)
+    pub max_drawdown: Decimal,
+    /// 최대 낙폭 (%)
+    pub max_drawdown_pct: Decimal,
+    /// 분석된 거래 수
+    pub total_analyzed_trades: i64,
 }
 
 /// 내부 체결 내역 행 (비용 기준 계산용).
@@ -1153,4 +1252,246 @@ struct ExecutionRow {
     price: Decimal,
     fee: Decimal,
     executed_at: DateTime<Utc>,
+}
+
+// =====================================================
+// 손익 자동 계산 (FIFO 기반)
+// =====================================================
+
+/// 손익 재계산 결과.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecalculateResult {
+    /// 처리된 종목 수
+    pub symbols_processed: i32,
+    /// 업데이트된 체결 수
+    pub executions_updated: i32,
+    /// 총 실현 손익
+    pub total_realized_pnl: Decimal,
+    /// 오류 목록
+    pub errors: Vec<String>,
+}
+
+/// 개별 체결의 계산된 손익 정보.
+#[derive(Debug, Clone)]
+struct CalculatedPnL {
+    execution_id: Uuid,
+    realized_pnl: Option<Decimal>,
+    position_effect: String,
+}
+
+impl JournalRepository {
+    /// 모든 체결 내역의 손익 재계산.
+    ///
+    /// CostBasisTracker를 사용하여 FIFO 기반으로 각 체결의
+    /// realized_pnl과 position_effect를 계산합니다.
+    ///
+    /// # 계산 로직
+    ///
+    /// 1. 각 종목별로 체결 내역을 시간순 정렬
+    /// 2. 매수: 로트 추가, position_effect = "open" 또는 "add"
+    /// 3. 매도: FIFO 기반 실현손익 계산, position_effect = "close" 또는 "reduce"
+    /// 4. 결과를 trade_executions 테이블에 저장
+    pub async fn recalculate_all_pnl(
+        pool: &PgPool,
+        credential_id: Uuid,
+    ) -> Result<RecalculateResult, sqlx::Error> {
+        let mut result = RecalculateResult {
+            symbols_processed: 0,
+            executions_updated: 0,
+            total_realized_pnl: Decimal::ZERO,
+            errors: Vec::new(),
+        };
+
+        // 1. 거래한 모든 종목 조회
+        let symbols: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT symbol
+            FROM execution_cache
+            WHERE credential_id = $1
+            "#,
+        )
+        .bind(credential_id)
+        .fetch_all(pool)
+        .await?;
+
+        // 2. 각 종목별로 손익 계산
+        for (symbol,) in symbols {
+            match Self::recalculate_symbol_pnl(pool, credential_id, &symbol).await {
+                Ok((updated, realized_pnl)) => {
+                    result.symbols_processed += 1;
+                    result.executions_updated += updated;
+                    result.total_realized_pnl += realized_pnl;
+                }
+                Err(e) => {
+                    result.errors.push(format!("{}: {}", symbol, e));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// 특정 종목의 손익 재계산.
+    ///
+    /// # Returns
+    /// (업데이트된 체결 수, 총 실현손익)
+    async fn recalculate_symbol_pnl(
+        pool: &PgPool,
+        credential_id: Uuid,
+        symbol: &str,
+    ) -> Result<(i32, Decimal), sqlx::Error> {
+        // 1. 해당 종목의 모든 체결 내역 조회 (시간순)
+        let executions: Vec<ExecutionRowWithExchange> = sqlx::query_as(
+            r#"
+            SELECT id, exchange, symbol, side::text as side_str, quantity, price,
+                   COALESCE(fee, 0) as fee, executed_at, trade_id
+            FROM execution_cache
+            WHERE credential_id = $1 AND symbol = $2
+            ORDER BY executed_at ASC
+            "#,
+        )
+        .bind(credential_id)
+        .bind(symbol)
+        .fetch_all(pool)
+        .await?;
+
+        if executions.is_empty() {
+            return Ok((0, Decimal::ZERO));
+        }
+
+        // 2. CostBasisTracker로 손익 계산
+        let mut tracker = cost_basis::CostBasisTracker::new(symbol);
+        let mut calculated_pnls: Vec<CalculatedPnL> = Vec::new();
+        let mut is_first_buy = true;
+
+        for exec in &executions {
+            let side = Side::from_str_flexible(&exec.side_str)
+                .unwrap_or(Side::Buy);
+
+            match side {
+                Side::Buy => {
+                    // 매수: 로트 추가
+                    let lot = cost_basis::Lot::new(
+                        exec.quantity,
+                        exec.price,
+                        exec.fee,
+                        exec.executed_at,
+                    )
+                    .with_execution_id(exec.id);
+                    tracker.add_lot(lot);
+
+                    // position_effect 결정
+                    let position_effect = if is_first_buy {
+                        is_first_buy = false;
+                        "open"
+                    } else {
+                        "add"
+                    };
+
+                    calculated_pnls.push(CalculatedPnL {
+                        execution_id: exec.id,
+                        realized_pnl: None, // 매수는 실현손익 없음
+                        position_effect: position_effect.to_string(),
+                    });
+                }
+                Side::Sell => {
+                    // 매도: FIFO 기반 실현손익 계산
+                    let sale_result = tracker.sell(
+                        exec.quantity,
+                        exec.price,
+                        exec.fee,
+                        exec.executed_at,
+                    );
+
+                    let (realized_pnl, position_effect) = match sale_result {
+                        Ok(result) => {
+                            // 남은 수량에 따라 position_effect 결정
+                            let effect = if tracker.total_quantity() == Decimal::ZERO {
+                                is_first_buy = true; // 청산 후 다음 매수는 다시 open
+                                "close"
+                            } else {
+                                "reduce"
+                            };
+                            (Some(result.realized_pnl), effect)
+                        }
+                        Err(_) => {
+                            // 보유 수량 부족 (공매도 또는 데이터 오류)
+                            // 실현손익 계산 불가
+                            (None, "unknown")
+                        }
+                    };
+
+                    calculated_pnls.push(CalculatedPnL {
+                        execution_id: exec.id,
+                        realized_pnl,
+                        position_effect: position_effect.to_string(),
+                    });
+                }
+            }
+        }
+
+        // 3. 계산 결과를 trade_executions 테이블에 저장
+        let mut updated = 0;
+        let mut total_realized = Decimal::ZERO;
+
+        for pnl_info in &calculated_pnls {
+            if let Some(pnl) = pnl_info.realized_pnl {
+                total_realized += pnl;
+            }
+
+            // 해당 execution_cache의 정보로 trade_executions에 upsert
+            let exec = executions.iter().find(|e| e.id == pnl_info.execution_id);
+            if let Some(exec) = exec {
+                let affected = sqlx::query(
+                    r#"
+                    INSERT INTO trade_executions (
+                        credential_id, exchange, symbol, side, order_type,
+                        quantity, price, notional_value, fee,
+                        position_effect, realized_pnl,
+                        exchange_trade_id, executed_at
+                    )
+                    SELECT
+                        $1, $2, $3, side, COALESCE(order_type, 'market'),
+                        quantity, price, amount, COALESCE(fee, 0),
+                        $4, $5, trade_id, executed_at
+                    FROM execution_cache
+                    WHERE id = $6
+                    ON CONFLICT (credential_id, exchange, exchange_trade_id)
+                    DO UPDATE SET
+                        position_effect = EXCLUDED.position_effect,
+                        realized_pnl = EXCLUDED.realized_pnl,
+                        updated_at = NOW()
+                    "#,
+                )
+                .bind(credential_id)
+                .bind(&exec.exchange)
+                .bind(symbol)
+                .bind(&pnl_info.position_effect)
+                .bind(pnl_info.realized_pnl)
+                .bind(exec.id)
+                .execute(pool)
+                .await?;
+
+                if affected.rows_affected() > 0 {
+                    updated += 1;
+                }
+            }
+        }
+
+        Ok((updated, total_realized))
+    }
+}
+
+/// 확장된 체결 내역 행 (exchange, trade_id 포함).
+#[derive(Debug, FromRow)]
+struct ExecutionRowWithExchange {
+    id: Uuid,
+    exchange: String,
+    symbol: String,
+    side_str: String,
+    quantity: Decimal,
+    price: Decimal,
+    fee: Decimal,
+    executed_at: DateTime<Utc>,
+    trade_id: Option<String>,
 }

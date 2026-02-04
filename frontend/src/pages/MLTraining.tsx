@@ -3,21 +3,26 @@ import {
   Play,
   Square,
   Trash2,
-  Download,
   RefreshCw,
   CheckCircle,
   XCircle,
   Clock,
   Loader2,
   Plus,
-  ChevronDown,
-  ChevronUp,
   Zap,
   Database,
   TrendingUp,
   BarChart3,
 } from 'lucide-solid'
 import { SymbolDisplay } from '../components/SymbolDisplay'
+import {
+  PageHeader,
+  Card,
+  CardHeader,
+  CardContent,
+  EmptyState,
+  Button,
+} from '../components/ui'
 import {
   startTraining,
   getTrainingJobs,
@@ -199,25 +204,36 @@ export function MLTraining() {
     }
   }
 
+  // 헤더 액션 버튼
+  const HeaderActions = () => (
+    <div class="flex items-center gap-2">
+      <Button
+        variant="primary"
+        onClick={() => setShowForm(!showForm())}
+        className="bg-purple-600 hover:bg-purple-700"
+      >
+        <Plus class="w-4 h-4" />
+        새 훈련
+      </Button>
+      <Button
+        variant="secondary"
+        onClick={() => { refetchJobs(); refetchModels(); }}
+        loading={jobs.loading || models.loading}
+      >
+        🔄 새로고침
+      </Button>
+    </div>
+  )
+
   return (
     <div class="space-y-6">
-      {/* 액션 버튼 */}
-      <div class="flex items-center justify-end gap-2">
-        <button
-          onClick={() => setShowForm(!showForm())}
-          class="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
-        >
-          <Plus class="w-4 h-4" />
-          새 훈련
-        </button>
-        <button
-          onClick={() => { refetchJobs(); refetchModels(); }}
-          class="px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text-muted)] rounded-lg font-medium hover:text-[var(--color-text)] transition-colors flex items-center gap-2"
-        >
-          <RefreshCw class={`w-4 h-4 ${jobs.loading || models.loading ? 'animate-spin' : ''}`} />
-          새로고침
-        </button>
-      </div>
+      {/* 페이지 헤더 */}
+      <PageHeader
+        title="ML 모델 훈련"
+        icon="🤖"
+        description="XGBoost, LightGBM 등 ML 모델을 훈련하고 관리합니다"
+        actions={<HeaderActions />}
+      />
 
       {/* 훈련 폼 */}
       <Show when={showForm()}>
@@ -394,29 +410,32 @@ export function MLTraining() {
       </Show>
 
       {/* 훈련 작업 목록 */}
-      <div class="card p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
-            <BarChart3 class="w-5 h-5 text-blue-500" />
-            훈련 작업
-          </h2>
-          <button
-            onClick={() => refetchJobs()}
-            class="p-2 hover:bg-[var(--color-bg-secondary)] rounded-lg transition-colors"
-          >
-            <RefreshCw class="w-4 h-4 text-[var(--color-text-muted)]" />
-          </button>
-        </div>
-
-        <Show
-          when={jobs() && jobs()!.length > 0}
-          fallback={
-            <div class="text-center py-8 text-[var(--color-text-muted)]">
-              <Clock class="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>훈련 작업이 없습니다</p>
+      <Card>
+        <CardHeader>
+          <div class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2">
+              <BarChart3 class="w-5 h-5 text-blue-500" />
+              <span class="text-lg font-semibold text-gray-900 dark:text-white">훈련 작업</span>
             </div>
-          }
-        >
+            <button
+              onClick={() => refetchJobs()}
+              class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+            >
+              <RefreshCw class={`w-4 h-4 text-gray-500 ${jobs.loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Show
+            when={jobs() && jobs()!.length > 0}
+            fallback={
+              <EmptyState
+                icon="⏱️"
+                title="훈련 작업이 없습니다"
+                description="'새 훈련' 버튼을 눌러 모델 훈련을 시작하세요."
+              />
+            }
+          >
           <div class="space-y-3">
             <For each={jobs()}>
               {(job) => (
@@ -518,32 +537,36 @@ export function MLTraining() {
             </For>
           </div>
         </Show>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* 훈련된 모델 목록 */}
-      <div class="card p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
-            <Database class="w-5 h-5 text-green-500" />
-            훈련된 모델
-          </h2>
-          <button
-            onClick={() => refetchModels()}
-            class="p-2 hover:bg-[var(--color-bg-secondary)] rounded-lg transition-colors"
-          >
-            <RefreshCw class="w-4 h-4 text-[var(--color-text-muted)]" />
-          </button>
-        </div>
-
-        <Show
-          when={models() && models()!.length > 0}
-          fallback={
-            <div class="text-center py-8 text-[var(--color-text-muted)]">
-              <Database class="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>훈련된 모델이 없습니다</p>
+      <Card>
+        <CardHeader>
+          <div class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2">
+              <Database class="w-5 h-5 text-green-500" />
+              <span class="text-lg font-semibold text-gray-900 dark:text-white">훈련된 모델</span>
             </div>
-          }
-        >
+            <button
+              onClick={() => refetchModels()}
+              class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+            >
+              <RefreshCw class={`w-4 h-4 text-gray-500 ${models.loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Show
+            when={models() && models()!.length > 0}
+            fallback={
+              <EmptyState
+                icon="🗃️"
+                title="훈련된 모델이 없습니다"
+                description="훈련이 완료되면 여기에 모델이 표시됩니다."
+              />
+            }
+          >
           <div class="space-y-3">
             <For each={models()}>
               {(model) => (
@@ -620,22 +643,27 @@ export function MLTraining() {
             </For>
           </div>
         </Show>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* 도움말 */}
-      <div class="card p-6 bg-purple-500/5 border border-purple-500/20">
-        <h3 class="font-semibold text-[var(--color-text)] mb-2 flex items-center gap-2">
-          <TrendingUp class="w-5 h-5 text-purple-500" />
-          사용 가이드
-        </h3>
-        <ul class="text-sm text-[var(--color-text-muted)] space-y-1">
-          <li>• Yahoo Finance에서 과거 데이터를 자동으로 다운로드합니다</li>
-          <li>• 40개 이상의 기술적 지표를 피처로 사용합니다 (RSI, MACD, 볼린저밴드 등)</li>
-          <li>• 훈련된 모델은 ONNX 형식으로 저장되어 Rust에서 추론에 사용됩니다</li>
-          <li>• XGBoost를 기본 모델로 추천합니다 (빠르고 정확함)</li>
-          <li>• 다양한 심볼로 훈련하면 일반화 성능이 향상됩니다</li>
-        </ul>
-      </div>
+      <Card className="bg-purple-50 dark:bg-purple-900/10 border-purple-200 dark:border-purple-800">
+        <CardContent>
+          <h3 class="font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+            <TrendingUp class="w-5 h-5 text-purple-500" />
+            사용 가이드
+          </h3>
+          <ul class="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
+            <li>• Yahoo Finance에서 과거 데이터를 자동으로 다운로드합니다</li>
+            <li>• 40개 이상의 기술적 지표를 피처로 사용합니다 (RSI, MACD, 볼린저밴드 등)</li>
+            <li>• 훈련된 모델은 ONNX 형식으로 저장되어 Rust에서 추론에 사용됩니다</li>
+            <li>• XGBoost를 기본 모델로 추천합니다 (빠르고 정확함)</li>
+            <li>• 다양한 심볼로 훈련하면 일반화 성능이 향상됩니다</li>
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   )
 }
+
+export default MLTraining

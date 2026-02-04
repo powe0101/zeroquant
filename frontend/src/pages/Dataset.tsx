@@ -4,6 +4,7 @@ import {
   Database, Download, Trash2, RefreshCw, TrendingUp, BarChart3,
   Search, Zap, Loader2, X, Grid2x2, Square
 } from 'lucide-solid'
+import { StatCard, StatCardGrid, PageHeader, Button } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { MultiPanelGrid, type LayoutMode, type PanelConfig } from '../components/MultiPanelGrid'
 import { SymbolPanel, type DatasetSummary } from '../components/SymbolPanel'
@@ -363,99 +364,67 @@ export function Dataset() {
   // ==================== 렌더링 ====================
   return (
     <div class="h-full flex flex-col">
-      {/* 상단 바: 뷰 모드 + 액션 */}
-      <div class="flex items-center justify-between gap-4 mb-4">
-        <div class="flex items-center gap-3">
-          <h1 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
-            <Database class="w-5 h-5" />
-            데이터셋
-          </h1>
-          {/* 뷰 모드 토글 */}
-          <div class="flex gap-1 bg-[var(--color-surface)] rounded-lg p-1">
-            <button
-              onClick={() => setViewType('single')}
-              class={`px-3 py-1.5 text-sm rounded flex items-center gap-2 transition
-                      ${viewType() === 'single'
-                        ? 'bg-[var(--color-primary)] text-white'
-                        : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-light)]'}`}
+      {/* 상단 바 - 공통 컴포넌트 사용 */}
+      <PageHeader
+        title="데이터셋"
+        icon="💾"
+        actions={
+          <div class="flex items-center gap-3">
+            {/* 뷰 모드 토글 */}
+            <div class="flex gap-1 bg-[var(--color-surface)] rounded-lg p-1">
+              <Button
+                variant={viewType() === 'single' ? 'primary' : 'secondary'}
+                size="sm"
+                onClick={() => setViewType('single')}
+              >
+                ⬜ 싱글
+              </Button>
+              <Button
+                variant={viewType() === 'multi' ? 'primary' : 'secondary'}
+                size="sm"
+                onClick={() => setViewType('multi')}
+              >
+                🔲 멀티
+              </Button>
+            </div>
+            {/* 액션 버튼 */}
+            <Button variant="primary" onClick={() => setShowDownloadForm(!showDownloadForm())}>
+              ⬇️ 다운로드
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => datasetsQuery.refetch()}
+              loading={datasetsQuery.isFetching}
             >
-              <Square class="w-4 h-4" />
-              싱글
-            </button>
-            <button
-              onClick={() => setViewType('multi')}
-              class={`px-3 py-1.5 text-sm rounded flex items-center gap-2 transition
-                      ${viewType() === 'multi'
-                        ? 'bg-[var(--color-primary)] text-white'
-                        : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-light)]'}`}
-            >
-              <Grid2x2 class="w-4 h-4" />
-              멀티
-            </button>
+              🔄
+            </Button>
           </div>
-        </div>
+        }
+      />
 
-        {/* 액션 버튼 */}
-        <div class="flex items-center gap-2">
-          <button
-            onClick={() => setShowDownloadForm(!showDownloadForm())}
-            class="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg
-                   hover:bg-[var(--color-primary-dark)] transition flex items-center gap-2"
-          >
-            <Download class="w-4 h-4" />
-            다운로드
-          </button>
-          <button
-            onClick={() => datasetsQuery.refetch()}
-            class="px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text)] rounded-lg
-                   hover:bg-[var(--color-surface-light)] transition"
-          >
-            <RefreshCw class={`w-4 h-4 ${datasetsQuery.isFetching ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
-
-      {/* 통계 카드 */}
-      <div class="grid grid-cols-4 gap-4 mb-4">
-        <div class="bg-[var(--color-surface)] rounded-xl p-4 flex items-center gap-3">
-          <div class="p-2 bg-blue-500/20 rounded-lg">
-            <Database class="w-5 h-5 text-blue-400" />
-          </div>
-          <div>
-            <p class="text-sm text-[var(--color-text-muted)]">캐시 심볼</p>
-            <p class="text-xl font-bold text-[var(--color-text)]">{cachedSymbols().length}</p>
-          </div>
-        </div>
-        <div class="bg-[var(--color-surface)] rounded-xl p-4 flex items-center gap-3">
-          <div class="p-2 bg-green-500/20 rounded-lg">
-            <BarChart3 class="w-5 h-5 text-green-400" />
-          </div>
-          <div>
-            <p class="text-sm text-[var(--color-text-muted)]">전체 캔들</p>
-            <p class="text-xl font-bold text-[var(--color-text)]">{totalCandles().toLocaleString()}</p>
-          </div>
-        </div>
-        <div class="bg-[var(--color-surface)] rounded-xl p-4 flex items-center gap-3">
-          <div class="p-2 bg-purple-500/20 rounded-lg">
-            <TrendingUp class="w-5 h-5 text-purple-400" />
-          </div>
-          <div>
-            <p class="text-sm text-[var(--color-text-muted)]">전략 심볼</p>
-            <p class="text-xl font-bold text-[var(--color-text)]">{strategySymbols().length}</p>
-          </div>
-        </div>
-        <div class="bg-[var(--color-surface)] rounded-xl p-4 flex items-center gap-3">
-          <div class="p-2 bg-amber-500/20 rounded-lg">
-            <Grid2x2 class="w-5 h-5 text-amber-400" />
-          </div>
-          <div>
-            <p class="text-sm text-[var(--color-text-muted)]">활성 패널</p>
-            <p class="text-xl font-bold text-[var(--color-text)]">
-              {viewType() === 'multi' ? panels().filter(p => p.symbol).length : (activeSymbol() ? 1 : 0)}
-            </p>
-          </div>
-        </div>
-      </div>
+      {/* 통계 카드 - 공통 컴포넌트 사용 */}
+      <StatCardGrid columns={4} className="mb-4">
+        <StatCard
+          label="캐시 심볼"
+          value={cachedSymbols().length}
+          icon="💾"
+        />
+        <StatCard
+          label="전체 캔들"
+          value={totalCandles().toLocaleString()}
+          icon="📊"
+        />
+        <StatCard
+          label="전략 심볼"
+          value={strategySymbols().length}
+          icon="📈"
+        />
+        <StatCard
+          label="활성 패널"
+          value={viewType() === 'multi' ? panels().filter(p => p.symbol).length : (activeSymbol() ? 1 : 0)}
+          icon="🔲"
+        />
+      </StatCardGrid>
 
       {/* 다운로드 폼 */}
       <Show when={showDownloadForm()}>
@@ -774,3 +743,5 @@ export function Dataset() {
     </div>
   )
 }
+
+export default Dataset

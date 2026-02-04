@@ -29,14 +29,14 @@ use serde_json::Value;
 use tracing::{debug, info};
 use trader_core::{
     cost_basis, CostMethod, MarketData, MarketDataType, MarketType, Order, Position, Side, Signal,
-    Symbol, TradeEntry,
+    TradeEntry,
     domain::RouteState,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use trader_core::domain::StrategyContext;
 
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::traits::Strategy;
 
 /// 분할 매수 레벨 설정
@@ -135,9 +135,9 @@ impl SplitLevelState {
 /// Magic Split 전략 설정
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MagicSplitConfig {
-    /// 거래 심볼
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 거래 티커
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
     /// 분할 레벨 목록
     pub levels: Vec<SplitLevel>,
     /// 당일 재진입 허용 여부
@@ -156,7 +156,7 @@ fn default_min_global_score() -> Decimal {
 impl Default for MagicSplitConfig {
     fn default() -> Self {
         Self {
-            symbol: String::new(),
+            ticker:  String::new(),
             levels: Self::default_levels(),
             allow_same_day_reentry: false,
             slippage_tolerance: dec!(1.0),
@@ -219,8 +219,8 @@ pub struct MagicSplitStrategy {
     last_price: Option<Decimal>,
     /// 통계
     stats: MagicSplitStats,
-    /// 심볼
-    symbol: Option<Symbol>,
+    /// 티커
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
 }
 
@@ -233,7 +233,7 @@ impl MagicSplitStrategy {
             is_ready: true,
             last_price: None,
             stats: MagicSplitStats::default(),
-            symbol: None,
+            ticker: None,
             context: None,
         }
     }
@@ -247,8 +247,8 @@ impl MagicSplitStrategy {
             .map(|l| SplitLevelState::new(l.number))
             .collect();
 
-        // 심볼 파싱 (기본값: 주식 시장)
-        self.symbol = Symbol::from_string(&config.symbol, MarketType::Stock);
+        // 티커 파싱 (기본값: 주식 시장)
+        self.ticker = Some(config.ticker.clone());
         self.config = Some(config);
         self.is_ready = true;
         self.stats = MagicSplitStats::default();
@@ -262,7 +262,7 @@ impl MagicSplitStrategy {
     /// 매수 신호 생성
     fn create_buy_signal(
         &self,
-        symbol: &Symbol,
+        ticker: &String,
         level: &SplitLevel,
         current_price: Decimal,
     ) -> Signal {
@@ -281,7 +281,7 @@ impl MagicSplitStrategy {
             .unwrap_or(dec!(1.0));
         let suggested_price = current_price * (Decimal::ONE + slippage / dec!(100));
 
-        Signal::entry(self.name(), symbol.clone(), Side::Buy)
+        Signal::entry(self.name(), ticker.clone(), Side::Buy)
             .with_prices(Some(suggested_price), None, None)
             .with_strength(1.0)
             .with_metadata("level", serde_json::json!(level.number))
@@ -301,7 +301,7 @@ impl MagicSplitStrategy {
     /// 매도 신호 생성
     fn create_sell_signal(
         &self,
-        symbol: &Symbol,
+        ticker: &String,
         level: &SplitLevel,
         state: &SplitLevelState,
         current_price: Decimal,
@@ -314,7 +314,7 @@ impl MagicSplitStrategy {
             .unwrap_or(dec!(1.0));
         let suggested_price = current_price * (Decimal::ONE - slippage / dec!(100));
 
-        Signal::exit(self.name(), symbol.clone(), Side::Sell)
+        Signal::exit(self.name(), ticker.clone(), Side::Sell)
             .with_prices(Some(suggested_price), None, None)
             .with_strength(1.0)
             .with_metadata("level", serde_json::json!(level.number))
@@ -339,7 +339,7 @@ impl MagicSplitStrategy {
             None => return signals,
         };
 
-        let symbol = match &self.symbol {
+        let ticker = match &self.ticker {
             Some(s) => s.clone(),
             None => return signals,
         };
@@ -356,7 +356,7 @@ impl MagicSplitStrategy {
             // can_enter() 체크 추가
             if should_buy && self.can_enter() {
                 // 1차수 매수 신호 생성
-                let signal = self.create_buy_signal(&symbol, level, current_price);
+                let signal = self.create_buy_signal(&ticker, level, current_price);
                 signals.push(signal);
 
                 // 상태 업데이트 (스코프 분리)
@@ -373,7 +373,7 @@ impl MagicSplitStrategy {
                 self.stats.total_buys += 1;
                 self.stats.max_level_reached = 1;
 
-                info!("[MagicSplit] 1차수 진입: {} @ {}", symbol, current_price);
+                info!("[MagicSplit] 1차수 진입: {} @ {}", ticker, current_price);
             }
         }
 
@@ -393,7 +393,7 @@ impl MagicSplitStrategy {
                 // 목표 수익률 달성
                 if current_rate >= level.target_rate {
                     let signal = self.create_sell_signal(
-                        &symbol,
+                        &ticker,
                         level,
                         &state,
                         current_price,
@@ -455,7 +455,7 @@ impl MagicSplitStrategy {
 
                 // 트리거 조건 충족 (손실률이 트리거 이하) + can_enter() 체크
                 if prev_rate <= trigger_rate && self.can_enter() {
-                    let signal = self.create_buy_signal(&symbol, level, current_price);
+                    let signal = self.create_buy_signal(&ticker, level, current_price);
                     signals.push(signal);
 
                     // 상태 업데이트 (스코프 분리)
@@ -555,7 +555,7 @@ impl MagicSplitStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let Some(ctx) = self.context.as_ref() else {
             // Context가 없으면 진입 허용 (기존 동작 유지)
@@ -645,8 +645,8 @@ impl Strategy for MagicSplitStrategy {
             None => return Ok(Vec::new()),
         };
 
-        // 심볼 체크
-        if data.symbol.to_string() != config.symbol {
+        // 티커 체크
+        if data.ticker.to_string() != config.ticker {
             return Ok(Vec::new());
         }
 
@@ -713,7 +713,7 @@ mod tests {
 
     fn create_test_config() -> MagicSplitConfig {
         MagicSplitConfig {
-            symbol: "TEST/KRW".to_string(),
+            ticker: "TEST/KRW".to_string(),
             levels: vec![
                 SplitLevel::new(1, dec!(10.0), None, dec!(200000)),
                 SplitLevel::new(2, dec!(2.0), Some(dec!(-3.0)), dec!(100000)),
@@ -890,7 +890,7 @@ register_strategy! {
     name: "Magic Split",
     description: "가격대별 분할 매수/매도 전략입니다.",
     timeframe: "1m",
-    symbols: [],
+    tickers: [],
     category: Realtime,
     markets: [Crypto, Stock, Stock],
     type: MagicSplitStrategy

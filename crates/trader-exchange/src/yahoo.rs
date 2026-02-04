@@ -34,7 +34,6 @@ use tracing::{debug, info, warn};
 use yahoo_finance_api as yahoo;
 
 use trader_core::{Kline, Symbol, Timeframe};
-
 use crate::historical::HistoricalDataProvider;
 use crate::ExchangeError;
 
@@ -219,9 +218,8 @@ impl YahooFinanceProvider {
             .single()
             .unwrap_or_else(|| Utc::now());
         let close_time = open_time + Self::timeframe_duration(timeframe);
-
         Kline {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             timeframe,
             open_time,
             open: Decimal::from_f64_retain(quote.open).unwrap_or_default(),

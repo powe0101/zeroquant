@@ -58,7 +58,7 @@ pub struct RebalanceConfig {
     pub rebalance_threshold: Decimal,
 
     /// 현금 심볼 (예: "CASH", "KRW", "USD").
-    pub cash_symbol: String,
+    pub cash_ticker:  String,
 }
 
 impl Default for RebalanceConfig {
@@ -69,7 +69,7 @@ impl Default for RebalanceConfig {
             sell_tax_rate: dec!(0.0),        // 0% for ETFs (varies by market)
             slippage_rate: dec!(0.001),      // 0.1%
             rebalance_threshold: dec!(0.03), // 3% deviation threshold
-            cash_symbol: "CASH".to_string(),
+            cash_ticker: "CASH".to_string(),
         }
     }
 }
@@ -83,7 +83,7 @@ impl RebalanceConfig {
             sell_tax_rate: dec!(0.0),      // ETF의 경우 0%
             slippage_rate: dec!(0.001),    // 0.1%
             rebalance_threshold: dec!(0.03),
-            cash_symbol: "KRW".to_string(),
+            cash_ticker: "KRW".to_string(),
         }
     }
 
@@ -95,7 +95,7 @@ impl RebalanceConfig {
             sell_tax_rate: dec!(0.0),   // 거래세 없음
             slippage_rate: dec!(0.001), // 0.1%
             rebalance_threshold: dec!(0.03),
-            cash_symbol: "USD".to_string(),
+            cash_ticker: "USD".to_string(),
         }
     }
 }
@@ -104,7 +104,7 @@ impl RebalanceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortfolioPosition {
     /// 자산 심볼 (예: "SPY", "069500").
-    pub symbol: String,
+    pub ticker:  String,
 
     /// 보유 수량.
     pub quantity: Decimal,
@@ -118,10 +118,10 @@ pub struct PortfolioPosition {
 
 impl PortfolioPosition {
     /// 새 포트폴리오 포지션 생성.
-    pub fn new(symbol: impl Into<String>, quantity: Decimal, current_price: Decimal) -> Self {
+    pub fn new(ticker: impl Into<String>, quantity: Decimal, current_price: Decimal) -> Self {
         let market_value = quantity * current_price;
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             quantity,
             current_price,
             market_value,
@@ -129,9 +129,9 @@ impl PortfolioPosition {
     }
 
     /// 현금 포지션 생성.
-    pub fn cash(amount: Decimal, symbol: impl Into<String>) -> Self {
+    pub fn cash(amount: Decimal, ticker: impl Into<String>) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             quantity: amount,
             current_price: dec!(1),
             market_value: amount,
@@ -143,7 +143,7 @@ impl PortfolioPosition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetAllocation {
     /// 자산 심볼.
-    pub symbol: String,
+    pub ticker:  String,
 
     /// 목표 비중 (0.0 ~ 1.0).
     pub weight: Decimal,
@@ -151,9 +151,9 @@ pub struct TargetAllocation {
 
 impl TargetAllocation {
     /// 새 목표 배분 생성.
-    pub fn new(symbol: impl Into<String>, weight: Decimal) -> Self {
+    pub fn new(ticker: impl Into<String>, weight: Decimal) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             weight,
         }
     }
@@ -169,8 +169,8 @@ pub enum RebalanceOrderSide {
 /// 단일 리밸런싱 주문.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebalanceOrder {
-    /// 자산 심볼.
-    pub symbol: String,
+    /// 자산 ticker.
+    pub ticker: String,
 
     /// 주문 방향 (매수 또는 매도).
     pub side: RebalanceOrderSide,
@@ -287,7 +287,7 @@ impl RebalanceCalculator {
         targets
             .iter()
             .map(|t| TargetAllocation {
-                symbol: t.symbol.clone(),
+                ticker: t.ticker.clone(),
                 weight: t.weight / total_weight,
             })
             .collect()
@@ -312,7 +312,7 @@ impl RebalanceCalculator {
         let normalized_targets = self.normalize_weights(targets);
         let target_map: HashMap<&str, Decimal> = normalized_targets
             .iter()
-            .map(|t| (t.symbol.as_str(), t.weight))
+            .map(|t| (t.ticker.as_str(), t.weight))
             .collect();
 
         // Calculate total portfolio value
@@ -321,14 +321,14 @@ impl RebalanceCalculator {
         // Find cash position
         let cash_position = positions
             .iter()
-            .find(|p| p.symbol == self.config.cash_symbol);
+            .find(|p| p.ticker == self.config.cash_ticker);
         let available_cash = cash_position.map(|p| p.market_value).unwrap_or(dec!(0));
 
         // Build position map (excluding cash)
         let position_map: HashMap<&str, &PortfolioPosition> = positions
             .iter()
-            .filter(|p| p.symbol != self.config.cash_symbol)
-            .map(|p| (p.symbol.as_str(), p))
+            .filter(|p| p.ticker != self.config.cash_ticker)
+            .map(|p| (p.ticker.as_str(), p))
             .collect();
 
         // Calculate orders for each target
@@ -338,17 +338,17 @@ impl RebalanceCalculator {
 
         for target in &normalized_targets {
             // Skip cash in target allocation
-            if target.symbol == self.config.cash_symbol {
+            if target.ticker == self.config.cash_ticker {
                 continue;
             }
 
             let current_value = position_map
-                .get(target.symbol.as_str())
+                .get(target.ticker.as_str())
                 .map(|p| p.market_value)
                 .unwrap_or(dec!(0));
 
             let current_price = position_map
-                .get(target.symbol.as_str())
+                .get(target.ticker.as_str())
                 .map(|p| p.current_price)
                 .unwrap_or(dec!(1));
 
@@ -406,7 +406,7 @@ impl RebalanceCalculator {
             };
 
             let order = RebalanceOrder {
-                symbol: target.symbol.clone(),
+                ticker: target.ticker.clone(),
                 side,
                 quantity,
                 amount: actual_amount,
@@ -426,8 +426,8 @@ impl RebalanceCalculator {
         }
 
         // Check for positions not in target (should be sold)
-        for (symbol, position) in &position_map {
-            if !target_map.contains_key(*symbol)
+        for (ticker, position) in &position_map {
+            if !target_map.contains_key(*ticker)
                 && position.market_value > self.config.min_trade_amount
             {
                 let current_weight = if total_value.is_zero() {
@@ -440,7 +440,7 @@ impl RebalanceCalculator {
                 let tax = position.market_value * self.config.sell_tax_rate;
 
                 let order = RebalanceOrder {
-                    symbol: symbol.to_string(),
+                    ticker: ticker.to_string(),
                     side: RebalanceOrderSide::Sell,
                     quantity: position.quantity,
                     amount: position.market_value,
@@ -615,7 +615,7 @@ mod tests {
             sell_tax_rate: dec!(0),
             slippage_rate: dec!(0),
             rebalance_threshold: dec!(0.03),
-            cash_symbol: "CASH".to_string(),
+            cash_ticker: "CASH".to_string(),
         };
         let calculator = RebalanceCalculator::new(config);
 
@@ -690,7 +690,7 @@ mod tests {
 
         // Should sell OLD_STOCK
         let sell_orders = result.sell_orders();
-        assert!(sell_orders.iter().any(|o| o.symbol == "OLD_STOCK"));
+        assert!(sell_orders.iter().any(|o| o.ticker == "OLD_STOCK"));
     }
 
     #[test]

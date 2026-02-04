@@ -41,7 +41,7 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType};
 
 /// Simple Power 전략 설정.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,7 +153,7 @@ impl SimplePowerConfig {
         }
     }
 
-    /// 모든 자산 심볼 가져오기.
+    /// 모든 자산 티커 가져오기.
     pub fn all_assets(&self) -> Vec<String> {
         vec![
             self.aggressive_asset.clone(),
@@ -258,8 +258,8 @@ impl SimplePowerStrategy {
     }
 
     /// 가격 히스토리 업데이트.
-    fn update_price_history(&mut self, symbol: &str, price: Decimal) {
-        let history = self.price_history.entry(symbol.to_string()).or_default();
+    fn update_price_history(&mut self, ticker: &str, price: Decimal) {
+        let history = self.price_history.entry(ticker.to_string()).or_default();
         history.insert(0, price); // 최신 가격을 앞에
 
         // 최대 300일 보관
@@ -287,10 +287,10 @@ impl SimplePowerStrategy {
     /// 모멘텀 상태 계산.
     fn calculate_momentum_state(
         &self,
-        symbol: &str,
+        ticker: &str,
         config: &SimplePowerConfig,
     ) -> AssetMomentumState {
-        let prices = match self.price_history.get(symbol) {
+        let prices = match self.price_history.get(ticker) {
             Some(p) if p.len() >= config.ma_period + 3 => p,
             _ => return AssetMomentumState::default(),
         };
@@ -325,7 +325,7 @@ impl SimplePowerStrategy {
 
         // PFIX/TMF는 두 조건 모두 충족 시 완전 청산
         let is_hedge_asset =
-            symbol == config.rate_hedge_asset || symbol == config.bond_leverage_asset;
+            ticker == config.rate_hedge_asset || ticker == config.bond_leverage_asset;
         let is_out = is_hedge_asset && cut_count == 2;
 
         if is_out {
@@ -408,7 +408,7 @@ impl SimplePowerStrategy {
         // TargetAllocation으로 변환
         adjusted_weights
             .into_iter()
-            .map(|(symbol, weight)| TargetAllocation::new(symbol, weight))
+            .map(|(ticker, weight)| TargetAllocation::new(ticker, weight))
             .collect()
     }
 
@@ -503,11 +503,11 @@ impl SimplePowerStrategy {
         // 현재 포지션을 PortfolioPosition으로 변환
         let mut portfolio_positions: Vec<PortfolioPosition> = Vec::new();
 
-        for (symbol, quantity) in &self.positions {
-            if let Some(prices) = self.price_history.get(symbol) {
+        for (ticker, quantity) in &self.positions {
+            if let Some(prices) = self.price_history.get(ticker) {
                 if let Some(current_price) = prices.first() {
                     portfolio_positions.push(PortfolioPosition::new(
-                        symbol,
+                        ticker,
                         *quantity,
                         *current_price,
                     ));
@@ -516,11 +516,11 @@ impl SimplePowerStrategy {
         }
 
         // 현금 포지션 추가
-        let cash_symbol = match config.market {
+        let cash_ticker = match config.market {
             MarketType::US => "USD",
             MarketType::KR => "KRW",
         };
-        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_symbol));
+        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_ticker));
 
         // 리밸런싱 계산
         let result = self
@@ -537,9 +537,9 @@ impl SimplePowerStrategy {
             };
 
             // BUY 신호의 경우 can_enter() 체크
-            if side == Side::Buy && !self.can_enter(&order.symbol) {
+            if side == Side::Buy && !self.can_enter(&order.ticker) {
                 debug!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     "Skipping BUY signal due to RouteState/GlobalScore filter"
                 );
                 continue;
@@ -554,7 +554,7 @@ impl SimplePowerStrategy {
             // Signal 빌더 패턴으로 생성
             let signal = Signal::new(
                 self.name(),
-                Symbol::stock(&order.symbol, quote_currency),
+                format!("{}/{}", order.ticker, quote_currency),
                 side,
                 SignalType::Scale, // 리밸런싱은 Scale 타입 사용
             )
@@ -641,10 +641,10 @@ impl Strategy for SimplePowerStrategy {
             None => return Ok(Vec::new()),
         };
 
-        let symbol = data.symbol.base.clone();
+        let ticker = data.ticker.clone();
 
         // 관심 자산이 아니면 무시
-        if !config.all_assets().contains(&symbol) {
+        if !config.all_assets().contains(&ticker) {
             return Ok(Vec::new());
         }
 
@@ -658,8 +658,8 @@ impl Strategy for SimplePowerStrategy {
 
         // 가격 업데이트
         if let Some(price) = price {
-            self.update_price_history(&symbol, price);
-            debug!("[Simple Power] 가격 업데이트: {} = {}", symbol, price);
+            self.update_price_history(&ticker, price);
+            debug!("[Simple Power] 가격 업데이트: {} = {}", ticker, price);
         }
 
         // 리밸런싱 신호 생성
@@ -674,7 +674,7 @@ impl Strategy for SimplePowerStrategy {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
             "[Simple Power] 주문 체결: {:?} {} {} @ {:?}",
-            order.side, order.quantity, order.symbol, order.average_fill_price
+            order.side, order.quantity, order.ticker, order.average_fill_price
         );
         Ok(())
     }
@@ -683,11 +683,11 @@ impl Strategy for SimplePowerStrategy {
         &mut self,
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol = position.symbol.base.clone();
-        self.positions.insert(symbol.clone(), position.quantity);
+        let ticker = position.ticker.clone();
+        self.positions.insert(ticker.clone(), position.quantity);
         info!(
             "[Simple Power] 포지션 업데이트: {} = {} (PnL: {})",
-            symbol, position.quantity, position.unrealized_pnl
+            ticker, position.quantity, position.unrealized_pnl
         );
         Ok(())
     }
@@ -874,7 +874,7 @@ register_strategy! {
     name: "Simple Power",
     description: "심플 파워 모멘텀 자산배분 전략입니다.",
     timeframe: "1d",
-    symbols: ["TQQQ", "SCHD", "PFIX", "TMF"],
+    tickers: ["TQQQ", "SCHD", "PFIX", "TMF"],
     category: Monthly,
     markets: [Stock],
     type: SimplePowerStrategy

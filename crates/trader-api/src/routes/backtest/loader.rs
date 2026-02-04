@@ -93,7 +93,7 @@ pub fn generate_sample_klines(
             let volume = 1000000.0 * (1.0 + noise.abs());
 
             Kline {
-                symbol: symbol.clone(),
+                ticker: symbol.to_string(),
                 timeframe: Timeframe::D1,
                 open_time,
                 close_time,
@@ -107,6 +107,123 @@ pub fn generate_sample_klines(
             }
         })
         .collect()
+}
+
+/// 특정 타임프레임의 Kline 데이터 로드
+///
+/// ohlcv 테이블에서 지정된 타임프레임의 데이터를 조회합니다.
+pub async fn load_klines_with_timeframe(
+    pool: &sqlx::PgPool,
+    symbol_str: &str,
+    timeframe: Timeframe,
+    start_date: NaiveDate,
+    end_date: NaiveDate,
+) -> Result<Vec<Kline>, String> {
+    let provider = CachedHistoricalDataProvider::new(pool.clone());
+
+    // 날짜 범위를 캔들 개수로 변환
+    let total_days = (end_date - start_date).num_days() as usize;
+    let limit = match timeframe {
+        Timeframe::M1 => total_days * 24 * 60,
+        Timeframe::M3 => total_days * 24 * 20,
+        Timeframe::M5 => total_days * 24 * 12,
+        Timeframe::M15 => total_days * 24 * 4,
+        Timeframe::M30 => total_days * 24 * 2,
+        Timeframe::H1 => total_days * 24,
+        Timeframe::H2 => total_days * 12,
+        Timeframe::H4 => total_days * 6,
+        Timeframe::H6 => total_days * 4,
+        Timeframe::H8 => total_days * 3,
+        Timeframe::H12 => total_days * 2,
+        Timeframe::D1 => (total_days as f64 * 5.0 / 7.0).ceil() as usize,
+        Timeframe::D3 => total_days / 3 + 1,
+        Timeframe::W1 => total_days / 7 + 1,
+        Timeframe::MN1 => total_days / 30 + 1,
+    };
+    let limit = limit.max(60); // 최소 60개
+
+    info!(
+        symbol = symbol_str,
+        ?timeframe,
+        start = %start_date,
+        end = %end_date,
+        limit = limit,
+        "타임프레임별 캔들 데이터 로드"
+    );
+
+    let klines = provider
+        .get_klines(symbol_str, timeframe, limit)
+        .await
+        .map_err(|e| format!("캔들 데이터 조회 실패 ({}): {}", timeframe, e))?;
+
+    // 날짜 범위 필터링
+    let start_dt = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).unwrap());
+    let end_dt = Utc.from_utc_datetime(&end_date.and_hms_opt(23, 59, 59).unwrap());
+
+    let filtered: Vec<Kline> = klines
+        .into_iter()
+        .filter(|k| k.open_time >= start_dt && k.open_time <= end_dt)
+        .collect();
+
+    info!(
+        symbol = symbol_str,
+        ?timeframe,
+        count = filtered.len(),
+        "타임프레임별 캔들 데이터 로드 완료"
+    );
+
+    Ok(filtered)
+}
+
+/// 다중 타임프레임 데이터 로드
+///
+/// 각 타임프레임별로 지정된 개수의 캔들 데이터를 HashMap으로 반환합니다.
+pub async fn load_secondary_timeframe_klines(
+    pool: &sqlx::PgPool,
+    symbol_str: &str,
+    secondary_timeframes: &[(Timeframe, usize)],
+    end_date: NaiveDate,
+) -> HashMap<Timeframe, Vec<Kline>> {
+    let provider = CachedHistoricalDataProvider::new(pool.clone());
+    let mut result = HashMap::new();
+
+    for (timeframe, count) in secondary_timeframes {
+        info!(
+            symbol = symbol_str,
+            ?timeframe,
+            count = count,
+            "Secondary 타임프레임 데이터 로드"
+        );
+
+        match provider.get_klines(symbol_str, *timeframe, *count).await {
+            Ok(klines) => {
+                // 날짜 필터링: end_date 이전 데이터만
+                let end_dt = Utc.from_utc_datetime(&end_date.and_hms_opt(23, 59, 59).unwrap());
+                let filtered: Vec<Kline> = klines
+                    .into_iter()
+                    .filter(|k| k.close_time <= end_dt)
+                    .collect();
+
+                info!(
+                    symbol = symbol_str,
+                    ?timeframe,
+                    count = filtered.len(),
+                    "Secondary 타임프레임 데이터 로드 완료"
+                );
+                result.insert(*timeframe, filtered);
+            }
+            Err(e) => {
+                warn!(
+                    symbol = symbol_str,
+                    ?timeframe,
+                    error = %e,
+                    "Secondary 타임프레임 데이터 로드 실패"
+                );
+            }
+        }
+    }
+
+    result
 }
 
 /// 다중 심볼의 Kline 데이터를 CachedHistoricalDataProvider로 로드

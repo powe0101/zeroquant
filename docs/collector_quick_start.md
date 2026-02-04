@@ -1,223 +1,229 @@
-# Standalone Collector 빠른 시작 가이드
+# Standalone Collector 가이드
 
-> **요약**: API 서버와 독립적으로 데이터를 수집하는 바이너리 구현 가이드
-
----
-
-## 📋 전제 조건
-
-- ✅ Rust 1.75+ 설치
-- ✅ PostgreSQL (TimescaleDB) 실행 중
-- ✅ `trader-data` crate 의존성 이해
+> **버전**: v0.6.0 | **최종 업데이트**: 2026-02-04
+>
+> API 서버와 독립적으로 데이터를 수집하는 `trader-collector` crate 사용 가이드
 
 ---
 
-## 🚀 빠른 시작 (3단계)
+## 📋 개요
 
-### 1단계: Crate 생성
+`trader-collector`는 ZeroQuant의 Standalone 데이터 수집 바이너리입니다.
+
+### 주요 기능
+- **심볼 동기화**: KRX, Binance, Yahoo Finance에서 종목 목록 동기화
+- **OHLCV 수집**: 일봉 데이터 수집 (KRX API / Yahoo Finance)
+- **지표 동기화**: RouteState, MarketRegime, TTM Squeeze 등 분석 지표
+- **GlobalScore 동기화**: 7Factor 기반 종합 점수 계산
+- **KRX Fundamental**: PER/PBR/배당수익률/섹터 정보 (KRX API 활성화 시)
+
+### 데이터 프로바이더 이중화
+| 시장 | Primary | Fallback |
+|------|---------|----------|
+| 국내 주식 (KR) | KRX OPEN API | Yahoo Finance |
+| 해외 주식 (US) | Yahoo Finance | - |
+| 암호화폐 (CRYPTO) | Yahoo Finance | - |
+
+---
+
+## 🚀 빠른 시작
+
+### 1. 환경변수 설정
 
 ```bash
-cd crates
-cargo new --bin trader-collector
-cd trader-collector
+# .env 파일
+DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
+
+# 데이터 프로바이더 토글
+PROVIDER_KRX_API_ENABLED=false   # KRX API 승인 전까지 false
+PROVIDER_YAHOO_ENABLED=true      # Yahoo Finance 활성화
+
+# 심볼 동기화 설정
+SYMBOL_SYNC_MIN_COUNT=100        # 이 수 이하면 자동 동기화
+SYMBOL_SYNC_KRX=true             # KRX 종목 동기화
+SYMBOL_SYNC_BINANCE=true         # Binance USDT 페어 동기화
+SYMBOL_SYNC_YAHOO=true           # Yahoo Finance 주요 종목 동기화
+SYMBOL_SYNC_YAHOO_MAX=500        # Yahoo 최대 수집 종목 수
+
+# OHLCV 수집 설정
+OHLCV_BATCH_SIZE=50              # 배치당 심볼 수
+OHLCV_STALE_DAYS=1               # 갱신 기준 일수
+OHLCV_REQUEST_DELAY_MS=500       # API 요청 간 딜레이
+
+# 지표/Fundamental 설정
+INDICATOR_BATCH_SIZE=100
+INDICATOR_STALE_DAYS=1
+INDICATOR_REQUEST_DELAY_MS=50
+
+# 데몬 모드 설정
+DAEMON_INTERVAL_MINUTES=60       # 워크플로우 실행 주기
 ```
 
-### 2단계: Cargo.toml 설정
-
-```toml
-[package]
-name = "trader-collector"
-version = "0.1.0"
-edition = "2021"
-
-[[bin]]
-name = "trader-collector"
-path = "src/main.rs"
-
-[dependencies]
-trader-core = { path = "../trader-core", features = ["sqlx-support"] }
-trader-data = { path = "../trader-data" }
-
-sqlx = { workspace = true }
-rust_decimal = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-dotenvy = "0.15"
-serde = { workspace = true }
-chrono = { workspace = true }
-clap = { version = "4", features = ["derive"] }
-```
-
-### 3단계: 최소 구현
-
-**src/main.rs:**
-
-```rust
-use clap::{Parser, Subcommand};
-use sqlx::PgPool;
-use tracing_subscriber;
-
-#[derive(Parser)]
-#[command(name = "trader-collector")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// OHLCV 데이터 수집
-    CollectOhlcv,
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
-
-    dotenvy::dotenv().ok();
-    let database_url = std::env::var("DATABASE_URL")?;
-    let pool = PgPool::connect(&database_url).await?;
-
-    tracing::info!("데이터베이스 연결 성공");
-
-    let cli = Cli::parse();
-
-    match cli.command {
-        Commands::CollectOhlcv => {
-            collect_ohlcv(&pool).await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn collect_ohlcv(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    use trader_data::storage::krx::KrxDataSource;
-
-    let krx = KrxDataSource::new();
-    let klines = krx.get_ohlcv("005930", "20260101", "20260203").await?;
-
-    tracing::info!(count = klines.len(), "삼성전자 캔들 수집 완료");
-
-    // TODO: DB 저장 로직 추가
-
-    Ok(())
-}
-```
-
-**실행:**
+### 2. 빌드
 
 ```bash
-cargo run --bin trader-collector collect-ohlcv
+cargo build --release --bin trader-collector
+```
+
+### 3. 실행
+
+```bash
+# 전체 워크플로우 1회 실행
+./target/release/trader-collector run-all
+
+# 데몬 모드 (주기적 자동 실행)
+./target/release/trader-collector daemon
 ```
 
 ---
 
-## 📚 구현 단계별 가이드
+## 📖 CLI 명령어
 
-### Phase 1: 기본 수집 (1주)
+### 개별 명령어
 
-- [ ] CLI 인터페이스 (clap)
-- [ ] 환경변수 설정 로더
-- [ ] KRX 데이터 수집 + DB 저장
-- [ ] 기본 로깅 및 에러 핸들링
+```bash
+# 심볼 정보 동기화 (KRX, Binance, Yahoo)
+trader-collector sync-symbols
 
-### Phase 2: 배치 처리 (1주)
+# OHLCV 데이터 수집
+trader-collector collect-ohlcv
+trader-collector collect-ohlcv --symbols "005930,000660"  # 특정 심볼만
+trader-collector collect-ohlcv --stale-hours 24           # 24시간 이상 지난 것만
 
-- [ ] 여러 심볼 배치 처리
-- [ ] Rate Limiting (요청 간 딜레이)
-- [ ] 진행률 로깅
-- [ ] 통계 수집 (성공/실패/건너뛰기)
+# 분석 지표 동기화 (RouteState, MarketRegime, TTM Squeeze)
+trader-collector sync-indicators
+trader-collector sync-indicators --symbols "005930,000660"
 
-### Phase 3: 심볼 동기화 (1주)
+# GlobalScore 동기화 (7Factor 랭킹)
+trader-collector sync-global-scores
+trader-collector sync-global-scores --symbols "005930,000660"
 
-- [ ] KRX 종목 목록 동기화
-- [ ] 권위 있는 소스 원칙 구현
-- [ ] 상폐 종목 비활성화
+# KRX Fundamental 동기화 (KRX API 활성화 필요)
+trader-collector sync-krx-fundamentals
+```
 
-### Phase 4: Fundamental 수집 (1주)
+### 전체 워크플로우
 
-- [ ] Yahoo Finance 연동
-- [ ] Fundamental + OHLCV 통합 수집
-- [ ] 실패 카운트 관리
+```bash
+# 1회 실행 (심볼 → OHLCV → 지표 → GlobalScore)
+trader-collector run-all
 
-### Phase 5: 운영 최적화 (1주)
+# 데몬 모드 (DAEMON_INTERVAL_MINUTES 주기로 반복)
+trader-collector daemon
+```
 
-- [ ] Cron/systemd 통합
-- [ ] Docker 이미지 빌드
-- [ ] 모니터링 및 알림
+### 옵션
+
+```bash
+# 로그 레벨 설정
+trader-collector --log-level debug run-all
+trader-collector --log-level trace sync-symbols
+```
 
 ---
 
-## 🛠️ 핵심 컴포넌트 사용 예제
+## 🔧 워크플로우 상세
 
-### 1. KRX 데이터 수집
+### run-all 실행 순서
 
-```rust
-use trader_data::storage::krx::KrxDataSource;
+```
+Step 1/5: 심볼 동기화
+  └── KRX/Binance/Yahoo에서 종목 목록 가져오기
+  └── symbol_info 테이블 업데이트
 
-let krx = KrxDataSource::new();
-let klines = krx.get_ohlcv("005930", "20260101", "20260131").await?;
+Step 2/5: KRX Fundamental 동기화 (KRX API 활성화 시)
+  └── PER, PBR, 배당수익률, 시가총액
+  └── 섹터/업종 정보
 
-// klines: Vec<Kline>
-for kline in klines {
-    println!("{:?}", kline);
-}
+Step 3/5: OHLCV 수집
+  └── 일봉 데이터 수집 (Yahoo Finance)
+  └── ohlcv_daily 테이블 저장
+
+Step 4/5: 분석 지표 동기화
+  └── RouteState, MarketRegime 계산
+  └── TTM Squeeze, Trigger 감지
+  └── symbol_indicator 테이블 저장
+
+Step 5/5: GlobalScore 동기화
+  └── 7Factor 점수 계산
+  └── 종합 랭킹 생성
+  └── global_score 테이블 저장
 ```
 
-### 2. Yahoo Finance Fundamental 수집
+---
 
-```rust
-use trader_data::cache::fundamental::FundamentalFetcher;
+## 📊 예상 성능
 
-let mut fetcher = FundamentalFetcher::new()?;
-let result = fetcher.fetch_with_ohlcv("005930.KS", "005930", "KR").await?;
+| 작업 | 예상 시간 | 비고 |
+|------|----------|------|
+| 심볼 동기화 | ~1분 | KRX 2,500개 + Binance 300개 + Yahoo 500개 |
+| OHLCV 수집 (전체) | ~1.5시간 | 3,000개 종목, 500ms 딜레이 |
+| OHLCV 수집 (증분) | ~5분 | stale 종목만 |
+| 지표 동기화 | ~10분 | 3,000개 종목 |
+| GlobalScore 동기화 | ~5분 | 3,000개 종목 |
+| **전체 워크플로우** | **~2시간** | 첫 실행 시 |
 
-// result.fundamental: FundamentalData
-// result.klines: Vec<Kline>
-// result.name: String (종목명)
+---
+
+## 🐳 운영 환경 설정
+
+### Cron 스케줄 예시
+
+```cron
+# 매일 오전 7시 전체 워크플로우 실행
+0 7 * * * cd /path/to/trader && ./target/release/trader-collector run-all >> /var/log/collector.log 2>&1
+
+# 1시간마다 증분 OHLCV 수집
+0 * * * * cd /path/to/trader && ./target/release/trader-collector collect-ohlcv --stale-hours 2 >> /var/log/collector.log 2>&1
 ```
 
-### 3. DB 배치 저장
+### systemd 서비스 예시
 
-```rust
-use trader_data::storage::ohlcv::OhlcvCache;
-use trader_core::Timeframe;
+```ini
+# /etc/systemd/system/trader-collector.service
+[Unit]
+Description=ZeroQuant Data Collector
+After=network.target postgresql.service
 
-let cache = OhlcvCache::new(pool.clone());
-cache.save_klines("005930", Timeframe::D1, &klines).await?;
-```
+[Service]
+Type=simple
+User=trader
+WorkingDirectory=/opt/zeroquant
+ExecStart=/opt/zeroquant/target/release/trader-collector daemon
+Restart=always
+RestartSec=10
+Environment=DATABASE_URL=postgresql://trader:secret@localhost:5432/trader
+Environment=RUST_LOG=info
 
-### 4. 심볼 정규화
-
-```rust
-use trader_data::provider::symbol_info::SymbolResolver;
-
-let resolver = SymbolResolver::new(pool.clone());
-
-// "005930.KS" → "005930"
-let canonical = SymbolResolver::normalize_symbol("005930.KS");
-
-// Canonical → Yahoo 심볼
-let yahoo_symbol = resolver.to_source_symbol(&canonical, "yahoo").await?;
-// Some("005930.KS")
+[Install]
+WantedBy=multi-user.target
 ```
 
 ---
 
 ## 🔍 트러블슈팅
 
-### 컴파일 에러: "trader-data not found"
+### KRX API 401 Unauthorized
 
-```bash
-# workspace Cargo.toml에 추가
-[workspace]
-members = [
-    "crates/trader-collector",  # 추가
-    # ...
-]
 ```
+KRX API가 비활성화되어 있습니다.
+PROVIDER_KRX_API_ENABLED=true로 활성화하세요.
+```
+
+**원인**: KRX OPEN API 사용 권한이 없음
+**해결**:
+1. https://openapi.krx.co.kr 에서 API 사용 신청
+2. 승인 후 `PROVIDER_KRX_API_ENABLED=true` 설정
+3. 승인 전까지는 Yahoo Finance로 대체 운영
+
+### CRYPTO 심볼 수집 실패
+
+```
+Yahoo Finance 심볼이 설정되지 않음: BTCUSDT
+```
+
+**원인**: yahoo_symbol 컬럼이 없는 CRYPTO 종목
+**해결**: 해당 종목은 자동으로 비활성화됨. 정상 동작.
 
 ### DB 연결 실패
 
@@ -229,60 +235,25 @@ podman ps | grep timescaledb
 podman logs trader-timescaledb
 ```
 
-### KRX API 에러
-
-```rust
-// 한국 주식 코드는 6자리 숫자여야 함
-let klines = krx.get_ohlcv("005930", ...).await?;  // ✅
-let klines = krx.get_ohlcv("삼성전자", ...).await?; // ❌
-```
-
 ---
 
-## 📊 예상 성능
+## 📚 참고 문서
 
-| 항목 | 값 | 비고 |
-|------|-----|------|
-| **KRX 전체 수집** | ~20분 | 2500개 종목, Rate limit 500ms |
-| **Fundamental 수집** | ~30분 | 1000개 종목, Rate limit 2초 |
-| **메모리 사용량** | < 100MB | 배치 크기 50 기준 |
-| **DB 저장 속도** | ~5000 klines/sec | UNNEST 최적화 |
-
----
-
-## 📖 참고 문서
-
-- **상세 설계**: `docs/standalone_collector_design.md`
-- **환경변수**: `docs/collector_env_example.env`
-- **기존 구현**: `crates/trader-api/src/tasks/fundamental.rs`
+- [아키텍처](./architecture.md) - 데이터 프로바이더 이중화 구조
+- [KRX API 스펙](./krx_openapi_spec.md) - KRX OPEN API 명세
+- [인프라 가이드](./infrastructure.md) - Podman 컨테이너 설정
 
 ---
 
 ## ✅ 체크리스트
 
 **개발 전 확인:**
-- [ ] `standalone_collector_design.md` 읽음
 - [ ] Podman 컨테이너 (PostgreSQL) 실행 중
 - [ ] `.env` 파일 설정 완료
-- [ ] `trader-data` crate 의존성 이해
+- [ ] `PROVIDER_*` 환경변수 확인
 
-**개발 중 확인:**
-- [ ] Rate Limiting 구현 (API 차단 방지)
-- [ ] 에러 핸들링 (단일 실패가 전체 중단하지 않음)
-- [ ] 로깅 (tracing 활용)
-- [ ] 배치 처리 (한 번에 대량 저장)
-
-**배포 전 확인:**
-- [ ] 통합 테스트 통과
-- [ ] 로그 레벨 조정 (info 권장)
-- [ ] Cron/systemd 스크립트 작성
+**운영 전 확인:**
+- [ ] 로그 레벨 설정 (info 권장)
+- [ ] Cron/systemd 스케줄 설정
+- [ ] 디스크 공간 확인 (OHLCV 데이터)
 - [ ] 모니터링 알림 설정
-
----
-
-**Next Steps:**
-1. Phase 1 구현 시작 (KRX 수집 + DB 저장)
-2. 기존 `trader-api/src/tasks/fundamental.rs` 코드 참고
-3. 단위 테스트 작성
-4. 통합 테스트 (테스트 DB)
-5. Production 배포

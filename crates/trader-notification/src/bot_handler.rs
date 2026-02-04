@@ -11,8 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -35,6 +34,7 @@ struct TelegramUpdate {
 
 /// 메시지 정보.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct TelegramMessage {
     message_id: i64,
     from: Option<TelegramUser>,
@@ -45,6 +45,7 @@ struct TelegramMessage {
 
 /// 사용자 정보.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct TelegramUser {
     id: i64,
     username: Option<String>,

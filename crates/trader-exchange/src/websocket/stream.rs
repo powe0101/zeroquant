@@ -241,36 +241,32 @@ impl BinanceMarketStream {
     }
 
     /// 티커 스트림 이름을 반환합니다.
-    fn ticker_stream(symbol: &Symbol) -> String {
-        format!("{}@ticker", Self::format_symbol(symbol))
+    fn ticker_stream(ticker: &str) -> String {
+        format!("{}@ticker", Self::format_symbol(ticker))
     }
 
     /// 캔들(kline) 스트림 이름을 반환합니다.
-    fn kline_stream(symbol: &Symbol, timeframe: Timeframe) -> String {
+    fn kline_stream(ticker: &str, timeframe: Timeframe) -> String {
         format!(
             "{}@kline_{}",
-            Self::format_symbol(symbol),
+            Self::format_symbol(ticker),
             timeframe.to_binance_interval()
         )
     }
 
     /// 호가창 스트림 이름을 반환합니다.
-    fn depth_stream(symbol: &Symbol) -> String {
-        format!("{}@depth@100ms", Self::format_symbol(symbol))
+    fn depth_stream(ticker: &str) -> String {
+        format!("{}@depth@100ms", Self::format_symbol(ticker))
     }
 
     /// 체결 스트림 이름을 반환합니다.
-    fn trade_stream(symbol: &Symbol) -> String {
-        format!("{}@trade", Self::format_symbol(symbol))
+    fn trade_stream(ticker: &str) -> String {
+        format!("{}@trade", Self::format_symbol(ticker))
     }
 
-    /// Binance WebSocket용 심볼 형식으로 변환합니다.
-    fn format_symbol(symbol: &Symbol) -> String {
-        format!(
-            "{}{}",
-            symbol.base.to_lowercase(),
-            symbol.quote.to_lowercase()
-        )
+    /// Binance WebSocket용 심볼 형식으로 변환합니다. (BTC/USDT -> btcusdt)
+    fn format_symbol(ticker: &str) -> String {
+        ticker.replace("/", "").to_lowercase()
     }
 
     /// Binance 형식에서 심볼을 파싱합니다.
@@ -304,7 +300,7 @@ impl BinanceMarketStream {
             if ticker.event_type == "24hrTicker" {
                 let symbol = Self::parse_symbol(&ticker.symbol);
                 return Some(MarketEvent::Ticker(Ticker {
-                    symbol,
+                    ticker: symbol.to_string(),
                     bid: Self::parse_decimal(&ticker.bid),
                     ask: Self::parse_decimal(&ticker.ask),
                     last: Self::parse_decimal(&ticker.close),
@@ -326,7 +322,7 @@ impl BinanceMarketStream {
                     Timeframe::from_binance_interval(&k.interval).unwrap_or(Timeframe::M1);
 
                 return Some(MarketEvent::Kline(Kline {
-                    symbol,
+                    ticker: symbol.to_string(),
                     timeframe,
                     open_time: DateTime::from_timestamp_millis(k.open_time)
                         .unwrap_or_else(Utc::now),
@@ -347,7 +343,7 @@ impl BinanceMarketStream {
             if trade.event_type == "trade" {
                 let symbol = Self::parse_symbol(&trade.symbol);
                 return Some(MarketEvent::Trade(TradeTick {
-                    symbol,
+                    ticker: symbol.to_string(),
                     id: trade.trade_id.to_string(),
                     price: Self::parse_decimal(&trade.price),
                     quantity: Self::parse_decimal(&trade.quantity),
@@ -383,7 +379,7 @@ impl BinanceMarketStream {
                     .collect();
 
                 return Some(MarketEvent::OrderBook(OrderBook {
-                    symbol,
+                    ticker: symbol.to_string(),
                     bids,
                     asks,
                     timestamp: Utc::now(),
@@ -445,7 +441,7 @@ impl BinanceMarketStream {
 
 #[async_trait]
 impl MarketStream for BinanceMarketStream {
-    async fn subscribe_ticker(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_ticker(&mut self, symbol: &str) -> ExchangeResult<()> {
         let stream = Self::ticker_stream(symbol);
         info!("Subscribing to ticker: {}", stream);
         self.send_subscribe(vec![stream]).await
@@ -453,7 +449,7 @@ impl MarketStream for BinanceMarketStream {
 
     async fn subscribe_kline(
         &mut self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
     ) -> ExchangeResult<()> {
         let stream = Self::kline_stream(symbol, timeframe);
@@ -461,19 +457,19 @@ impl MarketStream for BinanceMarketStream {
         self.send_subscribe(vec![stream]).await
     }
 
-    async fn subscribe_order_book(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_order_book(&mut self, symbol: &str) -> ExchangeResult<()> {
         let stream = Self::depth_stream(symbol);
         info!("Subscribing to depth: {}", stream);
         self.send_subscribe(vec![stream]).await
     }
 
-    async fn subscribe_trades(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_trades(&mut self, symbol: &str) -> ExchangeResult<()> {
         let stream = Self::trade_stream(symbol);
         info!("Subscribing to trades: {}", stream);
         self.send_subscribe(vec![stream]).await
     }
 
-    async fn unsubscribe(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn unsubscribe(&mut self, symbol: &str) -> ExchangeResult<()> {
         let streams: Vec<String> = self
             .subscriptions
             .iter()
@@ -504,8 +500,8 @@ mod tests {
 
     #[test]
     fn test_format_symbol() {
-        let symbol = Symbol::new("BTC", "USDT", MarketType::Crypto);
-        assert_eq!(BinanceMarketStream::format_symbol(&symbol), "btcusdt");
+        let ticker = "BTC/USDT";
+        assert_eq!(BinanceMarketStream::format_symbol(ticker), "btcusdt");
     }
 
     #[test]
@@ -517,20 +513,20 @@ mod tests {
 
     #[test]
     fn test_stream_names() {
-        let symbol = Symbol::new("BTC", "USDT", MarketType::Crypto);
+        let ticker = "BTC/USDT";
 
         assert_eq!(
-            BinanceMarketStream::ticker_stream(&symbol),
+            BinanceMarketStream::ticker_stream(ticker),
             "btcusdt@ticker"
         );
         assert_eq!(
-            BinanceMarketStream::kline_stream(&symbol, Timeframe::H1),
+            BinanceMarketStream::kline_stream(ticker, Timeframe::H1),
             "btcusdt@kline_1h"
         );
         assert_eq!(
-            BinanceMarketStream::depth_stream(&symbol),
+            BinanceMarketStream::depth_stream(ticker),
             "btcusdt@depth@100ms"
         );
-        assert_eq!(BinanceMarketStream::trade_stream(&symbol), "btcusdt@trade");
+        assert_eq!(BinanceMarketStream::trade_stream(ticker), "btcusdt@trade");
     }
 }

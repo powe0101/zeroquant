@@ -142,7 +142,7 @@ impl RiskManager {
         positions: &[Position],
         current_price: Decimal,
     ) -> TraderResult<RiskValidation> {
-        let symbol = order.symbol.to_string();
+        let symbol = order.ticker.clone();
         let mut warnings = Vec::new();
 
         // Check 1: Daily loss limit
@@ -435,7 +435,7 @@ mod tests {
         quantity: Decimal,
         entry_price: Decimal,
     ) -> Position {
-        Position::new("test_exchange", symbol.clone(), side, quantity, entry_price)
+        Position::new("test_exchange", symbol.to_string(), side, quantity, entry_price)
     }
 
     #[test]
@@ -453,7 +453,7 @@ mod tests {
         let mut manager = RiskManager::new(config, dec!(10000));
 
         let symbol = Symbol::crypto("BTC", "USDT");
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(0.01));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(0.01));
         let positions: Vec<Position> = vec![];
         let price = dec!(50000); // Order value = $500
 
@@ -469,7 +469,7 @@ mod tests {
         let mut manager = RiskManager::new(config, dec!(10000));
 
         let symbol = Symbol::crypto("BTC", "USDT");
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(1.0));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(1.0));
         let positions: Vec<Position> = vec![];
         let price = dec!(50000); // Order value = $50000 (500% of balance)
 
@@ -542,7 +542,7 @@ mod tests {
         manager.update_volatility("BTC/USDT", 8.0, 4.0);
 
         let symbol = Symbol::crypto("BTC", "USDT");
-        let order = OrderRequest::market_buy(symbol, dec!(0.01));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(0.01));
 
         let result = manager.validate_order(&order, &[], dec!(50000)).unwrap();
 
@@ -609,7 +609,7 @@ mod tests {
 
         let symbol = Symbol::crypto("BTC", "USDT");
         // Try to order $2000 worth (20%) when limit is 10%
-        let order = OrderRequest::market_buy(symbol.clone(), dec!(0.04));
+        let order = OrderRequest::market_buy(symbol.to_string(), dec!(0.04));
         let price = dec!(50000); // Order value = $2000
 
         let result = manager.validate_order(&order, &[], price).unwrap();

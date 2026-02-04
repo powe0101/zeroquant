@@ -445,6 +445,149 @@ impl KlinesRepository {
 
         Ok(records)
     }
+
+    /// 다중 타임프레임 기간별 데이터 조회 (UNION ALL 최적화)
+    ///
+    /// 여러 타임프레임의 데이터를 단일 쿼리로 조회하여 성능을 최적화합니다.
+    /// 기존 N+1 쿼리 문제를 해결합니다.
+    ///
+    /// # Arguments
+    /// * `pool` - 데이터베이스 연결 풀
+    /// * `symbol` - 심볼
+    /// * `timeframes` - 타임프레임 목록
+    /// * `start` - 시작 시간 (포함)
+    /// * `end` - 종료 시간 (포함)
+    ///
+    /// # Returns
+    /// 타임프레임별로 그룹화된 캔들 데이터
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let result = KlinesRepository::get_range_multi_timeframe(
+    ///     &pool,
+    ///     "BTC/USDT",
+    ///     &["5m".to_string(), "1h".to_string(), "1d".to_string()],
+    ///     start_time,
+    ///     end_time,
+    /// ).await?;
+    /// // result: HashMap<String, Vec<KlineRecord>>
+    /// ```
+    pub async fn get_range_multi_timeframe(
+        pool: &PgPool,
+        symbol: &str,
+        timeframes: &[String],
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<std::collections::HashMap<String, Vec<KlineRecord>>, sqlx::Error> {
+        use std::collections::HashMap;
+
+        if timeframes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // ANY 연산자로 다중 타임프레임 단일 쿼리 조회
+        let records = sqlx::query_as::<_, KlineRecord>(
+            r#"
+            SELECT symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at
+            FROM ohlcv
+            WHERE symbol = $1
+              AND timeframe = ANY($2::text[])
+              AND open_time >= $3
+              AND open_time <= $4
+            ORDER BY timeframe, open_time ASC
+            "#,
+        )
+        .bind(symbol)
+        .bind(timeframes)
+        .bind(start)
+        .bind(end)
+        .fetch_all(pool)
+        .await?;
+
+        // 타임프레임별로 그룹화
+        let mut grouped: HashMap<String, Vec<KlineRecord>> = HashMap::new();
+        for record in records {
+            grouped
+                .entry(record.timeframe.clone())
+                .or_default()
+                .push(record);
+        }
+
+        debug!(
+            "Fetched {} klines for {} across {} timeframes from {} to {}",
+            grouped.values().map(|v| v.len()).sum::<usize>(),
+            symbol,
+            timeframes.len(),
+            start,
+            end
+        );
+
+        Ok(grouped)
+    }
+
+    /// 다중 타임프레임 최신 데이터 조회 (limit 기반)
+    ///
+    /// 각 타임프레임별로 최신 N개의 캔들을 단일 쿼리로 조회합니다.
+    ///
+    /// # Arguments
+    /// * `pool` - 데이터베이스 연결 풀
+    /// * `symbol` - 심볼
+    /// * `timeframes` - 타임프레임 목록
+    /// * `limit` - 각 타임프레임별 최대 캔들 수
+    pub async fn get_latest_multi_timeframe(
+        pool: &PgPool,
+        symbol: &str,
+        timeframes: &[String],
+        limit: i64,
+    ) -> Result<std::collections::HashMap<String, Vec<KlineRecord>>, sqlx::Error> {
+        use std::collections::HashMap;
+
+        if timeframes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // LATERAL JOIN을 사용한 각 타임프레임별 limit 적용
+        // PostgreSQL/TimescaleDB에서 효율적으로 동작
+        let records = sqlx::query_as::<_, KlineRecord>(
+            r#"
+            SELECT k.symbol, k.timeframe, k.open_time, k.open, k.high, k.low, k.close, k.volume, k.close_time, k.fetched_at
+            FROM unnest($2::text[]) AS tf(timeframe)
+            CROSS JOIN LATERAL (
+                SELECT symbol, timeframe, open_time, open, high, low, close, volume, close_time, fetched_at
+                FROM ohlcv
+                WHERE symbol = $1
+                  AND timeframe = tf.timeframe
+                ORDER BY open_time DESC
+                LIMIT $3
+            ) AS k
+            ORDER BY k.timeframe, k.open_time ASC
+            "#,
+        )
+        .bind(symbol)
+        .bind(timeframes)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        // 타임프레임별로 그룹화
+        let mut grouped: HashMap<String, Vec<KlineRecord>> = HashMap::new();
+        for record in records {
+            grouped
+                .entry(record.timeframe.clone())
+                .or_default()
+                .push(record);
+        }
+
+        debug!(
+            "Fetched {} latest klines for {} across {} timeframes (limit={})",
+            grouped.values().map(|v| v.len()).sum::<usize>(),
+            symbol,
+            timeframes.len(),
+            limit
+        );
+
+        Ok(grouped)
+    }
 }
 
 #[cfg(test)]

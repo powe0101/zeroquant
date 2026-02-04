@@ -8,7 +8,7 @@ use std::sync::Arc;
 use trader_core::domain::{
     ExchangeProvider, PendingOrder, ProviderError, Side, StrategyAccountInfo, StrategyPositionInfo,
 };
-use trader_core::types::{MarketType, Symbol};
+// Symbol과 MarketType은 리팩토링 후 미사용
 
 /// Binance ExchangeProvider 구현.
 ///
@@ -81,17 +81,17 @@ impl ExchangeProvider for BinanceProvider {
                     continue;
                 }
 
-                // 심볼 생성 (예: BTC -> BTC/USDT)
-                let symbol = Symbol::new(&balance.asset, "USDT", MarketType::Crypto);
+                // ticker 생성 (예: BTC -> BTC/USDT)
+                let ticker_str = format!("{}/USDT", balance.asset);
 
                 // 현재가 조회
-                let ticker = self.client.get_ticker(&symbol).await.map_err(|e| {
+                let ticker = self.client.get_ticker(&ticker_str).await.map_err(|e| {
                     ProviderError::Api(format!("Failed to get ticker for {}: {}", balance.asset, e))
                 })?;
 
                 // 포지션 생성 (현물은 매수만 가능)
                 let mut position = StrategyPositionInfo::new(
-                    symbol,
+                    ticker_str.clone(),
                     Side::Buy,
                     total_qty,
                     ticker.last, // 진입가는 현재가로 근사 (실제로는 평균 매수가 필요)
@@ -118,7 +118,7 @@ impl ExchangeProvider for BinanceProvider {
 
         for order in orders {
             // 필수 정보가 없는 경우 스킵
-            let Some(symbol) = order.symbol else {
+            let Some(ticker) = order.ticker else {
                 continue;
             };
             let Some(side) = order.side else {
@@ -133,7 +133,7 @@ impl ExchangeProvider for BinanceProvider {
 
             let pending = PendingOrder {
                 order_id: order.order_id,
-                symbol,
+                ticker: ticker.clone(),
                 side,
                 price,
                 quantity,

@@ -2,8 +2,8 @@
 //!
 //! 전략이 StrategyContext에서 스크리닝 결과와 GlobalScore를 활용할 수 있도록 지원합니다.
 //!
-//! 모든 공개 API는 ticker 문자열을 사용합니다. Symbol 정보가 필요한 경우
-//! SymbolResolver를 통해 조회합니다.
+//! 모든 공개 API는 ticker 문자열을 사용합니다. String 정보가 필요한 경우
+//! StringResolver를 통해 조회합니다.
 
 use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
@@ -60,9 +60,9 @@ pub trait ScreeningAware {
 ///
 /// ```rust,ignore
 /// // ATTACK 상태 종목만 선택
-/// let attack_tickers = get_symbols_by_route_state(&context, "kosdaq_momentum", RouteState::Attack);
+/// let attack_tickers = get_tickers_by_route_state(&context, "kosdaq_momentum", RouteState::Attack);
 /// ```
-pub fn get_symbols_by_route_state<'a>(
+pub fn get_tickers_by_route_state<'a>(
     context: &'a StrategyContext,
     preset: &str,
     state: RouteState,
@@ -97,9 +97,9 @@ pub fn get_symbols_by_route_state<'a>(
 ///
 /// ```rust,ignore
 /// // 80점 이상 상위 5개
-/// let top_tickers = get_symbols_by_global_score(&context, "growth", dec!(80), Some(5));
+/// let top_tickers = get_tickers_by_global_score(&context, "growth", dec!(80), Some(5));
 /// ```
-pub fn get_symbols_by_global_score<'a>(
+pub fn get_tickers_by_global_score<'a>(
     context: &'a StrategyContext,
     preset: &str,
     min_score: Decimal,
@@ -148,9 +148,9 @@ pub fn get_symbols_by_global_score<'a>(
 ///
 /// ```rust,ignore
 /// // 섹터별 상위 5개
-/// let sector_leaders = get_top_symbols_per_sector(&context, "sector_rotation", 5);
+/// let sector_leaders = get_top_tickers_per_sector(&context, "sector_rotation", 5);
 /// ```
-pub fn get_top_symbols_per_sector<'a>(
+pub fn get_top_tickers_per_sector<'a>(
     context: &'a StrategyContext,
     preset: &str,
     top_n_per_sector: usize,
@@ -210,7 +210,7 @@ pub fn get_top_symbols_per_sector<'a>(
 /// # 반환
 ///
 /// (ticker, ScreeningResult) 쌍의 벡터
-pub fn get_symbols_by_state_and_score<'a>(
+pub fn get_tickers_by_state_and_score<'a>(
     context: &'a StrategyContext,
     preset: &str,
     state: RouteState,
@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_symbols_by_route_state() {
+    fn test_get_tickers_by_route_state() {
         let mut screening_results = HashMap::new();
         screening_results.insert(
             "test_preset".to_string(),
@@ -287,12 +287,12 @@ mod tests {
             ..context
         };
 
-        let attack_tickers = get_symbols_by_route_state(&context, "test_preset", RouteState::Attack);
+        let attack_tickers = get_tickers_by_route_state(&context, "test_preset", RouteState::Attack);
         assert_eq!(attack_tickers.len(), 2);
     }
 
     #[test]
-    fn test_get_symbols_by_global_score() {
+    fn test_get_tickers_by_global_score() {
         let mut screening_results = HashMap::new();
         screening_results.insert(
             "test_preset".to_string(),
@@ -309,7 +309,7 @@ mod tests {
             ..context
         };
 
-        let top_tickers = get_symbols_by_global_score(&context, "test_preset", dec!(80), Some(2));
+        let top_tickers = get_tickers_by_global_score(&context, "test_preset", dec!(80), Some(2));
         assert_eq!(top_tickers.len(), 2);
         // 점수 순 정렬 확인 (ticker 문자열 비교)
         assert_eq!(top_tickers[0].0, "035420"); // 90.2점
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_symbols_by_state_and_score() {
+    fn test_get_tickers_by_state_and_score() {
         let mut screening_results = HashMap::new();
         screening_results.insert(
             "test_preset".to_string(),
@@ -335,7 +335,7 @@ mod tests {
         };
 
         // ATTACK 상태 + 80점 이상
-        let filtered = get_symbols_by_state_and_score(
+        let filtered = get_tickers_by_state_and_score(
             &context,
             "test_preset",
             RouteState::Attack,

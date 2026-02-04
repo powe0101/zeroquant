@@ -26,7 +26,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use trader_core::domain::StrategyContext;
-use crate::strategies::common::deserialize_symbols;
+use crate::strategies::common::deserialize_tickers;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Timelike, Utc};
@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tracing::{debug, info};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 섹터 변동성 돌파 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -44,9 +44,9 @@ pub struct SectorVbConfig {
     /// 거래 대상 섹터 ETF 리스트
     #[serde(
         default = "default_sector_list",
-        deserialize_with = "deserialize_symbols"
+        deserialize_with = "deserialize_tickers"
     )]
-    pub symbols: Vec<String>,
+    pub tickers: Vec<String>,
 
     /// 돌파 K 계수 (기본값: 0.5)
     #[serde(default = "default_k_factor")]
@@ -117,7 +117,7 @@ fn default_take_profit_pct() -> f64 {
 impl Default for SectorVbConfig {
     fn default() -> Self {
         Self {
-            symbols: default_sector_list(),
+            tickers: default_sector_list(),
             k_factor: 0.5,
             selection_method: "returns".to_string(),
             top_n: 1,
@@ -132,7 +132,7 @@ impl Default for SectorVbConfig {
 /// 섹터 데이터.
 #[derive(Debug, Clone)]
 struct SectorData {
-    symbol: String,
+    ticker:  String,
     prev_close: Decimal,
     prev_high: Decimal,
     prev_low: Decimal,
@@ -146,9 +146,9 @@ struct SectorData {
 }
 
 impl SectorData {
-    fn new(symbol: String) -> Self {
+    fn new(ticker:  String) -> Self {
         Self {
-            symbol,
+            ticker,
             prev_close: Decimal::ZERO,
             prev_high: Decimal::ZERO,
             prev_low: Decimal::ZERO,
@@ -166,7 +166,7 @@ impl SectorData {
 /// 포지션 상태.
 #[derive(Debug, Clone)]
 struct PositionState {
-    symbol: String,
+    ticker:  String,
     entry_price: Decimal,
     stop_loss: Decimal,
     take_profit: Decimal,
@@ -185,7 +185,7 @@ enum StrategyState {
 /// 섹터 변동성 돌파 전략.
 pub struct SectorVbStrategy {
     config: Option<SectorVbConfig>,
-    symbols: Vec<Symbol>,
+    tickers: Vec<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
 
     /// 섹터별 데이터
@@ -215,7 +215,7 @@ impl SectorVbStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             context: None,
             sector_data: HashMap::new(),
             selected_sector: None,
@@ -280,11 +280,11 @@ impl SectorVbStrategy {
         ranked.sort_by(|a, b| b.returns.cmp(&a.returns));
 
         if let Some(top) = ranked.first() {
-            self.selected_sector = Some(top.symbol.clone());
+            self.selected_sector = Some(top.ticker.clone());
             self.state = StrategyState::Ready;
 
             info!(
-                sector = %top.symbol,
+                sector = %top.ticker,
                 returns = %top.returns,
                 "상위 섹터 선택"
             );
@@ -292,20 +292,20 @@ impl SectorVbStrategy {
     }
 
     /// 돌파 목표가 계산.
-    fn calculate_target_price(&mut self, symbol: &str) {
+    fn calculate_target_price(&mut self, ticker: &str) {
         let config = match self.config.as_ref() {
             Some(c) => c,
             None => return,
         };
 
-        if let Some(data) = self.sector_data.get_mut(symbol) {
+        if let Some(data) = self.sector_data.get_mut(ticker) {
             if let Some(today_open) = data.today_open {
                 let prev_range = data.prev_high - data.prev_low;
                 let k = Decimal::from_f64_retain(config.k_factor).unwrap_or(dec!(0.5));
                 data.target_price = Some(today_open + prev_range * k);
 
                 debug!(
-                    symbol = %symbol,
+                    ticker = %ticker,
                     open = %today_open,
                     range = %prev_range,
                     target = ?data.target_price,
@@ -318,7 +318,7 @@ impl SectorVbStrategy {
     /// 신호 생성.
     fn generate_signals(
         &mut self,
-        symbol: &str,
+        ticker: &str,
         current_price: Decimal,
         timestamp: DateTime<Utc>,
     ) -> Vec<Signal> {
@@ -330,19 +330,19 @@ impl SectorVbStrategy {
         let mut signals = Vec::new();
 
         // 선택된 섹터가 아니면 무시
-        if self.selected_sector.as_ref() != Some(&symbol.to_string()) {
+        if self.selected_sector.as_ref() != Some(&ticker.to_string()) {
             return signals;
         }
 
         // 포지션 있을 때: 손절/익절/청산 확인
         if let Some(pos) = &self.position {
-            if pos.symbol != symbol {
+            if pos.ticker != ticker {
                 return signals;
             }
 
             // 손절
             if current_price <= pos.stop_loss {
-                let sym = self.symbols.iter().find(|s| s.base == symbol).cloned();
+                let sym = self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))).cloned();
                 if let Some(sym) = sym {
                     signals.push(
                         Signal::exit("sector_vb", sym, Side::Sell)
@@ -364,7 +364,7 @@ impl SectorVbStrategy {
 
             // 익절
             if current_price >= pos.take_profit {
-                let sym = self.symbols.iter().find(|s| s.base == symbol).cloned();
+                let sym = self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))).cloned();
                 if let Some(sym) = sym {
                     signals.push(
                         Signal::exit("sector_vb", sym, Side::Sell)
@@ -390,7 +390,7 @@ impl SectorVbStrategy {
             let close_hour = 6;
             let close_minute = 30 - config.close_before_minutes as i32;
             if timestamp.hour() == close_hour as u32 && timestamp.minute() >= close_minute as u32 {
-                let sym = self.symbols.iter().find(|s| s.base == symbol).cloned();
+                let sym = self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))).cloned();
                 if let Some(sym) = sym {
                     signals.push(
                         Signal::exit("sector_vb", sym, Side::Sell)
@@ -421,11 +421,11 @@ impl SectorVbStrategy {
             return signals;
         }
 
-        if let Some(data) = self.sector_data.get(symbol) {
+        if let Some(data) = self.sector_data.get(ticker) {
             if let Some(target) = data.target_price {
                 if current_price >= target {
                     // 돌파! 매수
-                    let sym = self.symbols.iter().find(|s| s.base == symbol).cloned();
+                    let sym = self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))).cloned();
                     if let Some(sym) = sym {
                         let stop_loss = current_price
                             * (dec!(1)
@@ -444,11 +444,11 @@ impl SectorVbStrategy {
                                     Some(take_profit),
                                 )
                                 .with_metadata("target_price", json!(target.to_string()))
-                                .with_metadata("sector", json!(symbol)),
+                                .with_metadata("sector", json!(ticker)),
                         );
 
                         self.position = Some(PositionState {
-                            symbol: symbol.to_string(),
+                            ticker: ticker.to_string(),
                             entry_price: current_price,
                             stop_loss,
                             take_profit,
@@ -457,7 +457,7 @@ impl SectorVbStrategy {
                         self.state = StrategyState::Investing;
 
                         info!(
-                            sector = %symbol,
+                            sector = %ticker,
                             target = %target,
                             entry = %current_price,
                             "돌파 진입"
@@ -499,18 +499,18 @@ impl Strategy for SectorVbStrategy {
         let vb_config: SectorVbConfig = serde_json::from_value(config)?;
 
         info!(
-            symbols = ?vb_config.symbols,
+            tickers = ?vb_config.tickers,
             k_factor = vb_config.k_factor,
             top_n = vb_config.top_n,
             "섹터 변동성 돌파 전략 초기화"
         );
 
-        // 심볼 생성
-        for symbol_str in &vb_config.symbols {
-            let symbol = Symbol::stock(symbol_str, "KRW");
-            self.symbols.push(symbol);
+        // 티커 생성
+        for ticker_str in &vb_config.tickers {
+            let ticker = format!("{}/KRW", ticker_str);
+            self.tickers.push(ticker);
             self.sector_data
-                .insert(symbol_str.clone(), SectorData::new(symbol_str.clone()));
+                .insert(ticker_str.clone(), SectorData::new(ticker_str.clone()));
         }
 
         self.config = Some(vb_config);
@@ -527,11 +527,11 @@ impl Strategy for SectorVbStrategy {
             return Ok(vec![]);
         }
 
-        // base 심볼만 추출 (XLK/USD -> XLK)
-        let symbol_str = data.symbol.base.clone();
+        // base 티커만 추출 (XLK/USD -> XLK)
+        let ticker_str = data.ticker.clone();
 
         // 등록된 섹터인지 확인
-        if !self.sector_data.contains_key(&symbol_str) {
+        if !self.sector_data.contains_key(&ticker_str) {
             return Ok(vec![]);
         }
 
@@ -554,7 +554,7 @@ impl Strategy for SectorVbStrategy {
         }
 
         // 섹터 데이터 업데이트
-        let need_calc_target = if let Some(sector) = self.sector_data.get_mut(&symbol_str) {
+        let need_calc_target = if let Some(sector) = self.sector_data.get_mut(&ticker_str) {
             sector.current_price = close;
 
             // 오늘 첫 데이터인지 확인하고 처리
@@ -584,7 +584,7 @@ impl Strategy for SectorVbStrategy {
 
         // mutable borrow가 끝난 후 돌파 목표가 계산
         if need_calc_target {
-            self.calculate_target_price(&symbol_str);
+            self.calculate_target_price(&ticker_str);
         }
 
         // 섹터 선택 (아직 안 됐으면)
@@ -597,7 +597,7 @@ impl Strategy for SectorVbStrategy {
         }
 
         // 신호 생성
-        let signals = self.generate_signals(&symbol_str, close, timestamp);
+        let signals = self.generate_signals(&ticker_str, close, timestamp);
 
         Ok(signals)
     }
@@ -607,7 +607,7 @@ impl Strategy for SectorVbStrategy {
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         debug!(
-            symbol = %order.symbol,
+            ticker = %order.ticker,
             side = ?order.side,
             quantity = %order.quantity,
             "주문 체결"
@@ -669,7 +669,7 @@ mod tests {
         let mut strategy = SectorVbStrategy::new();
 
         let config = json!({
-            "symbols": ["091160", "091230", "305720"],
+            "tickers": ["091160", "091230", "305720"],
             "k_factor": 0.5,
             "top_n": 1
         });
@@ -696,7 +696,7 @@ register_strategy! {
     name: "섹터 변동성 돌파",
     description: "섹터별 변동성 돌파 전략입니다.",
     timeframe: "1d",
-    symbols: ["091160", "091170", "091180", "091220", "091230"],
+    tickers: ["091160", "091170", "091180", "091220", "091230"],
     category: Daily,
     markets: [Stock],
     type: SectorVbStrategy

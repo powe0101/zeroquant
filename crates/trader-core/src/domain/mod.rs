@@ -18,6 +18,7 @@ mod statistics;
 mod tick_size;
 mod trade;
 mod trigger;
+mod watchlist;
 
 pub use alert::*;
 pub use analytics_provider::*;
@@ -37,3 +38,4 @@ pub use statistics::*;
 pub use tick_size::*;
 pub use trade::*;
 pub use trigger::*;
+pub use watchlist::*;

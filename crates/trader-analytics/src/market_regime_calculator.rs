@@ -244,7 +244,6 @@ mod tests {
 
     fn create_test_klines(count: usize, base_price: f64, trend: f64) -> Vec<Kline> {
         use trader_core::{MarketType, Timeframe};
-        use trader_core::types::Symbol;
 
         (0..count)
             .map(|i| {
@@ -255,7 +254,7 @@ mod tests {
                 // OHLC에도 변동성 추가
                 let daily_range = price * 0.02; // 2% 일일 변동
                 Kline {
-                    symbol: Symbol::new("TEST", "USD", MarketType::Crypto),
+                    ticker: "TEST/USDT".to_string(),
                     timeframe: Timeframe::D1,
                     open_time: Utc::now(),
                     open: Decimal::from_f64_retain(price - daily_range / 2.0).unwrap(),

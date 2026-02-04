@@ -20,6 +20,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use ts_rs::TS;
 use utoipa::ToSchema;
 
 use trader_core::MacroEnvironment;
@@ -33,7 +34,8 @@ use crate::state::AppState;
 // ==================== Request/Response 타입 ====================
 
 /// 커스텀 스크리닝 요청
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct ScreeningRequest {
     /// 시장 필터 (KR, US, CRYPTO)
     #[serde(default)]
@@ -129,7 +131,8 @@ pub struct ScreeningRequest {
 }
 
 /// 스크리닝 결과 응답
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct ScreeningResponse {
     /// 총 결과 수
     pub total: usize,
@@ -143,7 +146,8 @@ pub struct ScreeningResponse {
 }
 
 /// 스크리닝 결과 DTO
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct ScreeningResultDto {
     pub ticker: String,
     pub name: String,
@@ -180,6 +184,16 @@ pub struct ScreeningResultDto {
     pub rsi_14: Option<f64>,
     pub breakout_score: Option<f64>,
 
+    // MACD 지표
+    /// MACD 라인 값
+    pub macd: Option<f64>,
+    /// 시그널 라인 값
+    pub macd_signal: Option<f64>,
+    /// 히스토그램 (MACD - Signal)
+    pub macd_histogram: Option<f64>,
+    /// 크로스 상태 ("golden" = 골든크로스, "dead" = 데드크로스, null = 없음)
+    pub macd_cross: Option<String>,
+
     // RouteState
     pub route_state: Option<String>,
 
@@ -205,13 +219,43 @@ pub struct ScreeningResultDto {
 }
 
 /// 프리셋 목록 응답
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct PresetsListResponse {
+    #[ts(type = "Array<Record<string, unknown>>")]
     pub presets: Vec<ScreeningPreset>,
 }
 
+/// DB 프리셋 목록 응답
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
+pub struct PresetsListResponseV2 {
+    #[ts(type = "Array<Record<string, unknown>>")]
+    pub presets: Vec<crate::repository::ScreeningPresetRecord>,
+    pub total: usize,
+}
+
+/// 프리셋 저장 응답
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
+pub struct SavePresetResponse {
+    pub success: bool,
+    #[ts(type = "Record<string, unknown>")]
+    pub preset: crate::repository::ScreeningPresetRecord,
+    pub message: String,
+}
+
+/// 프리셋 삭제 응답
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
+pub struct DeletePresetResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 /// 프리셋 스크리닝 쿼리
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct PresetQuery {
     /// 시장 필터 (KR, US)
     #[serde(default)]
@@ -222,7 +266,8 @@ pub struct PresetQuery {
 }
 
 /// 모멘텀 스크리닝 쿼리
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct MomentumQuery {
     /// 시장 필터
     #[serde(default)]
@@ -254,7 +299,8 @@ fn default_momentum_limit() -> i32 {
 }
 
 /// 모멘텀 스크리닝 결과 응답
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct MomentumResponse {
     pub total: usize,
     pub days: i32,
@@ -263,7 +309,8 @@ pub struct MomentumResponse {
 }
 
 /// 모멘텀 결과 DTO
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "screening/")]
 pub struct MomentumResultDto {
     pub symbol: String,
     pub name: String,
@@ -278,7 +325,8 @@ pub struct MomentumResultDto {
 }
 
 /// 에러 응답
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "common/")]
 pub struct ErrorResponse {
     pub code: String,
     pub message: String,
@@ -366,6 +414,10 @@ fn to_result_dto(r: ScreeningResult) -> ScreeningResultDto {
         bb_width: r.bb_width,
         rsi_14: r.rsi_14,
         breakout_score: r.breakout_score,
+        macd: r.macd,
+        macd_signal: r.macd_signal,
+        macd_histogram: r.macd_histogram,
+        macd_cross: r.macd_cross,
         route_state: r.route_state,
         regime: r.regime,
         sector_rs: decimal_to_string(r.sector_rs),
@@ -436,6 +488,12 @@ pub struct SectorRsDto {
     pub composite_score: String,
     /// 순위
     pub rank: i32,
+    /// 5일 평균 수익률 (%) - SectorMomentumBar 용
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_return_5d_pct: Option<String>,
+    /// 섹터 총 시가총액 - SectorTreemap 용
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_market_cap: Option<String>,
 }
 
 fn to_sector_rs_dto(r: crate::repository::SectorRsResult) -> SectorRsDto {
@@ -447,6 +505,8 @@ fn to_sector_rs_dto(r: crate::repository::SectorRsResult) -> SectorRsDto {
         relative_strength: r.relative_strength.to_string(),
         composite_score: r.composite_score.to_string(),
         rank: r.rank,
+        avg_return_5d_pct: r.avg_return_5d_pct.map(|v| v.to_string()),
+        total_market_cap: r.total_market_cap.map(|v| v.to_string()),
     }
 }
 
@@ -563,6 +623,85 @@ pub async fn run_screening(
 pub async fn list_presets() -> impl IntoResponse {
     let presets = ScreeningRepository::available_presets();
     Json(PresetsListResponse { presets })
+}
+
+/// 프리셋 목록 조회 (DB)
+///
+/// GET /api/v1/screening/presets/all
+pub async fn list_presets_v2(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<PresetsListResponseV2>, (StatusCode, String)> {
+    let pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Database not available".to_string()))?;
+
+    let presets = ScreeningRepository::get_all_presets(pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("조회 실패: {}", e)))?;
+
+    let total = presets.len();
+
+    Ok(Json(PresetsListResponseV2 { presets, total }))
+}
+
+/// 프리셋 저장
+///
+/// POST /api/v1/screening/presets
+pub async fn save_preset(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<crate::repository::CreatePresetRequest>,
+) -> Result<Json<SavePresetResponse>, (StatusCode, String)> {
+    info!("프리셋 저장 요청: {}", request.name);
+
+    let pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Database not available".to_string()))?;
+
+    let preset = ScreeningRepository::save_preset(pool, request)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("unique_preset_name") {
+                (StatusCode::CONFLICT, "이미 존재하는 프리셋 이름입니다".to_string())
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("저장 실패: {}", e))
+            }
+        })?;
+
+    Ok(Json(SavePresetResponse {
+        success: true,
+        message: format!("프리셋 '{}'이(가) 저장되었습니다", preset.name),
+        preset,
+    }))
+}
+
+/// 프리셋 삭제
+///
+/// DELETE /api/v1/screening/presets/{id}
+pub async fn delete_preset(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<DeletePresetResponse>, (StatusCode, String)> {
+    info!("프리셋 삭제 요청: {}", id);
+
+    let pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Database not available".to_string()))?;
+
+    let deleted = ScreeningRepository::delete_preset(pool, id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("삭제 실패: {}", e)))?;
+
+    if !deleted {
+        return Err((StatusCode::BAD_REQUEST, "기본 프리셋은 삭제할 수 없습니다".to_string()));
+    }
+
+    Ok(Json(DeletePresetResponse {
+        success: true,
+        message: "프리셋이 삭제되었습니다".to_string(),
+    }))
 }
 
 /// 프리셋 스크리닝 실행
@@ -854,10 +993,14 @@ fn build_filter_summary(req: &ScreeningRequest) -> String {
 
 /// 스크리닝 라우터 생성
 pub fn screening_router() -> Router<Arc<AppState>> {
+    use axum::routing::delete;
+
     Router::new()
         .route("/", post(run_screening))
-        .route("/presets", get(list_presets))
+        .route("/presets", get(list_presets).post(save_preset))
+        .route("/presets/all", get(list_presets_v2))
         .route("/presets/{preset}", get(run_preset_screening))
+        .route("/presets/id/{id}", delete(delete_preset))
         .route("/momentum", get(run_momentum_screening))
 }
 

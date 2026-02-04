@@ -1,6 +1,6 @@
 # ZeroQuant - Claude 세션 컨텍스트
 
-> 마지막 업데이트: 2026-02-03 | 버전: v0.6.4
+> 마지막 업데이트: 2026-02-04 | 버전: v0.6.0
 
 ---
 
@@ -21,17 +21,19 @@
 
 | 항목 | 수치 |
 |------|------|
-| Rust 파일 | 180+ |
-| Crate 수 | 10개 |
-| 전략 수 | 26개 |
-| API 라우트 | 24개 |
-| 마이그레이션 | 23개 |
+| Rust 파일 | 200+ |
+| Crate 수 | 11개 (collector 추가) |
+| 전략 수 | 27개 (RSI Multi-TF 추가) |
+| API 라우트 | 30개+ |
+| 마이그레이션 | 19개 |
+| TypeScript 바인딩 | 50개+ (ts-rs 자동 생성) |
 
 ### 기술 스택
 - **Backend**: Rust (Tokio, Axum, SQLx)
 - **Database**: PostgreSQL (TimescaleDB), Redis
 - **Frontend**: SolidJS, TypeScript, Vite
 - **ML**: ONNX Runtime
+- **Data**: KRX OPEN API, Yahoo Finance
 - **Infrastructure**: Podman
 
 ---

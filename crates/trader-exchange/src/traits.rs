@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use trader_core::{
-    Kline, OrderBook, OrderRequest, OrderStatus, Position, Symbol, Ticker, Timeframe, TradeTick,
+    Kline, OrderBook, OrderRequest, OrderStatus, Position, Ticker, Timeframe, TradeTick,
 };
 
 use crate::ExchangeError;
@@ -67,26 +67,26 @@ pub trait Exchange: Send + Sync {
     // === 시장 데이터 ===
 
     /// 심볼의 현재 시세 조회.
-    async fn get_ticker(&self, symbol: &Symbol) -> ExchangeResult<Ticker>;
+    async fn get_ticker(&self, symbol: &str) -> ExchangeResult<Ticker>;
 
     /// 심볼의 호가창 조회.
     async fn get_order_book(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         limit: Option<u32>,
     ) -> ExchangeResult<OrderBook>;
 
     /// 심볼의 최근 체결 조회.
     async fn get_recent_trades(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         limit: Option<u32>,
     ) -> ExchangeResult<Vec<TradeTick>>;
 
     /// 과거 캔들스틱 조회.
     async fn get_klines(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
         limit: Option<u32>,
     ) -> ExchangeResult<Vec<Kline>>;
@@ -97,13 +97,13 @@ pub trait Exchange: Send + Sync {
     async fn place_order(&self, request: &OrderRequest) -> ExchangeResult<String>;
 
     /// 주문 취소.
-    async fn cancel_order(&self, symbol: &Symbol, order_id: &str) -> ExchangeResult<()>;
+    async fn cancel_order(&self, symbol: &str, order_id: &str) -> ExchangeResult<()>;
 
     /// 주문 상태 조회.
-    async fn get_order(&self, symbol: &Symbol, order_id: &str) -> ExchangeResult<OrderStatus>;
+    async fn get_order(&self, symbol: &str, order_id: &str) -> ExchangeResult<OrderStatus>;
 
     /// 심볼의 미체결 주문 조회.
-    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> ExchangeResult<Vec<OrderStatus>>;
+    async fn get_open_orders(&self, symbol: Option<&str>) -> ExchangeResult<Vec<OrderStatus>>;
 
     // === 포지션 작업 (선물) ===
 
@@ -147,23 +147,23 @@ pub enum UserEvent {
 #[async_trait]
 pub trait MarketStream: Send + Sync {
     /// 시세 업데이트 구독.
-    async fn subscribe_ticker(&mut self, symbol: &Symbol) -> ExchangeResult<()>;
+    async fn subscribe_ticker(&mut self, symbol: &str) -> ExchangeResult<()>;
 
     /// 캔들스틱 업데이트 구독.
     async fn subscribe_kline(
         &mut self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
     ) -> ExchangeResult<()>;
 
     /// 호가창 업데이트 구독.
-    async fn subscribe_order_book(&mut self, symbol: &Symbol) -> ExchangeResult<()>;
+    async fn subscribe_order_book(&mut self, symbol: &str) -> ExchangeResult<()>;
 
     /// 체결 업데이트 구독.
-    async fn subscribe_trades(&mut self, symbol: &Symbol) -> ExchangeResult<()>;
+    async fn subscribe_trades(&mut self, symbol: &str) -> ExchangeResult<()>;
 
     /// 심볼 구독 해제.
-    async fn unsubscribe(&mut self, symbol: &Symbol) -> ExchangeResult<()>;
+    async fn unsubscribe(&mut self, symbol: &str) -> ExchangeResult<()>;
 
     /// 다음 시장 이벤트 반환.
     async fn next_event(&mut self) -> Option<MarketEvent>;

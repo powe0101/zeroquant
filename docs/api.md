@@ -508,7 +508,185 @@ cargo test --workspace --test '*'
 
 ---
 
+---
+
+## Multi Timeframe API
+
+### GET /api/v1/market/klines/multi
+다중 타임프레임 Kline 데이터 조회
+
+**Query Parameters:**
+| 파라미터 | 타입 | 필수 | 설명 |
+|----------|------|------|------|
+| symbol | string | ✓ | 심볼 (예: "005930") |
+| timeframes | string | ✓ | 타임프레임 목록 (쉼표 구분: "1m,5m,1h") |
+| limit | number | | 각 타임프레임당 캔들 수 (기본: 100) |
+
+**Response:**
+```json
+{
+  "symbol": "005930",
+  "data": {
+    "1m": [{ "timestamp": 1706436000, "open": 50000, ... }],
+    "5m": [...],
+    "1h": [...]
+  }
+}
+```
+
+---
+
+## Ranking API
+
+### GET /api/v1/ranking
+글로벌 스코어 랭킹 조회
+
+**Query Parameters:**
+| 파라미터 | 타입 | 필수 | 설명 |
+|----------|------|------|------|
+| market | string | | 시장 필터 (KR, US, CRYPTO) |
+| route_state | string | | RouteState 필터 (ATTACK, ARMED, WAIT) |
+| limit | number | | 결과 수 (기본: 100) |
+
+### GET /api/v1/ranking/7factor/{ticker}
+7Factor 스코어 조회
+
+**Response:**
+```json
+{
+  "ticker": "005930",
+  "factors": {
+    "momentum": 75.5,
+    "value": 62.3,
+    "quality": 88.1,
+    "volatility": 45.2,
+    "liquidity": 92.0,
+    "growth": 55.8,
+    "sentiment": 70.0
+  },
+  "total_score": 72.4
+}
+```
+
+### POST /api/v1/ranking/7factor/batch
+7Factor 배치 조회
+
+**Request:**
+```json
+{
+  "tickers": ["005930", "000660", "035720"]
+}
+```
+
+---
+
+## Watchlist API
+
+### GET /api/v1/watchlist
+관심종목 목록 조회
+
+### POST /api/v1/watchlist
+관심종목 그룹 생성
+
+**Request:**
+```json
+{
+  "name": "반도체 관련주",
+  "description": "반도체 섹터 관심종목"
+}
+```
+
+### POST /api/v1/watchlist/{id}/items
+관심종목 추가
+
+**Request:**
+```json
+{
+  "symbol": "005930"
+}
+```
+
+### DELETE /api/v1/watchlist/{id}/items/{symbol}
+관심종목 삭제
+
+---
+
+## Journal API
+
+### GET /api/v1/journal/positions
+보유 포지션 목록 조회
+
+### GET /api/v1/journal/executions
+체결 내역 조회
+
+**Query Parameters:**
+| 파라미터 | 타입 | 필수 | 설명 |
+|----------|------|------|------|
+| from | string | | 시작 날짜 (YYYY-MM-DD) |
+| to | string | | 종료 날짜 (YYYY-MM-DD) |
+| symbol | string | | 심볼 필터 |
+| side | string | | 매수/매도 필터 (buy, sell) |
+
+### GET /api/v1/journal/cost-basis/{symbol}
+FIFO 원가 계산 조회
+
+**Response:**
+```json
+{
+  "symbol": "005930",
+  "average_cost": "65000",
+  "total_cost": "650000",
+  "realized_pnl": "15000",
+  "lots": [
+    { "quantity": 5, "cost": "64000", "date": "2026-01-15" },
+    { "quantity": 5, "cost": "66000", "date": "2026-01-20" }
+  ]
+}
+```
+
+---
+
+## WebSocket Extensions
+
+### Kline 브로드캐스트
+실시간 캔들 데이터 스트리밍
+
+**Subscribe:**
+```json
+{
+  "type": "subscribe",
+  "channels": ["kline:005930:1m", "kline:005930:5m"]
+}
+```
+
+**Server Message:**
+```json
+{
+  "type": "kline",
+  "symbol": "005930",
+  "timeframe": "1m",
+  "data": {
+    "timestamp": 1706436000,
+    "open": "50000",
+    "high": "50500",
+    "low": "49800",
+    "close": "50300",
+    "volume": "1000000"
+  }
+}
+```
+
+---
+
 ## Changelog
+
+### v0.6.0 (2026-02-04)
+- Multi Timeframe API 추가
+- 7Factor Scoring API 추가
+- Watchlist API 추가
+- Journal API 확장 (FIFO 원가 계산)
+- WebSocket Kline 브로드캐스트 추가
+- TypeScript 바인딩 자동 생성 (ts-rs)
 
 ### v0.4.4 (2026-01-31)
 - OpenAPI/Swagger 문서화 추가

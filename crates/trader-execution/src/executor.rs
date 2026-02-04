@@ -510,7 +510,7 @@ impl SignalConverter {
 
         // 주문 요청 구성
         let order = OrderRequest {
-            symbol: signal.symbol.clone(),
+            ticker: signal.ticker.clone(),
             side: signal.side,
             order_type,
             quantity: qty,
@@ -702,7 +702,7 @@ impl OrderExecutor {
                 // 브라켓 주문 생성을 위한 임시 포지션 생성
                 let mock_position = Position::new(
                     "temp",
-                    signal.symbol.clone(),
+                    signal.ticker.clone(),
                     signal.side,
                     order_request.quantity,
                     current_price,
@@ -756,7 +756,7 @@ impl OrderExecutor {
         let status = OrderStatus {
             order_id: exchange_order_id.clone(),
             client_order_id: None,
-            symbol: None,
+            ticker: None,
             side: None,
             quantity: None,
             price: None,
@@ -988,7 +988,7 @@ impl OrderExecutor {
         let mut results = Vec::with_capacity(signals.len());
 
         for signal in signals {
-            let symbol_str = signal.symbol.to_string();
+            let symbol_str = signal.ticker.clone();
             if let Some(&price) = prices.get(&symbol_str) {
                 results.push(self.process_signal(signal, price).await);
             } else {
@@ -1048,7 +1048,7 @@ mod tests {
     fn create_test_signal(side: Side, signal_type: SignalType) -> Signal {
         Signal::new(
             "test_strategy",
-            Symbol::crypto("BTC", "USDT"),
+            "BTC/USDT".to_string(),
             side,
             signal_type,
         )
@@ -1156,14 +1156,14 @@ mod tests {
     #[test]
     fn test_execution_result_builder() {
         let signal_id = Uuid::new_v4();
-        let order = OrderRequest::market_buy(Symbol::crypto("BTC", "USDT"), dec!(0.1));
+        let order = OrderRequest::market_buy("BTC/USDT".to_string(), dec!(0.1));
         let order_id = Uuid::new_v4();
 
         let result = ExecutionResult::success(signal_id, order)
             .with_order_id(order_id)
             .with_note("Test note")
             .with_stop_loss(OrderRequest::market_sell(
-                Symbol::crypto("BTC", "USDT"),
+                "BTC/USDT".to_string(),
                 dec!(0.1),
             ));
 

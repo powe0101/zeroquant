@@ -121,6 +121,26 @@ pub async fn get_supported_exchanges() -> impl IntoResponse {
             description: "미국 최대 암호화폐 거래소".to_string(),
             docs_url: Some("https://docs.cloud.coinbase.com/exchange/reference".to_string()),
         },
+        SupportedExchange {
+            exchange_id: "krx".to_string(),
+            display_name: "KRX Open API".to_string(),
+            market_type: "data_provider".to_string(),
+            supports_testnet: false,
+            required_fields: vec![CredentialField {
+                name: "api_key".to_string(),
+                label: "인증키 (AUTH_KEY)".to_string(),
+                field_type: "password".to_string(),
+                placeholder: Some("KRX Open API 인증키".to_string()),
+                help_text: Some(
+                    "data.krx.co.kr에서 발급받은 인증키. KOSPI/KOSDAQ 종목 정보 및 시세 조회에 사용됩니다."
+                        .to_string(),
+                ),
+            }],
+            optional_fields: vec![],
+            description: "KRX 정보데이터시스템. 국내 주식 종목 정보, PER/PBR, 시세 데이터 제공 (Yahoo Finance 대체)"
+                .to_string(),
+            docs_url: Some("https://data.krx.co.kr/contents/MDC/MAIN/main/index.cmd".to_string()),
+        },
     ];
 
     Json(SupportedExchangesResponse { exchanges })
@@ -262,7 +282,16 @@ pub async fn create_exchange_credential(
         .cloned()
         .unwrap_or_default();
 
-    if api_key.is_empty() || api_secret.is_empty() {
+    // KRX Open API는 api_key만 필요 (데이터 제공자)
+    if api_key.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("INVALID_INPUT", "API Key는 필수입니다.")),
+        ));
+    }
+
+    // KRX 이외의 거래소는 api_secret도 필수
+    if request.exchange_id != "krx" && api_secret.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ApiError::new(
@@ -669,6 +698,22 @@ pub async fn test_exchange_credential(
                 (false, "API 키 형식이 올바르지 않습니다.".to_string(), None)
             }
         }
+        "krx" => {
+            // KRX Open API 인증키 검증 (api_secret 불필요)
+            if credentials.api_key.len() >= 16 {
+                (
+                    true,
+                    "KRX Open API 인증키가 유효합니다.".to_string(),
+                    Some(vec!["read".to_string()]), // 데이터 조회 권한만
+                )
+            } else {
+                (
+                    false,
+                    "KRX 인증키 형식이 올바르지 않습니다.".to_string(),
+                    None,
+                )
+            }
+        }
         _ => (
             true,
             format!("{} API 키가 등록되어 있습니다.", row.exchange_id),
@@ -734,7 +779,16 @@ pub async fn test_new_exchange_credential(
         .cloned()
         .unwrap_or_default();
 
-    if api_key.is_empty() || api_secret.is_empty() {
+    // KRX Open API는 api_key만 필요
+    if api_key.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new("INVALID_INPUT", "API Key는 필수입니다.")),
+        ));
+    }
+
+    // KRX 이외의 거래소는 api_secret도 필수
+    if request.exchange_id != "krx" && api_secret.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ApiError::new(
@@ -767,6 +821,22 @@ pub async fn test_new_exchange_credential(
                 )
             } else {
                 (false, "API 키 형식이 올바르지 않습니다.".to_string(), None)
+            }
+        }
+        "krx" => {
+            // KRX Open API 인증키 형식 검증 (최소 16자 이상)
+            if api_key.len() >= 16 {
+                (
+                    true,
+                    "KRX Open API 인증키 형식이 유효합니다.".to_string(),
+                    Some(vec!["read".to_string()]), // 데이터 조회 권한만
+                )
+            } else {
+                (
+                    false,
+                    "KRX 인증키는 16자 이상이어야 합니다.".to_string(),
+                    None,
+                )
             }
         }
         _ => (

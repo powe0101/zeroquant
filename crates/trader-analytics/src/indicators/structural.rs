@@ -317,11 +317,11 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use rust_decimal_macros::dec;
-    use trader_core::{types::Symbol, MarketType, Timeframe};
+    use trader_core::Timeframe;
 
     /// 테스트용 캔들 생성 헬퍼.
     fn create_test_candles(count: usize, trend: &str) -> Vec<Kline> {
-        let symbol = Symbol::new("TEST", "USD", MarketType::Stock);
+        let ticker = "TEST/USD".to_string();
         let mut candles = Vec::with_capacity(count);
 
         for i in 0..count {
@@ -333,7 +333,7 @@ mod tests {
             };
 
             candles.push(Kline {
-                symbol: symbol.clone(),
+                ticker: ticker.clone(),
                 timeframe: Timeframe::D1,
                 open_time: Utc::now(),
                 open,

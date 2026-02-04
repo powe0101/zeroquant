@@ -496,10 +496,10 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use rust_decimal_macros::dec;
-    use trader_core::{Symbol, Timeframe};
+    use trader_core::Timeframe;
 
     fn create_test_klines(count: usize) -> Vec<Kline> {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
         let base_price = 50000.0;
 
         (0..count)
@@ -512,7 +512,7 @@ mod tests {
                 let low = open.min(close) - 50.0;
 
                 Kline::new(
-                    symbol.clone(),
+                    ticker.clone(),
                     Timeframe::H1,
                     Utc::now(),
                     rust_decimal::Decimal::from_f64_retain(open).unwrap_or(dec!(50000)),

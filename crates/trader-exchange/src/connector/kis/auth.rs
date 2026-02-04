@@ -57,6 +57,15 @@ pub struct KisErrorResponse {
     pub msg1: String,
 }
 
+/// KIS OAuth 오류 응답 (토큰 발급 실패 시).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KisOAuthErrorResponse {
+    /// 에러 코드 (예: "EGW00103")
+    pub error_code: String,
+    /// 에러 설명 (예: "유효하지 않은 AppKey입니다.")
+    pub error_description: String,
+}
+
 /// 만료 추적이 포함된 토큰 상태.
 #[derive(Debug, Clone)]
 pub struct TokenState {
@@ -69,6 +78,15 @@ pub struct TokenState {
 }
 
 impl TokenState {
+    /// 새 토큰 상태 생성.
+    pub fn new(access_token: String, token_type: String, expires_at: DateTime<Utc>) -> Self {
+        Self {
+            access_token,
+            token_type,
+            expires_at,
+        }
+    }
+
     /// 토큰이 만료되었거나 곧 만료되는지 확인.
     pub fn is_expired_or_expiring(&self) -> bool {
         let threshold = Utc::now() + Duration::hours(TOKEN_REFRESH_THRESHOLD_HOURS);
@@ -115,6 +133,39 @@ impl KisOAuth {
         })
     }
 
+    /// 초기 토큰 설정 (DB에서 로드한 토큰 사용).
+    ///
+    /// DB 기반 토큰 캐싱을 위해 사용합니다.
+    /// 유효한 토큰이 있으면 API 호출 없이 재사용됩니다.
+    pub async fn set_cached_token(&self, token: TokenState) {
+        if token.is_valid() {
+            info!(
+                "Setting cached KIS token (expires at: {})",
+                token.expires_at
+            );
+            let mut token_guard = self.token.write().await;
+            *token_guard = Some(token);
+        } else {
+            debug!("Ignoring expired cached token");
+        }
+    }
+
+    /// 현재 캐시된 토큰 반환 (API 호출 없이).
+    ///
+    /// DB에 저장할 때 사용합니다.
+    pub async fn get_cached_token(&self) -> Option<TokenState> {
+        let token_guard = self.token.read().await;
+        token_guard.clone()
+    }
+
+    /// 토큰 갱신 후 새 토큰 반환 (DB 저장용).
+    ///
+    /// `refresh_token()`을 호출하고 결과를 반환합니다.
+    /// 호출자는 반환된 토큰을 DB에 저장해야 합니다.
+    pub async fn refresh_and_get_token(&self) -> Result<TokenState, ExchangeError> {
+        self.refresh_token().await
+    }
+
     /// 유효한 접근 토큰 반환, 필요시 갱신.
     pub async fn get_token(&self) -> Result<TokenState, ExchangeError> {
         // 유효한 토큰이 있는지 확인
@@ -122,8 +173,19 @@ impl KisOAuth {
             let token_guard = self.token.read().await;
             if let Some(ref token) = *token_guard {
                 if !token.is_expired_or_expiring() {
+                    debug!(
+                        "Using cached KIS token (expires at: {})",
+                        token.expires_at
+                    );
                     return Ok(token.clone());
+                } else {
+                    warn!(
+                        "KIS token expired or expiring soon (expires at: {}), refreshing...",
+                        token.expires_at
+                    );
                 }
+            } else {
+                info!("No cached KIS token found, requesting new token...");
             }
         }
 
@@ -133,7 +195,35 @@ impl KisOAuth {
 
     /// 접근 토큰 강제 갱신.
     pub async fn refresh_token(&self) -> Result<TokenState, ExchangeError> {
-        info!("Requesting new KIS access token...");
+        // AppKey 유효성 검증
+        if self.config.app_key.is_empty() || self.config.app_key.len() < 20 {
+            error!(
+                "유효하지 않은 AppKey: '{}' (길이: {})",
+                self.config.app_key,
+                self.config.app_key.len()
+            );
+            return Err(ExchangeError::Unauthorized(
+                "KIS_APP_KEY 환경변수가 올바르게 설정되지 않았습니다. \
+                한국투자증권에서 발급받은 AppKey를 설정하세요."
+                    .to_string(),
+            ));
+        }
+
+        if self.config.app_secret.is_empty() || self.config.app_secret.len() < 20 {
+            error!(
+                "유효하지 않은 AppSecret (길이: {})",
+                self.config.app_secret.len()
+            );
+            return Err(ExchangeError::Unauthorized(
+                "KIS_APP_SECRET 환경변수가 올바르게 설정되지 않았습니다."
+                    .to_string(),
+            ));
+        }
+
+        info!(
+            "Requesting new KIS access token... (AppKey: {}...)",
+            &self.config.app_key.chars().take(8).collect::<String>()
+        );
 
         let url = format!("{}/oauth2/tokenP", self.config.rest_base_url());
 
@@ -167,12 +257,32 @@ impl KisOAuth {
 
         if !status.is_success() {
             error!("Token request failed: {} - {}", status, body);
+
+            // OAuth 에러 응답 파싱 시도
+            if let Ok(oauth_error) = serde_json::from_str::<KisOAuthErrorResponse>(&body) {
+                let error_msg = match oauth_error.error_code.as_str() {
+                    "EGW00103" => format!(
+                        "유효하지 않은 AppKey입니다. 환경변수(KIS_APP_KEY, KIS_APP_SECRET)를 확인하세요. AppKey: {}...",
+                        &self.config.app_key.chars().take(8).collect::<String>()
+                    ),
+                    "EGW00102" => "AppKey가 만료되었습니다. 한국투자증권에서 새 AppKey를 발급받으세요.".to_string(),
+                    "EGW00101" => "AppSecret이 일치하지 않습니다.".to_string(),
+                    _ => format!("{} ({})", oauth_error.error_description, oauth_error.error_code),
+                };
+
+                error!("KIS OAuth 에러: {}", error_msg);
+                return Err(ExchangeError::Unauthorized(error_msg));
+            }
+
+            // 일반 API 에러 응답 파싱 시도
             if let Ok(error_resp) = serde_json::from_str::<KisErrorResponse>(&body) {
                 return Err(ExchangeError::ApiError {
                     code: error_resp.msg_cd.parse().unwrap_or(-1),
                     message: error_resp.msg1,
                 });
             }
+
+            // 파싱 실패 시 원본 응답 반환
             return Err(ExchangeError::Unauthorized(format!(
                 "Token request failed: {}",
                 body

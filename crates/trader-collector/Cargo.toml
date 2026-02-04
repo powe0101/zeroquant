@@ -13,10 +13,12 @@ path = "src/main.rs"
 # Internal crates
 trader-core = { path = "../trader-core", features = ["sqlx-support"] }
 trader-data = { path = "../trader-data" }
+trader-analytics = { path = "../trader-analytics" }
 
 # Database
 sqlx = { workspace = true }
 rust_decimal = { workspace = true }
+uuid = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -28,6 +30,7 @@ tracing-subscriber = { workspace = true }
 # Configuration
 dotenvy = "0.15"
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Date/Time
 chrono = { workspace = true }

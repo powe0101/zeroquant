@@ -34,7 +34,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 개별 ETF 배분 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -224,7 +224,7 @@ impl EtfData {
 /// 미국 3배 레버리지 전략.
 pub struct Us3xLeverageStrategy {
     config: Option<Us3xLeverageConfig>,
-    symbols: Vec<Symbol>,
+    tickers: Vec<String>,
 
     /// ETF별 데이터
     etf_data: HashMap<String, EtfData>,
@@ -261,7 +261,7 @@ impl Us3xLeverageStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             etf_data: HashMap::new(),
             total_value: Decimal::ZERO,
             last_rebalance_date: None,
@@ -453,14 +453,14 @@ impl Us3xLeverageStrategy {
                 continue; // 1% 미만 차이는 무시
             }
 
-            let symbol = match self.symbols.iter().find(|s| s.base == *ticker) {
+            let ticker = match self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))) {
                 Some(s) => s.clone(),
                 None => continue,
             };
 
             if diff > 0.0 {
                 // 매수 필요 - StrategyContext 기반 진입 체크 (종목별)
-                if !self.can_enter(ticker) {
+                if !self.can_enter(&ticker) {
                     debug!(
                         ticker = %ticker,
                         "[Us3xLeverage] 리밸런싱 매수 스킵 - can_enter() false"
@@ -468,37 +468,37 @@ impl Us3xLeverageStrategy {
                     continue;
                 }
 
-                signals.push(
-                    Signal::entry("us_3x_leverage", symbol, Side::Buy)
-                        .with_strength(diff.abs())
-                        .with_prices(Some(data.current_price), None, None)
-                        .with_metadata("action", json!("rebalance_buy"))
-                        .with_metadata("target_ratio", json!(target))
-                        .with_metadata("current_ratio", json!(current)),
-                );
-
                 info!(
                     ticker = %ticker,
                     target = %format!("{:.1}%", target * 100.0),
                     current = %format!("{:.1}%", current * 100.0),
                     "리밸런싱 매수"
                 );
-            } else {
-                // 매도 필요
+
                 signals.push(
-                    Signal::exit("us_3x_leverage", symbol, Side::Sell)
+                    Signal::entry("us_3x_leverage", ticker, Side::Buy)
                         .with_strength(diff.abs())
                         .with_prices(Some(data.current_price), None, None)
-                        .with_metadata("action", json!("rebalance_sell"))
+                        .with_metadata("action", json!("rebalance_buy"))
                         .with_metadata("target_ratio", json!(target))
                         .with_metadata("current_ratio", json!(current)),
                 );
-
+            } else {
+                // 매도 필요
                 info!(
                     ticker = %ticker,
                     target = %format!("{:.1}%", target * 100.0),
                     current = %format!("{:.1}%", current * 100.0),
                     "리밸런싱 매도"
+                );
+
+                signals.push(
+                    Signal::exit("us_3x_leverage", ticker, Side::Sell)
+                        .with_strength(diff.abs())
+                        .with_prices(Some(data.current_price), None, None)
+                        .with_metadata("action", json!("rebalance_sell"))
+                        .with_metadata("target_ratio", json!(target))
+                        .with_metadata("current_ratio", json!(current)),
                 );
             }
         }
@@ -521,7 +521,7 @@ impl Us3xLeverageStrategy {
             }
 
             // StrategyContext 기반 진입 체크 (종목별)
-            if !self.can_enter(ticker) {
+            if !self.can_enter(&ticker) {
                 debug!(
                     ticker = %ticker,
                     "[Us3xLeverage] 초기 진입 스킵 - can_enter() false"
@@ -529,23 +529,23 @@ impl Us3xLeverageStrategy {
                 continue;
             }
 
-            let symbol = match self.symbols.iter().find(|s| s.base == *ticker) {
+            let ticker = match self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))) {
                 Some(s) => s.clone(),
                 None => continue,
             };
-
-            signals.push(
-                Signal::entry("us_3x_leverage", symbol, Side::Buy)
-                    .with_strength(data.target_ratio)
-                    .with_prices(Some(data.current_price), None, None)
-                    .with_metadata("action", json!("initial_buy"))
-                    .with_metadata("target_ratio", json!(data.target_ratio)),
-            );
 
             info!(
                 ticker = %ticker,
                 ratio = %format!("{:.1}%", data.target_ratio * 100.0),
                 "초기 매수"
+            );
+
+            signals.push(
+                Signal::entry("us_3x_leverage", ticker, Side::Buy)
+                    .with_strength(data.target_ratio)
+                    .with_prices(Some(data.current_price), None, None)
+                    .with_metadata("action", json!("initial_buy"))
+                    .with_metadata("target_ratio", json!(data.target_ratio)),
             );
         }
 
@@ -578,23 +578,23 @@ impl Us3xLeverageStrategy {
                 }
 
                 if data.etf_type == EtfType::Leverage {
-                    let symbol = match self.symbols.iter().find(|s| s.base == *ticker) {
+                    let ticker = match self.tickers.iter().find(|s| s.starts_with(&format!("{}/", ticker))) {
                         Some(s) => s.clone(),
                         None => continue,
                     };
-
-                    signals.push(
-                        Signal::exit("us_3x_leverage", symbol, Side::Sell)
-                            .with_strength(1.0)
-                            .with_prices(Some(data.current_price), None, None)
-                            .with_metadata("action", json!("drawdown_exit"))
-                            .with_metadata("drawdown_pct", json!(drawdown)),
-                    );
 
                     warn!(
                         ticker = %ticker,
                         drawdown = %format!("{:.1}%", drawdown),
                         "최대 드로다운 도달 - 레버리지 청산"
+                    );
+
+                    signals.push(
+                        Signal::exit("us_3x_leverage", ticker, Side::Sell)
+                            .with_strength(1.0)
+                            .with_prices(Some(data.current_price), None, None)
+                            .with_metadata("action", json!("drawdown_exit"))
+                            .with_metadata("drawdown_pct", json!(drawdown)),
                     );
                 }
             }
@@ -642,8 +642,8 @@ impl Strategy for Us3xLeverageStrategy {
 
         // ETF 데이터 초기화
         for alloc in &lev_config.allocations {
-            let symbol = Symbol::stock(&alloc.ticker, "USD");
-            self.symbols.push(symbol);
+            let ticker = format!("{}/USD", alloc.ticker);
+            self.tickers.push(ticker);
             self.etf_data.insert(
                 alloc.ticker.clone(),
                 EtfData::new(
@@ -669,11 +669,11 @@ impl Strategy for Us3xLeverageStrategy {
             return Ok(vec![]);
         }
 
-        // base 심볼만 추출 (TQQQ/USD -> TQQQ)
-        let symbol_str = data.symbol.base.clone();
+        // base 티커만 추출 (TQQQ/USD -> TQQQ)
+        let ticker_str = data.ticker.clone();
 
         // 등록된 ETF인지 확인
-        if !self.etf_data.contains_key(&symbol_str) {
+        if !self.etf_data.contains_key(&ticker_str) {
             return Ok(vec![]);
         }
 
@@ -690,7 +690,7 @@ impl Strategy for Us3xLeverageStrategy {
         }
 
         // ETF 데이터 업데이트
-        if let Some(etf) = self.etf_data.get_mut(&symbol_str) {
+        if let Some(etf) = self.etf_data.get_mut(&ticker_str) {
             etf.update(close);
         }
 
@@ -736,7 +736,7 @@ impl Strategy for Us3xLeverageStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let ticker = order.symbol.to_string();
+        let ticker = order.ticker.to_string();
 
         if let Some(etf) = self.etf_data.get_mut(&ticker) {
             match order.side {
@@ -777,7 +777,7 @@ impl Strategy for Us3xLeverageStrategy {
         &mut self,
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let ticker = position.symbol.to_string();
+        let ticker = position.ticker.to_string();
 
         if let Some(etf) = self.etf_data.get_mut(&ticker) {
             etf.holdings = position.quantity;
@@ -874,7 +874,7 @@ register_strategy! {
     name: "미국 3배 레버리지",
     description: "미국 3배 레버리지 ETF 전략입니다.",
     timeframe: "1d",
-    symbols: ["TQQQ", "SQQQ", "UPRO", "SPXU", "TMF", "TMV"],
+    tickers: ["TQQQ", "SQQQ", "UPRO", "SPXU", "TMF", "TMV"],
     category: Daily,
     markets: [Stock],
     type: Us3xLeverageStrategy

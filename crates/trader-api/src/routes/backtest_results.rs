@@ -62,6 +62,9 @@ pub struct SaveBacktestResultRequest {
     pub trades: serde_json::Value,
     /// 성공 여부
     pub success: bool,
+    /// 백테스트에 사용된 타임프레임 설정 (다중 TF 백테스트 시)
+    #[serde(default)]
+    pub timeframes_used: Option<serde_json::Value>,
 }
 
 /// 저장된 결과 응답 (Repository DTO 재사용).
@@ -224,6 +227,7 @@ pub async fn save_backtest_result(
         equity_curve: request.equity_curve,
         trades: request.trades,
         success: request.success,
+        timeframes_used: request.timeframes_used,
     };
 
     match BacktestResultsRepository::save(pool, input).await {

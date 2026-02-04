@@ -29,10 +29,10 @@ use trader_api::websocket::{
     WsState,
 };
 use trader_core::crypto::CredentialEncryptor;
-use trader_core::Symbol;
 use trader_data::cache::CachedHistoricalDataProvider;
-use trader_exchange::connector::kis::{KisConfig, KisKrClient, KisOAuth, KisUsClient};
+use trader_exchange::connector::kis::{KisAccountType, KisConfig, KisKrClient, KisOAuth, KisUsClient};
 use trader_exchange::KisKrProvider;
+use uuid::Uuid;
 use trader_exchange::stream::UnifiedMarketStream;
 use trader_exchange::traits::MarketStream;
 use trader_execution::{ConversionConfig, OrderExecutor};
@@ -196,8 +196,7 @@ async fn start_market_data_source(
 
     // 구독 설정 (연결 전에 설정해야 함)
     for code in &kr_symbols {
-        let symbol = Symbol::stock(code, "KRW");
-        if let Err(e) = stream.subscribe_ticker(&symbol).await {
+        if let Err(e) = stream.subscribe_ticker(code).await {
             warn!(symbol = %code, error = %e, "Failed to subscribe KR symbol");
         } else {
             info!(symbol = %code, "Subscribed to KR ticker");
@@ -205,8 +204,7 @@ async fn start_market_data_source(
     }
 
     for ticker in &us_symbols {
-        let symbol = Symbol::stock(ticker, "USD");
-        if let Err(e) = stream.subscribe_ticker(&symbol).await {
+        if let Err(e) = stream.subscribe_ticker(ticker).await {
             warn!(symbol = %ticker, error = %e, "Failed to subscribe US symbol");
         } else {
             info!(symbol = %ticker, "Subscribed to US ticker");
@@ -281,6 +279,7 @@ fn create_kis_clients() -> (Option<KisKrClient>, Option<KisUsClient>) {
     }
 }
 
+/// Active credential에서 KIS 클라이언트 생성.
 /// AppState 초기화.
 async fn create_app_state(config: &ServerConfig) -> AppState {
     // 전략 엔진 생성
@@ -358,7 +357,44 @@ async fn create_app_state(config: &ServerConfig) -> AppState {
     }
 
     // KIS 클라이언트 설정 및 ExchangeProvider 생성
-    if let Some(kr_client) = kis_kr {
+    // 우선순위: 1) DB active credential, 2) 환경변수
+    let kis_kr_to_use = if let (Some(pool), Some(encryptor)) = (&state.db_pool, &state.encryptor) {
+        // DB에서 active credential 조회 및 클라이언트 생성 (Single Source of Truth)
+        use trader_api::repository::{create_kis_kr_client_from_credential, get_active_credential_id};
+
+        match get_active_credential_id(pool).await {
+            Ok(credential_id) => {
+                match create_kis_kr_client_from_credential(pool, encryptor, credential_id).await {
+                    Ok(kr_client) => {
+                        info!("Using KIS client from active credential (DB): {}", credential_id);
+                        // Repository는 Arc<KisKrClient>를 반환하므로 Arc::try_unwrap 사용
+                        match Arc::try_unwrap(kr_client) {
+                            Ok(client) => Some(client),
+                            Err(arc) => {
+                                // Arc가 공유되고 있으면 clone 불가, 새로 생성해야 함
+                                warn!("KisKrClient Arc is shared, cannot unwrap");
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to create KIS client from credential: {}", e);
+                        info!("Falling back to environment variables");
+                        kis_kr
+                    }
+                }
+            }
+            Err(e) => {
+                info!("No active credential found in DB ({}), falling back to environment variables", e);
+                kis_kr
+            }
+        }
+    } else {
+        // DB 또는 encryptor가 없으면 환경변수 사용
+        kis_kr
+    };
+
+    if let Some(kr_client) = kis_kr_to_use {
         // KisKrClient를 Arc로 래핑하여 공유
         let kr_client_arc = Arc::new(kr_client);
 
@@ -366,10 +402,6 @@ async fn create_app_state(config: &ServerConfig) -> AppState {
         let kr_provider = KisKrProvider::new(kr_client_arc.clone());
         state = state.with_exchange_provider(Arc::new(kr_provider));
 
-        // AppState에는 별도의 Arc<KisKrClient>로 저장
-        // 참고: with_kis_kr_client는 KisKrClient를 직접 받으므로
-        // Arc::try_unwrap으로 추출하거나 별도 처리 필요
-        // 현재는 ExchangeProvider만 사용하고, 직접 클라이언트 접근은 생략
         info!("KisKrProvider 설정 완료 (ExchangeProvider)");
     }
 
@@ -508,10 +540,46 @@ fn create_router(
         .layer(cors_layer())
 }
 
+/// OpenAPI 스펙 내보내기 처리.
+///
+/// `--export-openapi` 플래그 또는 `EXPORT_OPENAPI` 환경변수가 설정된 경우
+/// OpenAPI JSON 스펙을 stdout으로 출력하고 종료합니다.
+fn handle_export_openapi() -> Result<(), Box<dyn std::error::Error>> {
+    use trader_api::openapi::ApiDoc;
+    use utoipa::OpenApi as _;
+
+    // 명령줄 인자에서 --export-openapi 플래그 확인
+    let export_flag = std::env::args().any(|arg| arg == "--export-openapi");
+
+    // 환경변수 EXPORT_OPENAPI 확인
+    let export_env = std::env::var("EXPORT_OPENAPI")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+
+    if export_flag || export_env {
+        // OpenAPI 스펙 생성
+        let spec = ApiDoc::openapi();
+
+        // JSON으로 직렬화
+        let json = serde_json::to_string_pretty(&spec)?;
+
+        // stdout으로 출력
+        println!("{}", json);
+
+        // 프로세스 종료
+        std::process::exit(0);
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // .env 파일 로드 (있는 경우)
     let _ = dotenvy::dotenv();
+
+    // OpenAPI 내보내기 처리 (서버 시작 전)
+    handle_export_openapi()?;
 
     // tracing 초기화
     tracing_subscriber::fmt()

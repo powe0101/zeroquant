@@ -316,7 +316,7 @@ mod tests {
         let time =
             Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::days(index);
         Kline {
-            symbol: Symbol::crypto("BTC", "USDT"),
+            ticker: "BTC/USDT".to_string(),
             timeframe: Timeframe::D1,
             open_time: time,
             open,

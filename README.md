@@ -29,6 +29,11 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 | 한국/미국 주식 | 한국투자증권 (KIS) | 국내/해외 주식, 모의투자 지원 |
 
 ### 📊 데이터 & 분석
+- **다중 데이터 소스**: KRX OPEN API (국내), Yahoo Finance (해외/암호화폐)
+  - 데이터 프로바이더 토글 지원 (`PROVIDER_KRX_API_ENABLED`, `PROVIDER_YAHOO_ENABLED`)
+- **다중 타임프레임 분석**: 여러 시간대 데이터 동시 분석 (1분~월봉)
+  - Look-Ahead Bias 방지 자동 정렬
+  - 크로스 타임프레임 시그널 결합
 - **실시간 시세**: WebSocket 기반 실시간 가격/호가/체결
 - **과거 데이터**: TimescaleDB 시계열 저장, 백테스팅 지원
 - **데이터셋 관리**: Yahoo Finance 데이터 다운로드, 캔들 데이터 CRUD
@@ -41,6 +46,8 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 - **Global Score Ranking**: 7개 팩터 기반 종합 종목 평가
   - VolumeQuality, Momentum, ValueFactor, RouteState 등
   - 페널티 시스템 (LiquidityGate, MarketRegime 필터)
+- **7Factor Scoring**: 정규화된 다요인 분석 (0-100 점수)
+  - Momentum, Value, Quality, Volatility, Liquidity, Growth, Sentiment
 - **RouteState Calculator**: 진입 타이밍 자동 판단
   - ATTACK (진입 적기), ARMED (대기), WAIT (관찰), OVERHEAT (과열)
   - TTM Squeeze, 모멘텀, RSI, Range 종합 분석
@@ -100,7 +107,7 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 |------|------|
 | **Volatility Breakout** | 변동성 돌파 (래리 윌리엄스) |
 | **SMA Crossover** | 이동평균선 교차 추세 추종 |
-| **Snow** | TIP 모멘텀 기반 공격/안전 자산 전환 |
+| **Compound Momentum** | 모멘텀 기반 공격/안전 자산 전환 |
 | **Stock Rotation** | 모멘텀 기반 종목 로테이션 |
 | **Market Interest Day** | 거래량 급증 종목 단타 |
 | **Candle Pattern** | 35개 캔들스틱 패턴 인식 |
@@ -108,14 +115,14 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 ### 월간 자산배분 전략
 | 전략 | 설명 |
 |------|------|
-| **All Weather** | 레이 달리오 올웨더 포트폴리오 (US/KR) |
-| **HAA** | Hybrid Asset Allocation (카나리아 자산 기반) |
-| **XAA** | eXtended Asset Allocation (TOP 4 선택) |
-| **Simple Power** | TQQQ/SCHD/PFIX/TMF 조합 + MA 필터 |
+| **All Weather** | 레이 달리오 영감의 전천후 포트폴리오 (US/KR) |
+| **HAA** | Hierarchical Asset Allocation (계층적 자산배분) |
+| **XAA** | Extended Asset Allocation (확장 자산배분) |
+| **Momentum Power** | 모멘텀 기반 ETF 조합 + MA 필터 |
 | **Market Cap Top** | 시가총액 상위 종목 월간 리밸런싱 |
 | **BAA** | Bold Asset Allocation (공격/수비 모드 전환) |
 | **Dual Momentum** | 절대/상대 모멘텀 기반 자산배분 |
-| **Pension Bot** | 연금 계좌 자동 운용 (MDD 최소화) |
+| **Pension Portfolio** | 연금 계좌 자동 운용 (MDD 최소화) |
 
 ### 섹터/레버리지 전략
 | 전략 | 설명 |
@@ -127,10 +134,10 @@ ZeroQuant는 암호화폐와 주식 시장에서 **24/7 자동화된 거래**를
 ### 국내 주식 전략
 | 전략 | 설명 |
 |------|------|
-| **Kosdaq Fire Rain** | 코스닥 단타 변동성 돌파 |
-| **KOSPI Bothside** | 코스피 롱숏 양방향 매매 |
-| **Small Cap Quant** | 소형주 퀀트 팩터 전략 |
-| **Stock Gugan** | 구간별 분할 매매 전략 |
+| **Momentum Surge** | 급등 모멘텀 단타 변동성 돌파 |
+| **Market Both Side** | 시장 롱숏 양방향 매매 |
+| **Small Cap Factor** | 소형주 팩터 전략 |
+| **Range Trading** | 박스권 구간별 분할 매매 전략 |
 
 ## 전략 개발 가이드
 

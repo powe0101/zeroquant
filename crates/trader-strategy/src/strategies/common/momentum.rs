@@ -278,7 +278,7 @@ impl MomentumCalculator {
     ) -> Vec<(String, MomentumResult)> {
         let mut results: Vec<(String, MomentumResult)> = asset_prices
             .iter()
-            .map(|(symbol, prices)| (symbol.clone(), self.calculate(prices)))
+            .map(|(ticker, prices)| (ticker.clone(), self.calculate(prices)))
             .filter(|(_, result)| result.is_valid)
             .collect();
 

@@ -13,6 +13,7 @@ import {
   Database,
   ListFilter,
   BookOpen,
+  Trophy,
 } from 'lucide-solid'
 
 interface LayoutProps {
@@ -26,6 +27,7 @@ const navItems = [
   { path: '/simulation', icon: Play, label: '시뮬레이션' },
   { path: '/dataset', icon: Database, label: '데이터셋' },
   { path: '/screening', icon: ListFilter, label: '스크리닝' },
+  { path: '/ranking', icon: Trophy, label: '종목 랭킹' },
   { path: '/ml-training', icon: Brain, label: 'ML 훈련' },
   { path: '/journal', icon: BookOpen, label: '매매일지' },
   { path: '/settings', icon: Settings, label: '설정' },

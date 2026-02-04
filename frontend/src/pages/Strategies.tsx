@@ -1,38 +1,53 @@
-import { createSignal, createResource, For, Show } from 'solid-js'
+import { createSignal, createResource, createMemo, For, Show } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import { useNavigate } from '@solidjs/router'
-import { Play, Pause, Settings, TrendingUp, TrendingDown, AlertCircle, RefreshCw, X, BarChart3, Activity, Trash2, Copy } from 'lucide-solid'
+import { Play, Pause, Settings, TrendingUp, TrendingDown, RefreshCw, X, BarChart3, Activity, Trash2, Copy } from 'lucide-solid'
+import { PageLoader, ErrorState, EmptyState, FilterPanel, Button, Card, CardContent } from '../components/ui'
 import { getStrategies, startStrategy, stopStrategy, getBacktestStrategies, deleteStrategy, cloneStrategy } from '../api/client'
 import type { Strategy } from '../types'
 import { useToast } from '../components/Toast'
 import { formatCurrency, getDefaultTimeframe } from '../utils/format'
 import { AddStrategyModal } from '../components/AddStrategyModal'
-import { EditStrategyModal } from '../components/EditStrategyModal'
+import { SDUIEditModal } from '../components/SDUIEditModal'
 import { SymbolDisplay } from '../components/SymbolDisplay'
+
+// ==================== 타입 정의 ====================
+
+/** 모달 상태 타입 */
+interface ModalState {
+  add: { open: boolean }
+  delete: { open: boolean; strategy: Strategy | null; isLoading: boolean }
+  clone: { open: boolean; strategy: Strategy | null; newName: string; isLoading: boolean }
+  edit: { open: boolean; strategyId: string | null; strategyType: string | null }
+}
+
+/** UI 상태 타입 */
+interface UIState {
+  filter: 'all' | 'running' | 'stopped'
+  togglingId: string | null
+}
+
+// ==================== 초기 상태 ====================
+
+const initialModalState: ModalState = {
+  add: { open: false },
+  delete: { open: false, strategy: null, isLoading: false },
+  clone: { open: false, strategy: null, newName: '', isLoading: false },
+  edit: { open: false, strategyId: null, strategyType: null },
+}
+
+const initialUIState: UIState = {
+  filter: 'all',
+  togglingId: null,
+}
 
 export function Strategies() {
   const toast = useToast()
   const navigate = useNavigate()
-  const [filter, setFilter] = createSignal<'all' | 'running' | 'stopped'>('all')
-  const [togglingId, setTogglingId] = createSignal<string | null>(null)
 
-  // ==================== 전략 추가 모달 상태 ====================
-  const [showAddModal, setShowAddModal] = createSignal(false)
-
-  // ==================== 전략 삭제 모달 상태 ====================
-  const [showDeleteModal, setShowDeleteModal] = createSignal(false)
-  const [deletingStrategy, setDeletingStrategy] = createSignal<Strategy | null>(null)
-  const [isDeleting, setIsDeleting] = createSignal(false)
-
-  // ==================== 전략 복제 모달 상태 ====================
-  const [showCloneModal, setShowCloneModal] = createSignal(false)
-  const [cloningStrategy, setCloningStrategy] = createSignal<Strategy | null>(null)
-  const [cloneName, setCloneName] = createSignal('')
-  const [isCloning, setIsCloning] = createSignal(false)
-
-  // ==================== 전략 편집 모달 상태 ====================
-  const [showEditModal, setShowEditModal] = createSignal(false)
-  const [editingStrategyId, setEditingStrategyId] = createSignal<string | null>(null)
-  const [editingStrategyType, setEditingStrategyType] = createSignal<string | null>(null)
+  // ==================== createStore 기반 상태 관리 ====================
+  const [modals, setModals] = createStore<ModalState>(initialModalState)
+  const [ui, setUI] = createStore<UIState>(initialUIState)
 
   // 전략 템플릿 목록 가져오기
   const [strategyTemplates] = createResource(async () => {
@@ -43,107 +58,106 @@ export function Strategies() {
   // 전략 목록 가져오기
   const [strategies, { refetch }] = createResource(getStrategies)
 
-  // ==================== 전략 편집 기능 ====================
+  // ==================== 파생 상태 (createMemo) ====================
 
-  // 편집 모달 열기
-  const handleEditStrategy = (strategy: Strategy) => {
-    setEditingStrategyId(strategy.id)
-    setEditingStrategyType(strategy.strategyType)
-    setShowEditModal(true)
+  /** 필터링된 전략 목록 - 필터 변경 시에만 재계산 */
+  const filteredStrategies = createMemo(() => {
+    const data = strategies()
+    if (!data) return []
+    const f = ui.filter
+    if (f === 'all') return data
+    if (f === 'running') return data.filter((s) => s.status === 'Running')
+    return data.filter((s) => s.status === 'Stopped' || s.status === 'Error')
+  })
+
+  // ==================== 모달 헬퍼 함수 ====================
+
+  /** 편집 모달 열기 */
+  const openEditModal = (strategy: Strategy) => {
+    setModals('edit', {
+      open: true,
+      strategyId: strategy.id,
+      strategyType: strategy.strategyType,
+    })
   }
 
-  // 편집 모달 닫기
+  /** 편집 모달 닫기 */
   const closeEditModal = () => {
-    setShowEditModal(false)
-    setEditingStrategyId(null)
-    setEditingStrategyType(null)
+    setModals('edit', { open: false, strategyId: null, strategyType: null })
   }
 
-  // ==================== 전략 삭제 기능 ====================
-
-  // 삭제 모달 열기
-  const handleDeleteClick = (strategy: Strategy) => {
-    setDeletingStrategy(strategy)
-    setShowDeleteModal(true)
+  /** 삭제 모달 열기 */
+  const openDeleteModal = (strategy: Strategy) => {
+    setModals('delete', { open: true, strategy, isLoading: false })
   }
 
-  // 삭제 확인
+  /** 삭제 확인 */
   const handleConfirmDelete = async () => {
-    const strategy = deletingStrategy()
+    const strategy = modals.delete.strategy
     if (!strategy) return
 
-    setIsDeleting(true)
+    setModals('delete', 'isLoading', true)
     try {
       await deleteStrategy(strategy.id)
       toast.success('전략 삭제 완료', `"${strategy.name}" 전략이 삭제되었습니다`)
-      setShowDeleteModal(false)
-      setDeletingStrategy(null)
+      setModals('delete', { open: false, strategy: null, isLoading: false })
       refetch()
     } catch (error) {
       console.error('Failed to delete strategy:', error)
       const errorMsg = error instanceof Error ? error.message : '전략 삭제에 실패했습니다'
       toast.error('전략 삭제 실패', errorMsg)
-    } finally {
-      setIsDeleting(false)
+      setModals('delete', 'isLoading', false)
     }
   }
 
-  // 삭제 모달 닫기
+  /** 삭제 모달 닫기 */
   const closeDeleteModal = () => {
-    setShowDeleteModal(false)
-    setDeletingStrategy(null)
+    setModals('delete', { open: false, strategy: null, isLoading: false })
   }
 
-  // ==================== 전략 복제 기능 ====================
-
-  // 복제 모달 열기
-  const handleCloneClick = (strategy: Strategy) => {
-    setCloningStrategy(strategy)
-    setCloneName(`${strategy.name} (복사본)`)
-    setShowCloneModal(true)
+  /** 복제 모달 열기 */
+  const openCloneModal = (strategy: Strategy) => {
+    setModals('clone', {
+      open: true,
+      strategy,
+      newName: `${strategy.name} (복사본)`,
+      isLoading: false,
+    })
   }
 
-  // 복제 확인
+  /** 복제 확인 */
   const handleConfirmClone = async () => {
-    const strategy = cloningStrategy()
-    const name = cloneName().trim()
+    const strategy = modals.clone.strategy
+    const name = modals.clone.newName.trim()
     if (!strategy || !name) return
 
-    setIsCloning(true)
+    setModals('clone', 'isLoading', true)
     try {
       const result = await cloneStrategy(strategy.id, name)
       toast.success('전략 복제 완료', `"${result.name || name}" 전략이 생성되었습니다`)
-      setShowCloneModal(false)
-      setCloningStrategy(null)
-      setCloneName('')
+      setModals('clone', { open: false, strategy: null, newName: '', isLoading: false })
       refetch()
     } catch (error) {
       console.error('Failed to clone strategy:', error)
       const errorMsg = error instanceof Error ? error.message : '전략 복제에 실패했습니다'
       toast.error('전략 복제 실패', errorMsg)
-    } finally {
-      setIsCloning(false)
+      setModals('clone', 'isLoading', false)
     }
   }
 
-  // 복제 모달 닫기
+  /** 복제 모달 닫기 */
   const closeCloneModal = () => {
-    setShowCloneModal(false)
-    setCloningStrategy(null)
-    setCloneName('')
+    setModals('clone', { open: false, strategy: null, newName: '', isLoading: false })
   }
 
-  const filteredStrategies = () => {
-    const data = strategies()
-    if (!data) return []
-    const f = filter()
-    if (f === 'all') return data
-    if (f === 'running') return data.filter((s) => s.status === 'Running')
-    return data.filter((s) => s.status === 'Stopped' || s.status === 'Error')
-  }
+  /** 추가 모달 열기/닫기 */
+  const openAddModal = () => setModals('add', 'open', true)
+  const closeAddModal = () => setModals('add', 'open', false)
+
+  // ==================== 전략 토글 ====================
 
   const toggleStrategy = async (strategy: Strategy) => {
-    setTogglingId(strategy.id)
+    setUI('togglingId', strategy.id)
     const isRunning = strategy.status === 'Running'
     try {
       if (isRunning) {
@@ -160,89 +174,91 @@ export function Strategies() {
       const errorMsg = error instanceof Error ? error.message : '전략 상태 변경에 실패했습니다'
       toast.error(isRunning ? '전략 중지 실패' : '전략 시작 실패', errorMsg)
     } finally {
-      setTogglingId(null)
+      setUI('togglingId', null)
     }
   }
 
-  const runningCount = () => strategies()?.filter((s) => s.status === 'Running').length || 0
-  const stoppedCount = () => strategies()?.filter((s) => s.status !== 'Running').length || 0
+  // ==================== 파생 상태 (createMemo) - 카운트 ====================
+
+  /** 실행 중인 전략 수 */
+  const runningCount = createMemo(() =>
+    strategies()?.filter((s) => s.status === 'Running').length || 0
+  )
+
+  /** 중지된 전략 수 */
+  const stoppedCount = createMemo(() =>
+    strategies()?.filter((s) => s.status !== 'Running').length || 0
+  )
 
   return (
     <div class="space-y-6">
-      {/* Header */}
-      <div class="flex items-center justify-between">
-        <div class="flex gap-2">
-          <button
-            class={`px-4 py-2 rounded-lg font-medium transition-colors ${
-              filter() === 'all'
-                ? 'bg-[var(--color-primary)] text-white'
-                : 'bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-            }`}
-            onClick={() => setFilter('all')}
-          >
-            전체 ({strategies()?.length || 0})
-          </button>
-          <button
-            class={`px-4 py-2 rounded-lg font-medium transition-colors ${
-              filter() === 'running'
-                ? 'bg-[var(--color-primary)] text-white'
-                : 'bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-            }`}
-            onClick={() => setFilter('running')}
-          >
-            실행 중 ({runningCount()})
-          </button>
-          <button
-            class={`px-4 py-2 rounded-lg font-medium transition-colors ${
-              filter() === 'stopped'
-                ? 'bg-[var(--color-primary)] text-white'
-                : 'bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-            }`}
-            onClick={() => setFilter('stopped')}
-          >
-            중지됨 ({stoppedCount()})
-          </button>
-        </div>
+      {/* 헤더 - 필터 버튼 + 액션 버튼 */}
+      <FilterPanel>
+        <div class="flex items-center justify-between w-full">
+          {/* 필터 버튼 그룹 */}
+          <div class="flex gap-2">
+            <Button
+              variant={ui.filter === 'all' ? 'primary' : 'secondary'}
+              onClick={() => setUI('filter', 'all')}
+            >
+              전체 ({strategies()?.length || 0})
+            </Button>
+            <Button
+              variant={ui.filter === 'running' ? 'primary' : 'secondary'}
+              onClick={() => setUI('filter', 'running')}
+            >
+              🟢 실행 중 ({runningCount()})
+            </Button>
+            <Button
+              variant={ui.filter === 'stopped' ? 'primary' : 'secondary'}
+              onClick={() => setUI('filter', 'stopped')}
+            >
+              ⏸️ 중지됨 ({stoppedCount()})
+            </Button>
+          </div>
 
-        <div class="flex gap-2">
-          <button
-            class="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg font-medium hover:bg-[var(--color-primary)]/90 transition-colors"
-            onClick={() => setShowAddModal(true)}
-          >
-            + 전략 추가
-          </button>
-          <button
-            class="px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text-muted)] rounded-lg font-medium hover:text-[var(--color-text)] transition-colors flex items-center gap-2"
-            onClick={() => refetch()}
-          >
-            <RefreshCw class={`w-4 h-4 ${strategies.loading ? 'animate-spin' : ''}`} />
-            새로고침
-          </button>
+          {/* 액션 버튼 그룹 */}
+          <div class="flex gap-2">
+            <Button variant="primary" onClick={openAddModal}>
+              ➕ 전략 추가
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => refetch()}
+              loading={strategies.loading}
+            >
+              🔄 새로고침
+            </Button>
+          </div>
         </div>
-      </div>
+      </FilterPanel>
 
-      {/* Loading State */}
+      {/* 로딩 상태 - 공통 컴포넌트 사용 */}
       <Show when={strategies.loading && !strategies()}>
-        <div class="flex items-center justify-center py-12">
-          <RefreshCw class="w-8 h-8 animate-spin text-[var(--color-primary)]" />
-        </div>
+        <PageLoader message="전략 목록을 불러오는 중..." />
       </Show>
 
-      {/* Error State */}
+      {/* 에러 상태 - 공통 컴포넌트 사용 */}
       <Show when={strategies.error}>
-        <div class="flex items-center justify-center py-12 text-red-500">
-          <AlertCircle class="w-6 h-6 mr-2" />
-          전략 목록을 불러오는데 실패했습니다
-        </div>
+        <ErrorState
+          title="데이터 로드 실패"
+          message="전략 목록을 불러오는데 실패했습니다"
+          onRetry={() => refetch()}
+        />
       </Show>
 
-      {/* Empty State */}
+      {/* 빈 상태 - 공통 컴포넌트 사용 */}
       <Show when={!strategies.loading && !strategies.error && (!strategies() || strategies()?.length === 0)}>
-        <div class="flex flex-col items-center justify-center py-12 text-[var(--color-text-muted)]">
-          <Settings class="w-12 h-12 mb-4 opacity-50" />
-          <p class="text-lg mb-2">등록된 전략이 없습니다</p>
-          <p class="text-sm">새로운 전략을 추가해 자동 매매를 시작하세요</p>
-        </div>
+        <EmptyState
+          icon="⚙️"
+          title="등록된 전략이 없습니다"
+          description="새로운 전략을 추가해 자동 매매를 시작하세요"
+          action={
+            <Button variant="primary" onClick={openAddModal}>
+              + 전략 추가
+            </Button>
+          }
+        />
       </Show>
 
       {/* Strategies Grid */}
@@ -293,13 +309,13 @@ export function Strategies() {
                     <button
                       class="p-2 rounded-lg hover:bg-[var(--color-surface-light)] transition-colors disabled:opacity-50"
                       onClick={() => toggleStrategy(strategy)}
-                      disabled={togglingId() === strategy.id}
+                      disabled={ui.togglingId === strategy.id}
                       title={strategy.status === 'Running' ? '전략 중지' : '전략 시작'}
                     >
-                      <Show when={togglingId() === strategy.id}>
+                      <Show when={ui.togglingId === strategy.id}>
                         <RefreshCw class="w-5 h-5 animate-spin text-[var(--color-text-muted)]" />
                       </Show>
-                      <Show when={togglingId() !== strategy.id}>
+                      <Show when={ui.togglingId !== strategy.id}>
                         <Show
                           when={strategy.status === 'Running'}
                           fallback={<Play class="w-5 h-5 text-green-500" />}
@@ -310,21 +326,21 @@ export function Strategies() {
                     </button>
                     <button
                       class="p-2 rounded-lg hover:bg-[var(--color-surface-light)] transition-colors"
-                      onClick={() => handleEditStrategy(strategy)}
+                      onClick={() => openEditModal(strategy)}
                       title="전략 설정"
                     >
                       <Settings class="w-5 h-5 text-[var(--color-text-muted)]" />
                     </button>
                     <button
                       class="p-2 rounded-lg hover:bg-blue-500/10 transition-colors"
-                      onClick={() => handleCloneClick(strategy)}
+                      onClick={() => openCloneModal(strategy)}
                       title="전략 복제"
                     >
                       <Copy class="w-5 h-5 text-blue-400" />
                     </button>
                     <button
                       class="p-2 rounded-lg hover:bg-red-500/10 transition-colors"
-                      onClick={() => handleDeleteClick(strategy)}
+                      onClick={() => openDeleteModal(strategy)}
                       title="전략 삭제"
                     >
                       <Trash2 class="w-5 h-5 text-red-400" />
@@ -422,27 +438,26 @@ export function Strategies() {
         </div>
       </Show>
 
-      {/* ==================== 전략 편집 모달 ==================== */}
-      <EditStrategyModal
-        open={showEditModal()}
-        strategyId={editingStrategyId()}
-        strategyType={editingStrategyType()}
+      {/* ==================== 전략 편집 모달 (SDUI 기반) ==================== */}
+      <SDUIEditModal
+        open={modals.edit.open}
+        strategyId={modals.edit.strategyId}
+        strategyType={modals.edit.strategyType}
         onClose={closeEditModal}
         onSuccess={refetch}
-        templates={strategyTemplates() || []}
       />
 
       {/* ==================== 전략 추가 모달 ==================== */}
       <AddStrategyModal
-        open={showAddModal()}
-        onClose={() => setShowAddModal(false)}
+        open={modals.add.open}
+        onClose={closeAddModal}
         onSuccess={() => refetch()}
         templates={strategyTemplates() || []}
         templatesLoading={strategyTemplates.loading}
       />
 
       {/* ==================== 전략 삭제 확인 모달 ==================== */}
-      <Show when={showDeleteModal()}>
+      <Show when={modals.delete.open}>
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* 배경 오버레이 */}
           <div
@@ -475,7 +490,7 @@ export function Strategies() {
             {/* 본문 */}
             <div class="p-6">
               <p class="text-[var(--color-text)]">
-                <span class="font-semibold">"{deletingStrategy()?.name}"</span> 전략을 삭제하시겠습니까?
+                <span class="font-semibold">"{modals.delete.strategy?.name}"</span> 전략을 삭제하시겠습니까?
               </p>
               <p class="mt-2 text-sm text-[var(--color-text-muted)]">
                 이 작업은 되돌릴 수 없습니다. 전략과 관련된 모든 설정이 영구적으로 삭제됩니다.
@@ -487,19 +502,19 @@ export function Strategies() {
               <button
                 onClick={closeDeleteModal}
                 class="px-4 py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-                disabled={isDeleting()}
+                disabled={modals.delete.isLoading}
               >
                 취소
               </button>
               <button
                 onClick={handleConfirmDelete}
-                disabled={isDeleting()}
+                disabled={modals.delete.isLoading}
                 class="px-6 py-2 bg-red-500 text-white rounded-lg font-medium hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                <Show when={isDeleting()}>
+                <Show when={modals.delete.isLoading}>
                   <RefreshCw class="w-4 h-4 animate-spin" />
                 </Show>
-                {isDeleting() ? '삭제 중...' : '삭제'}
+                {modals.delete.isLoading ? '삭제 중...' : '삭제'}
               </button>
             </div>
           </div>
@@ -507,7 +522,7 @@ export function Strategies() {
       </Show>
 
       {/* ==================== 전략 복제 모달 ==================== */}
-      <Show when={showCloneModal()}>
+      <Show when={modals.clone.open}>
         <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* 배경 오버레이 */}
           <div
@@ -540,7 +555,7 @@ export function Strategies() {
             {/* 본문 */}
             <div class="p-6 space-y-4">
               <p class="text-[var(--color-text-muted)]">
-                <span class="font-semibold text-[var(--color-text)]">"{cloningStrategy()?.name}"</span> 전략을 복제합니다.
+                <span class="font-semibold text-[var(--color-text)]">"{modals.clone.strategy?.name}"</span> 전략을 복제합니다.
                 모든 설정이 새 전략으로 복사됩니다.
               </p>
 
@@ -550,8 +565,8 @@ export function Strategies() {
                 </label>
                 <input
                   type="text"
-                  value={cloneName()}
-                  onInput={(e) => setCloneName(e.currentTarget.value)}
+                  value={modals.clone.newName}
+                  onInput={(e) => setModals('clone', 'newName', e.currentTarget.value)}
                   placeholder="전략 이름을 입력하세요"
                   class="w-full px-4 py-2.5 bg-[var(--color-surface)] border border-[var(--color-surface-light)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
                 />
@@ -563,19 +578,19 @@ export function Strategies() {
               <button
                 onClick={closeCloneModal}
                 class="px-4 py-2 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-                disabled={isCloning()}
+                disabled={modals.clone.isLoading}
               >
                 취소
               </button>
               <button
                 onClick={handleConfirmClone}
-                disabled={isCloning() || !cloneName().trim()}
+                disabled={modals.clone.isLoading || !modals.clone.newName.trim()}
                 class="px-6 py-2 bg-[var(--color-primary)] text-white rounded-lg font-medium hover:bg-[var(--color-primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                <Show when={isCloning()}>
+                <Show when={modals.clone.isLoading}>
                   <RefreshCw class="w-4 h-4 animate-spin" />
                 </Show>
-                {isCloning() ? '복제 중...' : '복제'}
+                {modals.clone.isLoading ? '복제 중...' : '복제'}
               </button>
             </div>
           </div>
@@ -584,3 +599,5 @@ export function Strategies() {
     </div>
   )
 }
+
+export default Strategies

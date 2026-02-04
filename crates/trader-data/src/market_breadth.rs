@@ -63,8 +63,8 @@ impl MarketBreadthCalculator {
     /// 20일선 상회 종목 비율 (0.0 ~ 1.0)
     #[instrument(skip(self), level = "debug")]
     async fn calculate_market_ratio(&self, market: Option<&str>) -> Result<Decimal> {
-        // 20일 전 날짜 계산
-        let twenty_days_ago = Utc::now() - Duration::days(20);
+        // 35일 전 날짜 계산 (20 영업일을 커버하기 위해 주말/휴일 고려)
+        let thirty_five_days_ago = Utc::now() - Duration::days(35);
 
         // 시장별 필터 조건
         let market_filter = match market {
@@ -83,7 +83,7 @@ impl MarketBreadthCalculator {
                     o.symbol,
                     o.close,
                     ROW_NUMBER() OVER (PARTITION BY o.symbol ORDER BY o.open_time DESC) as rn
-                FROM ohlcv_cache o
+                FROM ohlcv o
                 JOIN symbol_info si ON o.symbol = si.yahoo_symbol
                 WHERE o.timeframe = '1d'
                   AND o.open_time >= $1
@@ -114,7 +114,7 @@ impl MarketBreadthCalculator {
         debug!(market = ?market, "Market Breadth 쿼리 실행");
 
         let row: (i64, i64) = sqlx::query_as(&query)
-            .bind(twenty_days_ago)
+            .bind(thirty_five_days_ago)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| DataError::QueryError(format!("Market Breadth 계산 실패: {}", e)))?;

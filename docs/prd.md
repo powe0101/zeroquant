@@ -1,6 +1,6 @@
 # ZeroQuant Trading Bot - PRD (Product Requirements Document)
 
-> 버전: 6.0 | 마지막 업데이트: 2026-02-01
+> 버전: 6.0 | 마지막 업데이트: 2026-02-04
 
 ---
 
@@ -365,7 +365,63 @@ trader fetch-symbols --market KR --save-csv
   trader sync-csv --codes data/krx_codes.csv
 ```
 
-#### 2.5.5 Fundamental 데이터 백그라운드 수집
+#### 2.5.5 데이터 프로바이더 이중화 ⭐ v0.6.0
+
+**목적**: KRX OPEN API + Yahoo Finance 이중화 구조로 데이터 소스 안정성 확보
+
+**이중화 구조**:
+| 시장 | Primary | Fallback | 비고 |
+|------|---------|----------|------|
+| 국내 주식 (KR) | KRX OPEN API | Yahoo Finance | API 승인 후 활성화 |
+| 해외 주식 (US) | Yahoo Finance | - | 500개 주요 종목 |
+| 암호화폐 (CRYPTO) | Yahoo Finance | - | USDT 페어 |
+
+**토글 환경변수**:
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `PROVIDER_KRX_API_ENABLED` | false | KRX API 활성화 (승인 필요) |
+| `PROVIDER_YAHOO_ENABLED` | true | Yahoo Finance 활성화 |
+
+**동작 방식**:
+- KRX API 비활성화 시 Yahoo Finance로 자동 Fallback
+- Yahoo Finance 심볼 자동 변환 (`005930` → `005930.KS`)
+- CRYPTO는 Yahoo Finance 전용 (`BTC-USD` 형식)
+
+#### 2.5.6 Standalone Data Collector (trader-collector) ⭐ v0.6.0
+
+**목적**: API 서버와 독립적으로 데이터를 수집하는 Standalone 바이너리
+
+**주요 기능**:
+- 심볼 동기화: KRX, Binance, Yahoo Finance에서 종목 목록 동기화
+- OHLCV 수집: 일봉 데이터 수집 (KRX API / Yahoo Finance)
+- 지표 동기화: RouteState, MarketRegime, TTM Squeeze 등 분석 지표
+- GlobalScore 동기화: 7Factor 기반 종합 점수 계산
+- KRX Fundamental: PER/PBR/배당수익률/섹터 정보 (KRX API 활성화 시)
+
+**CLI 명령어**:
+```bash
+# 개별 실행
+trader-collector sync-symbols       # 심볼 동기화
+trader-collector collect-ohlcv      # OHLCV 수집
+trader-collector sync-indicators    # 지표 동기화
+trader-collector sync-global-scores # GlobalScore 동기화
+
+# 전체 워크플로우
+trader-collector run-all            # 1회 실행
+trader-collector daemon             # 데몬 모드
+```
+
+**환경변수**:
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `OHLCV_BATCH_SIZE` | 50 | 배치당 심볼 수 |
+| `OHLCV_STALE_DAYS` | 1 | 갱신 기준 일수 |
+| `OHLCV_REQUEST_DELAY_MS` | 500 | API 요청 간 딜레이 |
+| `DAEMON_INTERVAL_MINUTES` | 60 | 데몬 워크플로우 주기 |
+
+**참조 문서**: `docs/collector_quick_start.md`
+
+#### 2.5.7 Fundamental 데이터 백그라운드 수집
 - **목적**: 서버 실행 중 백그라운드에서 Fundamental 데이터를 주기적으로 배치 수집
 - **수집 지표**:
   - 시가총액, 발행주식수, 52주 고저가
@@ -837,32 +893,43 @@ trader-analytics/src/indicators/
 
 | 전략 | 설명 | 대상 시장 |
 |------|------|---------|
-| Simple Power | 심플 파워 모멘텀 | US ETF |
-| HAA | 계층적 자산배분 | Global |
-| XAA | 확장 자산배분 | Global |
-| All Weather | 레이 달리오 올웨더 포트폴리오 | US ETF |
-| Snow | 스노우 모멘텀 | US ETF |
-| Stock Rotation | 종목 갈아타기 | KR/US |
+| Momentum Power | 단순 모멘텀 기반 자산배분 | US ETF |
+| HAA | 계층적 자산배분 (Hierarchical Asset Allocation) | Global |
+| XAA | 확장 자산배분 (Extended Asset Allocation) | Global |
+| All Weather | 레이 달리오 영감의 전천후 포트폴리오 | US ETF |
+| Compound Momentum | 복리 모멘텀 전략 | US ETF |
+| Stock Rotation | 종목 로테이션 | KR/US |
 | Market Cap Top | 시총 상위 N종목 | KR/US |
-| Market Interest Day | 시장 관심 단타 | KR |
-| Dual Momentum | 듀얼 모멘텀 | US |
-| BAA | Bold Asset Allocation | US |
-| US 3X Leverage | 3배 레버리지 ETF 전략 | US ETF |
-| Stock Gugan | 주식 구간 매매 | KR/US |
-| KOSDAQ Fire Rain | 코스닥 급등주 | KR |
+| Market Interest Day | 관심도 기반 단기 매매 | KR |
+| Dual Momentum | 절대/상대 모멘텀 조합 | US |
+| BAA | 공격적 자산배분 (Bold Asset Allocation) | US |
+| US 3X Leverage | 레버리지 ETF 전략 | US ETF |
+| Range Trading | 박스권 구간 매매 | KR/US |
+| Momentum Surge | 급등 모멘텀 포착 | KR |
 | Sector VB | 섹터 변동성 돌파 | KR |
-| KOSPI BothSide | 코스피 양방향 | KR |
-| Small Cap Quant | 소형주 퀀트 | KR |
-| Sector Momentum | 섹터 모멘텀 | KR/US |
+| Market Both Side | 시장 양방향 전략 | KR |
+| Small Cap Factor | 소형주 팩터 전략 | KR |
+| Sector Momentum | 섹터 로테이션 모멘텀 | KR/US |
+| Pension Portfolio | 연금 자산배분 전략 | KR/US |
 
 ### 6.3 추가 전략 (선택적)
 
 | 전략 | 설명 | 대상 시장 |
 |------|------|---------|
-| SPAC No-Loss | 스팩 무손실 전략 | KR |
-| All at Once ETF | ETF 일괄 투자 | KR |
-| Rotation Savings | 회전 적금 | KR |
-| Dual KrStock UsBond | 한국주식+미국채권 | KR+US |
+| SPAC Arbitrage | 스팩 차익거래 전략 | KR |
+| ETF Batch | ETF 일괄 투자 | KR |
+| Rotation Savings | 로테이션 적금 전략 | KR |
+| Cross Market | 국내주식+해외채권 혼합 | KR+US |
+
+### 6.4 전략 구현 원칙
+
+> **저작권 고려**: 모든 전략은 공개된 학술 논문, 기술적 분석 이론, 일반적인 투자 원칙에 기반하여 독자적으로 구현되었습니다.
+> 특정 상용 제품이나 유료 서비스의 로직을 직접 복제하지 않습니다.
+
+**구현 방식**:
+- 기술적 지표(RSI, MACD, BB 등)는 공개된 수식 기반 구현
+- 자산배분 전략은 일반적인 포트폴리오 이론 기반 (Modern Portfolio Theory 등)
+- 모멘텀 전략은 학술적으로 검증된 팩터 투자 원칙 적용
 
 ---
 
@@ -1297,7 +1364,117 @@ pub struct TriggerResult {
 
 ---
 
-### 2.11 호가 단위 관리 (Tick Size)
+### 2.11 관심종목 관리 (Watchlist) ⭐ v0.6.0
+
+#### 2.11.1 개요
+**목적**: 사용자별 관심종목 그룹을 생성하고 관리
+
+**핵심 기능**:
+- 관심종목 그룹 생성 (예: "반도체 관련주", "배당주")
+- 그룹별 종목 추가/삭제
+- 순서 관리 (드래그 앤 드롭)
+- 그룹 공유 (선택적)
+
+#### 2.11.2 데이터 모델
+```sql
+CREATE TABLE watchlist (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE watchlist_item (
+    id SERIAL PRIMARY KEY,
+    watchlist_id INTEGER REFERENCES watchlist(id),
+    symbol VARCHAR(20) NOT NULL,
+    sort_order INTEGER DEFAULT 0,
+    added_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### 2.11.3 API 엔드포인트
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/v1/watchlist` | GET | 관심종목 그룹 목록 |
+| `/api/v1/watchlist` | POST | 그룹 생성 |
+| `/api/v1/watchlist/{id}` | PUT | 그룹 수정 |
+| `/api/v1/watchlist/{id}` | DELETE | 그룹 삭제 |
+| `/api/v1/watchlist/{id}/items` | POST | 종목 추가 |
+| `/api/v1/watchlist/{id}/items/{symbol}` | DELETE | 종목 삭제 |
+
+---
+
+### 2.12 7Factor 종합 점수 시스템 ⭐ v0.6.0
+
+#### 2.12.1 개요
+**목적**: 7가지 팩터를 통합한 종합 스코어링 시스템
+
+**7개 팩터**:
+| 팩터 | 설명 | 지표 |
+|------|------|------|
+| **Momentum** | 가격 상승 추세 | ERS, MACD 기울기, RSI |
+| **Value** | 저평가 정도 | PER, PBR |
+| **Quality** | 재무 건전성 | ROE, 부채비율 |
+| **Volatility** | 변동성 안정성 | ATR, VolZ |
+| **Liquidity** | 유동성 | 거래대금 퍼센타일 |
+| **Growth** | 성장성 | 매출 성장률, 이익 성장률 |
+| **Sentiment** | 시장 심리 | 이격도, RSI 중립도 |
+
+#### 2.12.2 점수 계산
+- 각 팩터: 0~100점 정규화
+- 가중치 기반 종합 점수 (GLOBAL_SCORE)
+- 페널티 시스템 적용 (과열, RSI 이탈 등)
+
+#### 2.12.3 API 엔드포인트
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/v1/ranking/7factor/{ticker}` | GET | 개별 종목 7Factor |
+| `/api/v1/ranking/7factor/batch` | POST | 배치 조회 |
+
+---
+
+### 2.13 TypeScript 바인딩 자동 생성 (ts-rs) ⭐ v0.6.0
+
+#### 2.13.1 개요
+**목적**: Rust 타입 → TypeScript 타입 자동 변환으로 API 타입 안전성 확보
+
+**적용 대상**:
+- API 요청/응답 DTO
+- Domain 모델 (Signal, Order, Position 등)
+- 전략 스키마 타입
+
+**장점**:
+- 프론트엔드-백엔드 타입 불일치 방지
+- 자동 생성으로 수동 동기화 불필요
+- IDE 자동완성 지원
+
+#### 2.13.2 사용 방법
+```rust
+// Rust에서 TS 어노테이션
+#[derive(Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct StrategyResponse {
+    pub id: i32,
+    pub name: String,
+    pub running: bool,
+}
+```
+
+**생성 파일**: `frontend/src/types/generated/`
+
+**빌드 명령**:
+```bash
+cargo test --features ts-binding
+# 또는
+cargo build --features generate-ts
+```
+
+---
+
+### 2.14 호가 단위 관리 (Tick Size)
 
 #### 2.11.1 거래소별 틱 사이즈
 | 거래소 | 규칙 | 예시 |
@@ -1381,6 +1558,8 @@ Yahoo Finance / Binance / KIS
 *버전 이력: v1.0 → v2.0 → v2.1 → v3.0 → v4.0 → v4.1 → v5.0 → v5.1 → v5.2 → v6.0*
 
 **v6.0 변경사항:**
+- 데이터 프로바이더 이중화 (KRX API + Yahoo Finance) 요구사항 추가 (2.5.5)
+- Standalone Data Collector (trader-collector) 요구사항 추가 (2.5.6)
 - SignalMarker (신호 기록) 요구사항 추가 (2.2.5)
 - 신호 시각화 (캔들 차트 오버레이) 요구사항 추가 (2.2.6)
 - TTM Squeeze 지표 요구사항 추가 (2.7.5)
@@ -1392,6 +1571,9 @@ Yahoo Finance / Binance / KIS
 - 대시보드 위젯 요구사항 추가 (2.9.8)
 - MarketRegime (시장 추세 분류) 요구사항 추가 (2.10.4)
 - TRIGGER (진입 신호 강도) 요구사항 추가 (2.10.5)
+- 관심종목 관리 (Watchlist) 요구사항 추가 (2.11)
+- 7Factor 종합 점수 시스템 요구사항 추가 (2.12)
+- TypeScript 바인딩 자동 생성 (ts-rs) 요구사항 추가 (2.13)
 
 **v5.2 변경사항:**
 - 종목 랭킹 시스템 (Global Score) 요구사항 추가

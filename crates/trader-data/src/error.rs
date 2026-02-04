@@ -68,6 +68,14 @@ pub enum DataError {
     /// 파싱 오류
     #[error("Parse error: {0}")]
     ParseError(String),
+
+    /// 상장폐지된 심볼 (모든 데이터 소스 실패)
+    #[error("Symbol delisted: {0}")]
+    SymbolDelisted(String),
+
+    /// 지원되지 않는 거래소
+    #[error("Unsupported exchange: {0}")]
+    UnsupportedExchange(String),
 }
 
 impl From<sqlx::Error> for DataError {

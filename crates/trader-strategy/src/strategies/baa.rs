@@ -47,7 +47,7 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// BAA 버전 타입.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -73,34 +73,34 @@ pub enum BaaAssetType {
 /// 자산 정보.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaaAsset {
-    pub symbol: String,
+    pub ticker:  String,
     pub asset_type: BaaAssetType,
     pub description: String,
 }
 
 impl BaaAsset {
     pub fn new(
-        symbol: impl Into<String>,
+        ticker: impl Into<String>,
         asset_type: BaaAssetType,
         desc: impl Into<String>,
     ) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             asset_type,
             description: desc.into(),
         }
     }
 
-    pub fn canary(symbol: impl Into<String>, desc: impl Into<String>) -> Self {
-        Self::new(symbol, BaaAssetType::Canary, desc)
+    pub fn canary(ticker: impl Into<String>, desc: impl Into<String>) -> Self {
+        Self::new(ticker, BaaAssetType::Canary, desc)
     }
 
-    pub fn offensive(symbol: impl Into<String>, desc: impl Into<String>) -> Self {
-        Self::new(symbol, BaaAssetType::Offensive, desc)
+    pub fn offensive(ticker: impl Into<String>, desc: impl Into<String>) -> Self {
+        Self::new(ticker, BaaAssetType::Offensive, desc)
     }
 
-    pub fn defensive(symbol: impl Into<String>, desc: impl Into<String>) -> Self {
-        Self::new(symbol, BaaAssetType::Defensive, desc)
+    pub fn defensive(ticker: impl Into<String>, desc: impl Into<String>) -> Self {
+        Self::new(ticker, BaaAssetType::Defensive, desc)
     }
 }
 
@@ -238,7 +238,7 @@ impl BaaConfig {
 /// 자산별 모멘텀 데이터.
 #[derive(Debug, Clone)]
 struct AssetMomentum {
-    symbol: String,
+    ticker:  String,
     asset_type: BaaAssetType,
     current_price: Decimal,
     prices: Vec<Decimal>,
@@ -247,9 +247,9 @@ struct AssetMomentum {
 }
 
 impl AssetMomentum {
-    fn new(symbol: String, asset_type: BaaAssetType) -> Self {
+    fn new(ticker:  String, asset_type: BaaAssetType) -> Self {
         Self {
-            symbol,
+            ticker,
             asset_type,
             current_price: Decimal::ZERO,
             prices: Vec::new(),
@@ -306,7 +306,7 @@ impl AssetMomentum {
 /// BAA 전략.
 pub struct BaaStrategy {
     config: Option<BaaConfig>,
-    symbols: Vec<Symbol>,
+    tickers: Vec<String>,
     asset_data: HashMap<String, AssetMomentum>,
 
     /// 현재 모드 (공격/방어/혼합)
@@ -339,7 +339,7 @@ impl BaaStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             asset_data: HashMap::new(),
             mode: BaaMode::Defensive,
             last_rebalance_month: None,
@@ -463,7 +463,7 @@ impl BaaStrategy {
             .values()
             .filter(|a| a.asset_type == asset_type && a.is_positive_momentum())
             .max_by(|a, b| a.momentum_score.cmp(&b.momentum_score))
-            .map(|a| a.symbol.clone())
+            .map(|a| a.ticker.clone())
     }
 
     /// 목표 배분 계산.
@@ -478,28 +478,28 @@ impl BaaStrategy {
         match self.mode {
             BaaMode::Offensive => {
                 // 공격 자산 중 최상위 1개에 100%
-                if let Some(symbol) = self.select_top_asset(BaaAssetType::Offensive) {
-                    allocations.push(TargetAllocation::new(symbol.clone(), dec!(1.0)));
-                    info!(symbol = %symbol, "공격 모드: 공격 자산 선택");
+                if let Some(ticker) = self.select_top_asset(BaaAssetType::Offensive) {
+                    allocations.push(TargetAllocation::new(ticker.clone(), dec!(1.0)));
+                    info!(ticker = %ticker, "공격 모드: 공격 자산 선택");
                 }
             }
             BaaMode::Defensive => {
                 // 방어 자산 중 최상위 1개에 100%
-                if let Some(symbol) = self.select_top_asset(BaaAssetType::Defensive) {
-                    allocations.push(TargetAllocation::new(symbol.clone(), dec!(1.0)));
-                    info!(symbol = %symbol, "방어 모드: 방어 자산 선택");
+                if let Some(ticker) = self.select_top_asset(BaaAssetType::Defensive) {
+                    allocations.push(TargetAllocation::new(ticker.clone(), dec!(1.0)));
+                    info!(ticker = %ticker, "방어 모드: 방어 자산 선택");
                 }
             }
             BaaMode::Mixed => {
                 // 50% 공격 + 50% 방어
-                if let Some(off_symbol) = self.select_top_asset(BaaAssetType::Offensive) {
-                    allocations.push(TargetAllocation::new(off_symbol.clone(), dec!(0.5)));
-                    info!(symbol = %off_symbol, weight = 50, "혼합 모드: 공격 자산");
+                if let Some(off_ticker) = self.select_top_asset(BaaAssetType::Offensive) {
+                    allocations.push(TargetAllocation::new(off_ticker.clone(), dec!(0.5)));
+                    info!(ticker = %off_ticker, weight = 50, "혼합 모드: 공격 자산");
                 }
 
-                if let Some(def_symbol) = self.select_top_asset(BaaAssetType::Defensive) {
-                    allocations.push(TargetAllocation::new(def_symbol.clone(), dec!(0.5)));
-                    info!(symbol = %def_symbol, weight = 50, "혼합 모드: 방어 자산");
+                if let Some(def_ticker) = self.select_top_asset(BaaAssetType::Defensive) {
+                    allocations.push(TargetAllocation::new(def_ticker.clone(), dec!(0.5)));
+                    info!(ticker = %def_ticker, weight = 50, "혼합 모드: 방어 자산");
                 }
             }
         }
@@ -540,7 +540,7 @@ impl BaaStrategy {
             .asset_data
             .values()
             .filter(|d| d.current_holdings > Decimal::ZERO)
-            .map(|d| PortfolioPosition::new(&d.symbol, d.current_holdings, d.current_price))
+            .map(|d| PortfolioPosition::new(&d.ticker, d.current_holdings, d.current_price))
             .collect();
 
         // 현금 포지션 추가 (리밸런싱 시 현금 사용)
@@ -560,7 +560,7 @@ impl BaaStrategy {
         let quote_currency = "USD";
 
         for order in result.orders {
-            let symbol = Symbol::stock(&order.symbol, quote_currency);
+            let ticker = format!("{}/{}", order.ticker, quote_currency);
 
             let side = match order.side {
                 RebalanceOrderSide::Buy => Side::Buy,
@@ -575,21 +575,21 @@ impl BaaStrategy {
             };
 
             // BUY 신호 시 can_enter() 체크
-            if order.side == RebalanceOrderSide::Buy && !self.can_enter(&order.symbol) {
+            if order.side == RebalanceOrderSide::Buy && !self.can_enter(&order.ticker) {
                 debug!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     "진입 조건 미충족, BUY 신호 스킵"
                 );
                 continue;
             }
 
             let signal = if order.side == RebalanceOrderSide::Buy {
-                Signal::entry("baa", symbol, side)
+                Signal::entry("baa", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
             } else {
-                Signal::exit("baa", symbol, side)
+                Signal::exit("baa", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
@@ -645,12 +645,12 @@ impl Strategy for BaaStrategy {
 
         // 모든 자산에 대해 심볼 및 데이터 생성
         for asset in baa_config.get_all_assets() {
-            let symbol = Symbol::stock(&asset.symbol, "USD");
-            self.symbols.push(symbol);
+            let ticker = format!("{}/USD", asset.ticker);
+            self.tickers.push(ticker);
 
             self.asset_data.insert(
-                asset.symbol.clone(),
-                AssetMomentum::new(asset.symbol, asset.asset_type),
+                asset.ticker.clone(),
+                AssetMomentum::new(asset.ticker, asset.asset_type),
             );
         }
 
@@ -669,10 +669,10 @@ impl Strategy for BaaStrategy {
         }
 
         // base 심볼만 추출 (SPY/USD -> SPY)
-        let symbol_str = data.symbol.base.clone();
+        let ticker_str = data.ticker.clone();
 
         // 등록된 자산인지 확인
-        let asset_exists = self.asset_data.contains_key(&symbol_str);
+        let asset_exists = self.asset_data.contains_key(&ticker_str);
         if !asset_exists {
             return Ok(vec![]);
         }
@@ -684,7 +684,7 @@ impl Strategy for BaaStrategy {
         };
 
         // 가격 업데이트
-        if let Some(asset) = self.asset_data.get_mut(&symbol_str) {
+        if let Some(asset) = self.asset_data.get_mut(&ticker_str) {
             asset.add_price(close);
         }
 
@@ -705,9 +705,9 @@ impl Strategy for BaaStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol_str = order.symbol.to_string();
+        let ticker_str = order.ticker.to_string();
 
-        if let Some(asset) = self.asset_data.get_mut(&symbol_str) {
+        if let Some(asset) = self.asset_data.get_mut(&ticker_str) {
             match order.side {
                 Side::Buy => {
                     asset.current_holdings += order.quantity;
@@ -723,7 +723,7 @@ impl Strategy for BaaStrategy {
         }
 
         debug!(
-            symbol = %order.symbol,
+            ticker = %order.ticker,
             side = ?order.side,
             quantity = %order.quantity,
             "주문 체결"
@@ -824,7 +824,7 @@ register_strategy! {
     name: "BAA",
     description: "Bold Asset Allocation 공격적 자산배분 전략입니다.",
     timeframe: "1d",
-    symbols: ["SPY", "VEA", "VWO", "BND", "QQQ", "IWM", "TIP", "DBC", "BIL", "IEF", "TLT"],
+    tickers: ["SPY", "VEA", "VWO", "BND", "QQQ", "IWM", "TIP", "DBC", "BIL", "IEF", "TLT"],
     category: Monthly,
     markets: [Stock],
     type: BaaStrategy

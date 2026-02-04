@@ -1715,7 +1715,7 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use rust_decimal_macros::dec;
-    use trader_core::{Symbol, Timeframe};
+    use trader_core::Timeframe;
 
     fn create_test_kline(
         open: Decimal,
@@ -1727,7 +1727,7 @@ mod tests {
         let time =
             Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap() + chrono::Duration::hours(index);
         Kline {
-            symbol: Symbol::crypto("BTC", "USDT"),
+            ticker: "BTC/USDT".to_string(),
             timeframe: Timeframe::H1,
             open_time: time,
             open,

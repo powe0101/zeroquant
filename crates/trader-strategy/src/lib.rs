@@ -19,7 +19,7 @@
 //!     // 그리드 트레이딩 전략 등록
 //!     let strategy = Box::new(GridStrategy::new());
 //!     let config = json!({
-//!         "symbol": "BTC/USDT",
+//!         "ticker": "BTC/USDT",
 //!         "grid_levels": 10,
 //!         "grid_spacing_pct": 1.0,
 //!         "amount_per_level": "100"

@@ -41,13 +41,13 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType};
 
 /// 종목 정보.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockInfo {
     /// 종목 코드
-    pub symbol: String,
+    pub ticker:  String,
     /// 종목명
     pub name: String,
     /// 섹터 (선택)
@@ -56,9 +56,9 @@ pub struct StockInfo {
 
 impl StockInfo {
     /// 새 종목 정보 생성.
-    pub fn new(symbol: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn new(ticker: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             name: name.into(),
             sector: None,
         }
@@ -170,9 +170,9 @@ impl StockRotationConfig {
         }
     }
 
-    /// 유니버스의 모든 심볼 가져오기.
-    pub fn all_symbols(&self) -> Vec<String> {
-        self.universe.iter().map(|s| s.symbol.clone()).collect()
+    /// 유니버스의 모든 티커 가져오기.
+    pub fn all_tickers(&self) -> Vec<String> {
+        self.universe.iter().map(|s| s.ticker.clone()).collect()
     }
 }
 
@@ -180,7 +180,7 @@ impl StockRotationConfig {
 #[derive(Debug, Clone)]
 struct StockMomentum {
     /// 종목 코드
-    symbol: String,
+    ticker:  String,
     /// 모멘텀 스코어
     momentum: Decimal,
     /// 순위 (1이 가장 높음)
@@ -289,8 +289,8 @@ impl StockRotationStrategy {
     }
 
     /// 가격 히스토리 업데이트.
-    fn update_price_history(&mut self, symbol: &str, price: Decimal) {
-        let history = self.price_history.entry(symbol.to_string()).or_default();
+    fn update_price_history(&mut self, ticker: &str, price: Decimal) {
+        let history = self.price_history.entry(ticker.to_string()).or_default();
         history.insert(0, price);
 
         // 최대 300일 보관
@@ -302,12 +302,12 @@ impl StockRotationStrategy {
     /// 모멘텀 스코어 계산.
     ///
     /// 공식: (1M + 3M + 6M + 12M) / 4
-    fn calculate_momentum(&self, symbol: &str) -> Option<Decimal> {
-        let prices = self.price_history.get(symbol)?;
+    fn calculate_momentum(&self, ticker: &str) -> Option<Decimal> {
+        let prices = self.price_history.get(ticker)?;
 
         // 최소 240일(12개월) 데이터 필요
         if prices.len() < 240 {
-            debug!("[StockRotation] {} 데이터 부족: {}일", symbol, prices.len());
+            debug!("[StockRotation] {} 데이터 부족: {}일", ticker, prices.len());
             return None;
         }
 
@@ -335,7 +335,7 @@ impl StockRotationStrategy {
 
         debug!(
             "[StockRotation] {} Momentum: {:.4} (1M:{:.2}%, 3M:{:.2}%, 6M:{:.2}%, 12M:{:.2}%)",
-            symbol,
+            ticker,
             momentum,
             ret_1m * dec!(100),
             ret_3m * dec!(100),
@@ -351,20 +351,20 @@ impl StockRotationStrategy {
         let mut stocks: Vec<StockMomentum> = Vec::new();
 
         for stock_info in &config.universe {
-            if let Some(momentum) = self.calculate_momentum(&stock_info.symbol) {
+            if let Some(momentum) = self.calculate_momentum(&stock_info.ticker) {
                 // 최소 모멘텀 필터
                 if let Some(min_mom) = config.min_momentum {
                     if momentum < min_mom {
                         debug!(
                             "[StockRotation] {} 모멘텀 {:.4} < 최소값 {:.4} → 제외",
-                            stock_info.symbol, momentum, min_mom
+                            stock_info.ticker, momentum, min_mom
                         );
                         continue;
                     }
                 }
 
                 stocks.push(StockMomentum {
-                    symbol: stock_info.symbol.clone(),
+                    ticker: stock_info.ticker.clone(),
                     momentum,
                     rank: 0,
                 });
@@ -394,7 +394,7 @@ impl StockRotationStrategy {
         let new_top_n: HashSet<String> = ranked_stocks
             .iter()
             .take(config.top_n)
-            .map(|s| s.symbol.clone())
+            .map(|s| s.ticker.clone())
             .collect();
 
         // 밀려난 종목 (현재 보유 중인데 상위 N에서 빠진 종목)
@@ -438,13 +438,13 @@ impl StockRotationStrategy {
 
         for stock in ranked_stocks.iter().take(top_n_count) {
             allocations.push(TargetAllocation::new(
-                stock.symbol.clone(),
+                stock.ticker.clone(),
                 weight_per_stock,
             ));
             info!(
                 "[StockRotation] #{} {} (Momentum: {:.4}, 비중: {:.1}%)",
                 stock.rank,
-                stock.symbol,
+                stock.ticker,
                 stock.momentum,
                 weight_per_stock * dec!(100)
             );
@@ -501,11 +501,11 @@ impl StockRotationStrategy {
         // 현재 포지션을 PortfolioPosition으로 변환
         let mut portfolio_positions: Vec<PortfolioPosition> = Vec::new();
 
-        for (symbol, quantity) in &self.positions {
-            if let Some(prices) = self.price_history.get(symbol) {
+        for (ticker, quantity) in &self.positions {
+            if let Some(prices) = self.price_history.get(ticker) {
                 if let Some(current_price) = prices.first() {
                     portfolio_positions.push(PortfolioPosition::new(
-                        symbol,
+                        ticker,
                         *quantity,
                         *current_price,
                     ));
@@ -514,11 +514,11 @@ impl StockRotationStrategy {
         }
 
         // 현금 포지션 추가
-        let cash_symbol = match config.market {
+        let cash_ticker = match config.market {
             RotationMarketType::US => "USD",
             RotationMarketType::KR => "KRW",
         };
-        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_symbol));
+        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_ticker));
 
         // 리밸런싱 계산
         let result = self
@@ -535,9 +535,9 @@ impl StockRotationStrategy {
             };
 
             // 매수 신호의 경우 can_enter() 체크
-            if side == Side::Buy && !self.can_enter(&order.symbol) {
+            if side == Side::Buy && !self.can_enter(&order.ticker) {
                 debug!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     "[StockRotation] RouteState/GlobalScore 조건 미충족, 매수 신호 스킵"
                 );
                 continue;
@@ -549,9 +549,9 @@ impl StockRotationStrategy {
             };
 
             // 교체 사유 결정
-            let rotation_type = if stocks_to_sell.contains(&order.symbol) {
+            let rotation_type = if stocks_to_sell.contains(&order.ticker) {
                 "rank_exit"
-            } else if stocks_to_buy.contains(&order.symbol) {
+            } else if stocks_to_buy.contains(&order.ticker) {
                 "rank_enter"
             } else {
                 "rebalance"
@@ -559,7 +559,7 @@ impl StockRotationStrategy {
 
             let signal = Signal::new(
                 self.name(),
-                Symbol::stock(&order.symbol, quote_currency),
+                format!("{}/{}", order.ticker, quote_currency),
                 side,
                 SignalType::Scale,
             )
@@ -576,12 +576,12 @@ impl StockRotationStrategy {
         // 현재 보유 종목 업데이트
         if !signals.is_empty() {
             // 매도 종목 제거
-            for symbol in &stocks_to_sell {
-                self.current_holdings.remove(symbol);
+            for ticker in &stocks_to_sell {
+                self.current_holdings.remove(ticker);
             }
             // 매수 종목 추가
-            for symbol in &stocks_to_buy {
-                self.current_holdings.insert(symbol.clone());
+            for ticker in &stocks_to_buy {
+                self.current_holdings.insert(ticker.clone());
             }
 
             self.last_rebalance_ym =
@@ -661,10 +661,10 @@ impl Strategy for StockRotationStrategy {
             None => return Ok(Vec::new()),
         };
 
-        let symbol = data.symbol.base.clone();
+        let ticker = data.ticker.clone();
 
         // 유니버스에 없는 종목이면 무시
-        if !config.all_symbols().contains(&symbol) {
+        if !config.all_tickers().contains(&ticker) {
             return Ok(Vec::new());
         }
 
@@ -678,8 +678,8 @@ impl Strategy for StockRotationStrategy {
 
         // 가격 업데이트
         if let Some(price) = price {
-            self.update_price_history(&symbol, price);
-            debug!("[StockRotation] 가격 업데이트: {} = {}", symbol, price);
+            self.update_price_history(&ticker, price);
+            debug!("[StockRotation] 가격 업데이트: {} = {}", ticker, price);
         }
 
         // 리밸런싱 신호 생성
@@ -694,7 +694,7 @@ impl Strategy for StockRotationStrategy {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
             "[StockRotation] 주문 체결: {:?} {} {} @ {:?}",
-            order.side, order.quantity, order.symbol, order.average_fill_price
+            order.side, order.quantity, order.ticker, order.average_fill_price
         );
         Ok(())
     }
@@ -703,19 +703,19 @@ impl Strategy for StockRotationStrategy {
         &mut self,
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol = position.symbol.base.clone();
+        let ticker = position.ticker.clone();
 
         if position.quantity > Decimal::ZERO {
-            self.positions.insert(symbol.clone(), position.quantity);
-            self.current_holdings.insert(symbol.clone());
+            self.positions.insert(ticker.clone(), position.quantity);
+            self.current_holdings.insert(ticker.clone());
         } else {
-            self.positions.remove(&symbol);
-            self.current_holdings.remove(&symbol);
+            self.positions.remove(&ticker);
+            self.current_holdings.remove(&ticker);
         }
 
         info!(
             "[StockRotation] 포지션 업데이트: {} = {} (PnL: {})",
-            symbol, position.quantity, position.unrealized_pnl
+            ticker, position.quantity, position.unrealized_pnl
         );
         Ok(())
     }
@@ -767,19 +767,19 @@ mod tests {
     }
 
     #[test]
-    fn test_all_symbols() {
+    fn test_all_tickers() {
         let config = StockRotationConfig::us_default();
-        let symbols = config.all_symbols();
+        let tickers = config.all_tickers();
 
-        assert!(symbols.contains(&"AAPL".to_string()));
-        assert!(symbols.contains(&"MSFT".to_string()));
-        assert_eq!(symbols.len(), 10);
+        assert!(tickers.contains(&"AAPL".to_string()));
+        assert!(tickers.contains(&"MSFT".to_string()));
+        assert_eq!(tickers.len(), 10);
     }
 
     #[test]
     fn test_stock_info_creation() {
         let stock = StockInfo::new("AAPL", "Apple Inc.");
-        assert_eq!(stock.symbol, "AAPL");
+        assert_eq!(stock.ticker, "AAPL");
         assert_eq!(stock.name, "Apple Inc.");
         assert!(stock.sector.is_none());
 
@@ -890,11 +890,11 @@ mod tests {
         let ranked = strategy.rank_all_stocks(config);
 
         assert_eq!(ranked.len(), 3);
-        assert_eq!(ranked[0].symbol, "AAPL");
+        assert_eq!(ranked[0].ticker, "AAPL");
         assert_eq!(ranked[0].rank, 1);
-        assert_eq!(ranked[1].symbol, "MSFT");
+        assert_eq!(ranked[1].ticker, "MSFT");
         assert_eq!(ranked[1].rank, 2);
-        assert_eq!(ranked[2].symbol, "GOOGL");
+        assert_eq!(ranked[2].ticker, "GOOGL");
         assert_eq!(ranked[2].rank, 3);
     }
 
@@ -924,17 +924,17 @@ mod tests {
         // 새 순위: AAPL, GOOGL (MSFT 탈락)
         let ranked = vec![
             StockMomentum {
-                symbol: "AAPL".to_string(),
+                ticker: "AAPL".to_string(),
                 momentum: dec!(0.3),
                 rank: 1,
             },
             StockMomentum {
-                symbol: "GOOGL".to_string(),
+                ticker: "GOOGL".to_string(),
                 momentum: dec!(0.2),
                 rank: 2,
             },
             StockMomentum {
-                symbol: "MSFT".to_string(),
+                ticker: "MSFT".to_string(),
                 momentum: dec!(0.1),
                 rank: 3,
             },
@@ -984,7 +984,7 @@ mod tests {
 
         // MSFT는 최소 모멘텀 미달로 제외됨
         assert_eq!(ranked.len(), 1);
-        assert_eq!(ranked[0].symbol, "AAPL");
+        assert_eq!(ranked[0].ticker, "AAPL");
     }
 
     #[test]
@@ -1010,7 +1010,7 @@ register_strategy! {
     name: "종목 갈아타기",
     description: "모멘텀 기반 종목 회전 전략입니다.",
     timeframe: "1d",
-    symbols: ["005930", "000660", "035420", "051910", "006400"],
+    tickers: ["005930", "000660", "035420", "051910", "006400"],
     category: Daily,
     markets: [Stock, Stock],
     type: StockRotationStrategy

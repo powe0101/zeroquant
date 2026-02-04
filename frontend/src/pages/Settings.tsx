@@ -2,6 +2,12 @@ import { createSignal, For, Show, createResource, createEffect } from 'solid-js'
 import { Save, Key, Bell, Shield, Database, Globe, Moon, Sun, Send, MessageCircle, CheckCircle, XCircle, RefreshCw, Play, Plus, Trash2, TestTube, Building2, Bot, ChevronDown, ChevronRight, BellRing } from 'lucide-solid'
 import { useToast } from '../components/Toast'
 import {
+  Card,
+  CardHeader,
+  CardContent,
+  Button,
+} from '../components/ui'
+import {
   getNotificationSettings,
   getNotificationTemplates,
   testTelegram,
@@ -550,13 +556,14 @@ export function Settings() {
   return (
     <div class="space-y-6 max-w-4xl">
       {/* API 키 관리 (통합 섹션) */}
-      <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-        <div class="flex items-center justify-between mb-6">
+      <Card>
+        <CardHeader>
           <h3 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
             <Key class="w-5 h-5" />
             API 키 관리
           </h3>
-        </div>
+        </CardHeader>
+        <CardContent>
 
         {/* 탭 네비게이션 */}
         <div class="flex gap-2 mb-6 border-b border-[var(--color-surface-light)]">
@@ -1139,14 +1146,18 @@ export function Settings() {
             </div>
           </Show>
         </Show>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Risk Management */}
-      <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-        <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4 flex items-center gap-2">
-          <Shield class="w-5 h-5" />
-          리스크 관리
-        </h3>
+      <Card>
+        <CardHeader>
+          <h3 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
+            <Shield class="w-5 h-5" />
+            리스크 관리
+          </h3>
+        </CardHeader>
+        <CardContent>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -1217,16 +1228,19 @@ export function Settings() {
             />
           </div>
         </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Notifications */}
-      <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-        <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4 flex items-center gap-2">
-          <Bell class="w-5 h-5" />
-          알림 설정
-        </h3>
-
-        <div class="space-y-4">
+      <Card>
+        <CardHeader>
+          <h3 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
+            <Bell class="w-5 h-5" />
+            알림 설정
+          </h3>
+        </CardHeader>
+        <CardContent>
+          <div class="space-y-4">
           <label class="flex items-center justify-between">
             <div>
               <div class="text-[var(--color-text)]">거래 실행 알림</div>
@@ -1306,17 +1320,20 @@ export function Settings() {
               class="w-5 h-5 rounded border-[var(--color-surface-light)] bg-[var(--color-surface-light)] text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
             />
           </label>
-        </div>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Appearance */}
-      <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-        <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4 flex items-center gap-2">
-          <Globe class="w-5 h-5" />
-          외관 설정
-        </h3>
-
-        <div class="flex items-center justify-between">
+      <Card>
+        <CardHeader>
+          <h3 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
+            <Globe class="w-5 h-5" />
+            외관 설정
+          </h3>
+        </CardHeader>
+        <CardContent>
+          <div class="flex items-center justify-between">
           <div>
             <div class="text-[var(--color-text)]">다크 모드</div>
             <div class="text-sm text-[var(--color-text-muted)]">
@@ -1339,35 +1356,33 @@ export function Settings() {
               </Show>
             </div>
           </button>
-        </div>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Database */}
-      <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] p-6">
-        <h3 class="text-lg font-semibold text-[var(--color-text)] mb-4 flex items-center gap-2">
-          <Database class="w-5 h-5" />
-          데이터 관리
-        </h3>
-
-        <div class="flex flex-wrap gap-3">
-          <button class="px-4 py-2 bg-[var(--color-surface-light)] text-[var(--color-text)] rounded-lg text-sm font-medium hover:bg-[var(--color-surface-light)]/80 transition-colors">
-            데이터 내보내기
-          </button>
-          <button class="px-4 py-2 bg-[var(--color-surface-light)] text-[var(--color-text)] rounded-lg text-sm font-medium hover:bg-[var(--color-surface-light)]/80 transition-colors">
-            거래 내역 다운로드
-          </button>
-          <button class="px-4 py-2 bg-red-500/20 text-red-500 rounded-lg text-sm font-medium hover:bg-red-500/30 transition-colors">
-            캐시 초기화
-          </button>
-        </div>
-      </div>
+      <Card>
+        <CardHeader>
+          <h3 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
+            <Database class="w-5 h-5" />
+            데이터 관리
+          </h3>
+        </CardHeader>
+        <CardContent>
+          <div class="flex flex-wrap gap-3">
+            <Button variant="secondary">데이터 내보내기</Button>
+            <Button variant="secondary">거래 내역 다운로드</Button>
+            <Button variant="danger">캐시 초기화</Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Save Button */}
       <div class="flex justify-end">
-        <button
+        <Button
           onClick={handleSave}
           disabled={isSaving()}
-          class="px-6 py-3 bg-[var(--color-primary)] text-white rounded-lg font-medium hover:bg-[var(--color-primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          className="flex items-center gap-2"
         >
           <Show
             when={isSaving()}
@@ -1376,8 +1391,10 @@ export function Settings() {
             <div class="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
           </Show>
           {isSaving() ? '저장 중...' : '설정 저장'}
-        </button>
+        </Button>
       </div>
     </div>
   )
 }
+
+export default Settings

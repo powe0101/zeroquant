@@ -1,7 +1,119 @@
 # Changelog
 
 
-## [Unreleased] - 2026-02-03
+## [Unreleased] - 2026-02-04
+
+### Added
+
+#### 📊 Multi Timeframe System (Phase 1.4)
+- **다중 타임프레임 분석** - 여러 시간대 데이터 동시 분석 지원
+  - `multi_timeframe_helpers.rs` (525줄) - 트렌드 분석, 시그널 결합, 다이버전스 감지
+  - `timeframe_alignment.rs` (330줄) - Look-Ahead Bias 방지 타임프레임 정렬
+  - `RsiMultiTimeframeStrategy` 예제 전략 구현
+- **Strategy Trait 확장**
+  - `multi_timeframe_config()` - 다중 TF 설정 반환
+  - `on_multi_timeframe_data()` - 다중 TF 데이터 처리
+- **백테스트 엔진 확장**
+  - `run_multi_timeframe()` 메서드 추가
+  - Secondary 타임프레임 데이터 병렬 로드
+- **API 엔드포인트**
+  - `GET /api/v1/market/klines/multi` - 다중 TF Kline 조회
+  - `GET/PUT /api/v1/strategies/{id}/timeframes` - TF 설정 관리
+- **프론트엔드 컴포넌트**
+  - `MultiTimeframeSelector.tsx` - Primary/Secondary TF 선택
+  - `MultiTimeframeChart.tsx` - 멀티 TF 차트 동기화
+  - `useMultiTimeframeKlines.ts` - API 연동 훅 (TTL 캐싱)
+
+#### 🔄 Data Provider Dualization (데이터 소스 이중화)
+- **KRX OPEN API 연동** (`krx_api.rs` - 1,122줄)
+  - 국내 주식 OHLCV 데이터 수집
+  - PER/PBR/배당수익률 Fundamental 데이터
+  - 섹터/업종 정보 동기화
+  - 시가총액/발행주식수 조회
+- **데이터 프로바이더 토글 시스템**
+  - `DataProviderConfig` 구조체
+  - `PROVIDER_KRX_API_ENABLED` (기본: false - 승인 전)
+  - `PROVIDER_YAHOO_ENABLED` (기본: true)
+  - KRX API 승인 대기 중 Yahoo Finance 단독 운영 지원
+
+#### 📈 7Factor Scoring System
+- **seven_factor.rs** (560줄) - 7개 팩터 기반 종목 평가
+  - Momentum, Value, Quality, Volatility
+  - Liquidity, Growth, Sentiment
+  - 정규화된 점수 (0-100)
+- **API 엔드포인트**
+  - `GET /api/v1/ranking/7factor/{ticker}` - 개별 종목 7Factor
+  - `POST /api/v1/ranking/7factor/batch` - 배치 조회
+
+#### 📑 TypeScript 바인딩 자동 생성
+- **ts-rs 기반 타입 자동 생성** (`bindings/` 디렉토리)
+  - Backtest, Journal, Ranking, Screening, Strategies 타입
+  - API 요청/응답 타입 안전성 보장
+  - 프론트엔드 타입 동기화 자동화
+
+#### 📋 Watchlist System (관심종목)
+- **관심종목 도메인 모델** (`watchlist.rs` - 282줄)
+- **Repository 구현** (`repository/watchlist.rs` - 403줄)
+- **API 엔드포인트** (`routes/watchlist.rs` - 363줄)
+  - `GET/POST /api/v1/watchlist` - 관심종목 목록 CRUD
+  - `POST/DELETE /api/v1/watchlist/{id}/items` - 종목 추가/삭제
+
+#### 🚀 Collector 모듈 확장
+- **indicator_sync.rs** (361줄) - 지표 동기화 모듈
+- **global_score_sync.rs** (228줄) - GlobalScore 동기화
+- **fundamental_sync.rs** (387줄) - KRX Fundamental 동기화
+- **CLI 명령어 추가**
+  - `sync-indicators` - 분석 지표 동기화
+  - `sync-global-scores` - GlobalScore 동기화
+  - `sync-krx-fundamentals` - KRX Fundamental 동기화
+
+### Changed
+
+#### ⚡ Frontend Performance Optimization
+- **Lazy Loading 적용** - 11개 페이지 모두 lazy() + Suspense
+- **코드 스플리팅** (manualChunks)
+  - `index.js`: 1,512KB → 12.5KB (**99% 감소**)
+  - `vendor-echarts`: 674KB (필요 시 로드)
+  - `vendor-lightweight-charts`: 175KB
+  - `vendor-solid`, `vendor-tanstack`, `vendor-lucide` 분리
+- **createStore 리팩토링** - 5개 페이지 상태 관리 통합
+  - Strategies: ~15 signals → 4 stores (73% 감소)
+  - TradingJournal: ~20 signals → 5 stores (75% 감소)
+  - Screening: 29 signals → 4 stores (86% 감소)
+- **커스텀 훅 추출**
+  - `useStrategies`, `useJournal`, `useScreening`, `useMarketSentiment`
+- **가상 스크롤** - `VirtualizedTable` 컴포넌트 (1,000+ 행 지원)
+- **디바운스/쓰로틀 훅** - `useDebounce`, `useDebouncedCallback`
+
+#### 🔧 Repository Layer 확장
+- **credentials.rs** (339줄) - 자격증명 Repository
+- **kis_token.rs** (210줄) - KIS 토큰 캐시 Repository
+- **journal.rs** (341줄) - 매매일지 확장
+- **klines.rs** (143줄) - Kline 데이터 조회 확장
+- **global_score.rs** (322줄) - GlobalScore 조회 확장
+
+#### 📡 WebSocket 개선
+- Kline 브로드캐스트 활성화 (`ServerMessage::Kline`)
+- 다중 타임프레임 실시간 데이터 지원
+
+### Fixed
+
+#### 🐛 Symbol Resolution
+- **CRYPTO 심볼 해결 오류** 수정
+  - Yahoo Finance 심볼 없는 CRYPTO 종목 비활성화 (446개)
+  - 원본 ticker로도 검색 가능하도록 쿼리 개선
+- **KRX API 엔드포인트** 수정
+  - Base URL: `data-dbg.krx.co.kr`
+  - Path: `/svc/sample/apis/{category}/{api_id}`
+
+### Database
+
+- **18_multi_timeframe.sql** - 다중 타임프레임 스키마
+- **19_backtest_timeframes_used.sql** - 백테스트 TF 기록
+
+---
+
+## [0.5.9] - 2026-02-03
 
 ### Added
 
@@ -832,7 +944,7 @@
 ### Fixed
 
 #### 다중 자산 전략 심볼 비교 버그 수정
-- **심볼 비교 로직 통일**: `data.symbol.base.clone()` → `data.symbol.to_string()`
+- **심볼 비교 로직 통일**: `data.symbol.clone()` → `data.symbol.to_string()`
   - 영향 받은 전략 (10개):
     - `all_weather.rs`: All Weather 포트폴리오
     - `baa.rs`: Bold Asset Allocation

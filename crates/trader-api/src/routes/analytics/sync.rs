@@ -10,11 +10,11 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::repository::{
-    EquityHistoryRepository, ExecutionCacheRepository, ExecutionForSync, NewExecution,
+    create_kis_kr_client_from_credential, EquityHistoryRepository, ExecutionCacheRepository,
+    ExecutionForSync, NewExecution,
 };
 use crate::state::AppState;
 use trader_core::Side;
-use trader_exchange::connector::kis::{KisAccountType, KisEnvironment};
 
 use super::types::{SyncEquityCurveRequest, SyncEquityCurveResponse};
 
@@ -45,11 +45,77 @@ pub async fn sync_equity_curve(
         }
     };
 
-    // 2. KIS 클라이언트 가져오기
-    let kis_clients = state.kis_clients_cache.read().await;
-    let client_pair = match kis_clients.get(&credential_id) {
-        Some(pair) => pair.clone(),
+    // 2. DB 연결 및 암호화 관리자 확인
+    let pool = match state.db_pool.as_ref() {
+        Some(p) => p,
         None => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SyncEquityCurveResponse {
+                    success: false,
+                    synced_count: 0,
+                    execution_count: 0,
+                    start_date: request.start_date.clone(),
+                    end_date: request.end_date.clone(),
+                    message: "DB pool이 없습니다".to_string(),
+                }),
+            );
+        }
+    };
+
+    let encryptor = match state.encryptor.as_ref() {
+        Some(e) => e,
+        None => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SyncEquityCurveResponse {
+                    success: false,
+                    synced_count: 0,
+                    execution_count: 0,
+                    start_date: request.start_date.clone(),
+                    end_date: request.end_date.clone(),
+                    message: "Encryptor가 없습니다".to_string(),
+                }),
+            );
+        }
+    };
+
+    // 3. KIS 클라이언트 생성 (체결 내역 조회는 KIS-specific API)
+    let kr_client = match create_kis_kr_client_from_credential(pool, encryptor, credential_id).await
+    {
+        Ok(client) => client,
+        Err(e) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SyncEquityCurveResponse {
+                    success: false,
+                    synced_count: 0,
+                    execution_count: 0,
+                    start_date: request.start_date.clone(),
+                    end_date: request.end_date.clone(),
+                    message: format!("KIS 클라이언트 생성 실패: {}", e),
+                }),
+            );
+        }
+    };
+
+    // 4. Credential 정보 조회 (ISA 계좌 판단용)
+    #[derive(sqlx::FromRow)]
+    struct CredentialInfo {
+        is_testnet: bool,
+        settings: Option<serde_json::Value>,
+        exchange_name: String,
+    }
+
+    let cred_info: CredentialInfo = match sqlx::query_as(
+        "SELECT is_testnet, settings, exchange_name FROM exchange_credentials WHERE id = $1",
+    )
+    .bind(credential_id)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(info)) => info,
+        Ok(None) => {
             return (
                 axum::http::StatusCode::NOT_FOUND,
                 Json(SyncEquityCurveResponse {
@@ -58,19 +124,39 @@ pub async fn sync_equity_curve(
                     execution_count: 0,
                     start_date: request.start_date.clone(),
                     end_date: request.end_date.clone(),
-                    message: "KIS client not found. Please refresh portfolio first.".to_string(),
+                    message: "Credential을 찾을 수 없습니다".to_string(),
+                }),
+            );
+        }
+        Err(e) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SyncEquityCurveResponse {
+                    success: false,
+                    synced_count: 0,
+                    execution_count: 0,
+                    start_date: request.start_date.clone(),
+                    end_date: request.end_date.clone(),
+                    message: format!("Credential 조회 실패: {}", e),
                 }),
             );
         }
     };
-    drop(kis_clients);
 
-    // 3. 캐시 확인 및 조회 범위 결정
+    // 5. 캐시 확인 및 조회 범위 결정
     let exchange_name = "kis";
-    let is_isa_account = matches!(
-        client_pair.kr.oauth().config().account_type,
-        KisAccountType::RealIsa
-    );
+    let is_isa_account = {
+        // settings에 account_type 필드 확인
+        if let Some(settings) = &cred_info.settings {
+            if let Some(account_type) = settings.get("account_type").and_then(|v| v.as_str()) {
+                account_type == "isa"
+            } else {
+                cred_info.exchange_name.to_uppercase().contains("ISA")
+            }
+        } else {
+            cred_info.exchange_name.to_uppercase().contains("ISA")
+        }
+    };
 
     // 요청된 날짜 파싱
     let requested_start = NaiveDate::parse_from_str(&request.start_date, "%Y-%m-%d")
@@ -134,9 +220,10 @@ pub async fn sync_equity_curve(
     // - 실계좌: 200ms (초당 5건)
     // - 모의계좌: 510ms (초당 2건) = 200ms + 310ms
     // Python 모듈의 검증된 값 사용
-    let api_call_delay_ms: u64 = match client_pair.kr.oauth().config().environment {
-        KisEnvironment::Real => 200,
-        KisEnvironment::Paper => 520, // 510ms + 안전 마진 10ms
+    let api_call_delay_ms: u64 = if cred_info.is_testnet {
+        520 // 510ms + 안전 마진 10ms
+    } else {
+        200
     };
 
     // 이미 최신 데이터가 있으면 API 호출 스킵
@@ -189,9 +276,8 @@ pub async fn sync_equity_curve(
         let mut new_executions_for_cache: Vec<NewExecution> = Vec::new();
         const MAX_PAGES: usize = 50; // 무한 루프 방지 (날짜 범위당)
         debug!(
-            "Using API delay: {}ms (environment: {:?})",
-            api_call_delay_ms,
-            client_pair.kr.oauth().config().environment
+            "Using API delay: {}ms (is_testnet: {})",
+            api_call_delay_ms, cred_info.is_testnet
         );
 
         // 각 날짜 범위에 대해 체결 내역 조회
@@ -232,8 +318,7 @@ pub async fn sync_equity_curve(
                     ctx_nk.len()
                 );
 
-                let history = match client_pair
-                    .kr
+                let history = match kr_client
                     .get_order_history(
                         range_start,
                         range_end,
@@ -255,8 +340,7 @@ pub async fn sync_equity_curve(
                             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
                             // 재시도
-                            match client_pair
-                                .kr
+                            match kr_client
                                 .get_order_history(range_start, range_end, "00", &ctx_fk, &ctx_nk)
                                 .await
                             {
@@ -423,7 +507,7 @@ pub async fn sync_equity_curve(
     // 4. 현재 잔고 조회 (Rate Limit 방지를 위한 지연)
     tokio::time::sleep(std::time::Duration::from_millis(api_call_delay_ms)).await;
 
-    let (current_equity, current_cash) = match client_pair.kr.get_balance().await {
+    let (current_equity, current_cash) = match kr_client.get_balance().await {
         Ok(balance) => {
             // summary에서 총 평가금액과 현금 잔고 추출
             let equity = balance

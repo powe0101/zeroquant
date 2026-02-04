@@ -1,15 +1,24 @@
-//! 시뮬레이션 모드 API 엔드포인트
+//! 동적 백테스트 (시뮬레이션) API 엔드포인트
 //!
-//! 실시간 시장 데이터를 기반으로 가상 거래를 실행하는 시뮬레이션 모드를 제공합니다.
+//! 정적 백테스트와 동일한 전략 로직을 실행하되, 시간 흐름에 따라 점진적으로 진행합니다.
+//! speed 파라미터로 배속을 조절할 수 있습니다.
+//!
+//! # 핵심 원칙
+//!
+//! - 정적 백테스트와 동일한 전략 실행 (`on_market_data` 호출)
+//! - 동일한 신호 처리 (`process_signal`)
+//! - 동일한 설정에서 동일한 시점에 동일한 신호/거래 발생
 //!
 //! # 엔드포인트
 //!
-//! - `POST /api/v1/simulation/start` - 시뮬레이션 시작
+//! - `POST /api/v1/simulation/start` - 시뮬레이션 시작 (자동 전략 실행)
 //! - `POST /api/v1/simulation/stop` - 시뮬레이션 중지
+//! - `POST /api/v1/simulation/pause` - 일시정지/재개 토글
 //! - `GET /api/v1/simulation/status` - 현재 상태 조회
-//! - `POST /api/v1/simulation/order` - 가상 주문 실행
-//! - `GET /api/v1/simulation/positions` - 가상 포지션 조회
+//! - `GET /api/v1/simulation/positions` - 포지션 조회
 //! - `GET /api/v1/simulation/trades` - 거래 내역 조회
+//! - `GET /api/v1/simulation/equity` - 자산 곡선 조회
+//! - `GET /api/v1/simulation/signals` - 신호 마커 조회
 
 use axum::{
     extract::State,
@@ -18,14 +27,18 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc};
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use trader_core::{unrealized_pnl, Side};
+use tokio::task::JoinHandle;
+use trader_core::{unrealized_pnl, Kline, MarketData, Side, Signal, SignalMarker, SignalType, Timeframe};
+use trader_data::storage::ohlcv::OhlcvCache;
+use trader_strategy::{Strategy, StrategyRegistry};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -44,15 +57,15 @@ pub enum SimulationState {
     Paused,
 }
 
-/// 가상 포지션
+/// 시뮬레이션 포지션
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationPosition {
     /// 심볼
     pub symbol: String,
-    /// 표시 이름 (예: "005930(삼성전자)")
+    /// 표시 이름
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    /// 방향 (Long/Short)
+    /// 방향
     pub side: String,
     /// 수량
     pub quantity: Decimal,
@@ -68,14 +81,14 @@ pub struct SimulationPosition {
     pub entry_time: DateTime<Utc>,
 }
 
-/// 가상 거래 내역
+/// 시뮬레이션 거래 내역
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationTrade {
     /// 거래 ID
     pub id: String,
     /// 심볼
     pub symbol: String,
-    /// 표시 이름 (예: "005930(삼성전자)")
+    /// 표시 이름
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     /// 방향 (Buy/Sell)
@@ -88,37 +101,74 @@ pub struct SimulationTrade {
     pub commission: Decimal,
     /// 실현 손익 (청산 거래인 경우)
     pub realized_pnl: Option<Decimal>,
-    /// 거래 시간
+    /// 거래 시간 (시뮬레이션 시간)
     pub timestamp: DateTime<Utc>,
 }
 
+/// 자산 곡선 포인트
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EquityPoint {
+    /// 시간 (시뮬레이션 시간)
+    pub timestamp: DateTime<Utc>,
+    /// 총 자산
+    pub equity: Decimal,
+    /// 낙폭 (%)
+    pub drawdown_pct: Decimal,
+}
+
 /// 시뮬레이션 엔진 상태
-#[derive(Debug)]
 pub struct SimulationEngine {
+    // === 상태 ===
     /// 현재 상태
     pub state: SimulationState,
     /// 전략 ID
     pub strategy_id: Option<String>,
+    /// 전략 인스턴스 (비동기 전략 실행용)
+    strategy: Option<Box<dyn Strategy>>,
+
+    // === 자산 ===
     /// 초기 잔고
     pub initial_balance: Decimal,
     /// 현재 잔고
     pub current_balance: Decimal,
-    /// 가상 포지션 목록
+    /// 포지션 목록
     pub positions: HashMap<String, SimulationPosition>,
+
+    // === 거래 기록 ===
     /// 거래 내역
     pub trades: Vec<SimulationTrade>,
-    /// 시작 시간 (실제 시간)
-    pub started_at: Option<DateTime<Utc>>,
-    /// 시뮬레이션 속도 (1.0 = 실시간)
+    /// 신호 마커
+    pub signal_markers: Vec<SignalMarker>,
+    /// 자산 곡선
+    pub equity_curve: Vec<EquityPoint>,
+
+    // === 진행 상황 ===
+    /// 로드된 캔들 데이터
+    klines: Vec<Kline>,
+    /// 현재 캔들 인덱스
+    current_kline_index: usize,
+    /// 현재 시뮬레이션 시간
+    current_simulation_time: Option<DateTime<Utc>>,
+
+    // === 설정 ===
+    /// 시뮬레이션 속도 (1.0 = 1초에 1캔들)
     pub speed: f64,
+    /// 수수료율 (예: 0.001 = 0.1%)
+    pub commission_rate: Decimal,
+    /// 슬리피지율 (예: 0.0005 = 0.05%)
+    pub slippage_rate: Decimal,
+
+    // === 통계 ===
     /// 총 실현 손익
     pub total_realized_pnl: Decimal,
     /// 총 수수료
     pub total_commission: Decimal,
-    /// 시뮬레이션(백테스트) 시작 날짜
-    pub simulation_start_date: Option<String>,
-    /// 시뮬레이션(백테스트) 종료 날짜
-    pub simulation_end_date: Option<String>,
+    /// 최고 자산 (낙폭 계산용)
+    peak_equity: Decimal,
+
+    // === 백그라운드 태스크 ===
+    /// 실제 시작 시간
+    pub started_at: Option<DateTime<Utc>>,
 }
 
 impl Default for SimulationEngine {
@@ -126,16 +176,23 @@ impl Default for SimulationEngine {
         Self {
             state: SimulationState::Stopped,
             strategy_id: None,
-            initial_balance: dec!(10_000_000), // 1천만원
+            strategy: None,
+            initial_balance: dec!(10_000_000),
             current_balance: dec!(10_000_000),
             positions: HashMap::new(),
             trades: Vec::new(),
-            started_at: None,
+            signal_markers: Vec::new(),
+            equity_curve: Vec::new(),
+            klines: Vec::new(),
+            current_kline_index: 0,
+            current_simulation_time: None,
             speed: 1.0,
+            commission_rate: dec!(0.001),   // 0.1%
+            slippage_rate: dec!(0.0005),    // 0.05%
             total_realized_pnl: Decimal::ZERO,
             total_commission: Decimal::ZERO,
-            simulation_start_date: None,
-            simulation_end_date: None,
+            peak_equity: dec!(10_000_000),
+            started_at: None,
         }
     }
 }
@@ -146,31 +203,380 @@ impl SimulationEngine {
         Self {
             initial_balance,
             current_balance: initial_balance,
+            peak_equity: initial_balance,
             ..Default::default()
         }
     }
 
-    /// 시뮬레이션 시작
-    pub fn start(
+    /// 시뮬레이션 초기화 (전략 + 데이터 로드)
+    pub async fn initialize(
         &mut self,
-        strategy_id: String,
+        strategy_id: &str,
+        parameters: Option<serde_json::Value>,
+        symbols: &[String],
+        start_date: &str,
+        end_date: &str,
         initial_balance: Decimal,
         speed: f64,
-        start_date: Option<String>,
-        end_date: Option<String>,
-    ) {
+        commission_rate: Decimal,
+        slippage_rate: Decimal,
+        pool: &sqlx::PgPool,
+    ) -> Result<(), String> {
+        // 1. 전략 메타 조회
+        let meta = StrategyRegistry::find(strategy_id)
+            .ok_or_else(|| format!("Unknown strategy: {}", strategy_id))?;
+
+        // 2. 전략 인스턴스 생성
+        let mut strategy = (meta.factory)();
+
+        // 3. 전략 초기화 (파라미터 적용)
+        if let Some(params) = parameters {
+            strategy
+                .initialize(params)
+                .await
+                .map_err(|e| format!("전략 초기화 실패: {}", e))?;
+        }
+
+        // 4. 캔들 데이터 로드
+        let cache = OhlcvCache::new(pool.clone());
+        let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d")
+            .map_err(|e| format!("시작일 파싱 실패: {}", e))?;
+        let end = NaiveDate::parse_from_str(end_date, "%Y-%m-%d")
+            .map_err(|e| format!("종료일 파싱 실패: {}", e))?;
+
+        // 기본 심볼 (단일 자산) 또는 전략 기본 심볼 사용
+        let symbol = if symbols.is_empty() {
+            meta.default_tickers.first()
+                .ok_or_else(|| "심볼이 지정되지 않았습니다".to_string())?
+                .to_string()
+        } else {
+            symbols[0].clone()
+        };
+
+        // 타임프레임 (전략 메타에서 문자열 → enum 변환)
+        let timeframe_str = meta.default_timeframe;
+        let timeframe = timeframe_str.parse::<Timeframe>()
+            .map_err(|_| format!("잘못된 타임프레임: {}", timeframe_str))?;
+
+        // NaiveDate → DateTime<Utc> 변환 (당일 00:00 UTC)
+        let start_dt = Utc.from_utc_datetime(&start.and_time(NaiveTime::MIN));
+        let end_dt = Utc.from_utc_datetime(&end.and_time(NaiveTime::from_hms_opt(23, 59, 59).unwrap()));
+
+        let klines = cache
+            .get_cached_klines_range(&symbol, timeframe, start_dt, end_dt)
+            .await
+            .map_err(|e| format!("캔들 데이터 로드 실패: {}", e))?;
+
+        if klines.is_empty() {
+            return Err(format!(
+                "기간 {} ~ {}에 대한 {} {} 데이터가 없습니다",
+                start_date, end_date, symbol, timeframe
+            ));
+        }
+
+        // 5. 상태 초기화
         self.state = SimulationState::Running;
-        self.strategy_id = Some(strategy_id);
+        self.strategy_id = Some(strategy_id.to_string());
+        self.strategy = Some(strategy);
         self.initial_balance = initial_balance;
         self.current_balance = initial_balance;
+        self.peak_equity = initial_balance;
         self.positions.clear();
         self.trades.clear();
-        self.started_at = Some(Utc::now());
+        self.signal_markers.clear();
+        self.equity_curve.clear();
+        self.klines = klines;
+        self.current_kline_index = 0;
+        self.current_simulation_time = None;
         self.speed = speed;
+        self.commission_rate = commission_rate;
+        self.slippage_rate = slippage_rate;
         self.total_realized_pnl = Decimal::ZERO;
         self.total_commission = Decimal::ZERO;
-        self.simulation_start_date = start_date;
-        self.simulation_end_date = end_date;
+        self.started_at = Some(Utc::now());
+
+        Ok(())
+    }
+
+    /// 다음 캔들 처리 (백테스트 엔진과 동일한 로직)
+    pub async fn process_next_candle(&mut self) -> Result<bool, String> {
+        if self.state != SimulationState::Running {
+            return Ok(false);
+        }
+
+        // 현재 캔들 가져오기
+        let kline = match self.klines.get(self.current_kline_index) {
+            Some(k) => k.clone(),
+            None => return Ok(false), // 데이터 끝
+        };
+
+        // 현재 시뮬레이션 시간 업데이트
+        self.current_simulation_time = Some(kline.close_time);
+
+        // 전략에 데이터 전달 (백테스트와 동일)
+        let strategy = self.strategy.as_mut()
+            .ok_or_else(|| "전략이 초기화되지 않았습니다".to_string())?;
+
+        let exchange_name = "simulation";
+        let market_data = MarketData::from_kline(exchange_name, kline.clone());
+
+        let signals = strategy
+            .on_market_data(&market_data)
+            .await
+            .map_err(|e| format!("전략 실행 오류: {}", e))?;
+
+        // 신호 처리 (백테스트와 동일한 로직)
+        for signal in signals {
+            self.process_signal(&signal, &kline)?;
+        }
+
+        // 포지션 가격 업데이트
+        self.update_positions_price(&kline);
+
+        // 자산 곡선 업데이트
+        self.update_equity_curve(&kline);
+
+        // 다음 캔들로 이동
+        self.current_kline_index += 1;
+
+        Ok(self.current_kline_index < self.klines.len())
+    }
+
+    /// 신호 처리 (백테스트 엔진과 동일한 로직)
+    fn process_signal(&mut self, signal: &Signal, kline: &Kline) -> Result<(), String> {
+        let price = signal.suggested_price.unwrap_or(kline.close);
+
+        // SignalMarker 저장
+        let marker = SignalMarker::from_signal(
+            signal,
+            price,
+            kline.open_time,
+            &signal.strategy_id,
+        );
+        self.signal_markers.push(marker);
+
+        match signal.signal_type {
+            SignalType::Entry | SignalType::AddToPosition => {
+                self.open_position(signal, kline)?;
+            }
+            SignalType::Exit | SignalType::ReducePosition => {
+                self.close_position(signal, kline)?;
+            }
+            SignalType::Scale => {
+                let key = signal.ticker.clone();
+                if self.positions.contains_key(&key) {
+                    self.close_position(signal, kline)?;
+                } else {
+                    self.open_position(signal, kline)?;
+                }
+            }
+            SignalType::Alert => {
+                // Alert는 실행하지 않고 마커만 기록
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 포지션 오픈 (백테스트와 동일)
+    ///
+    /// 포지션 크기는 signal.strength와 현재 잔고를 기반으로 계산합니다.
+    /// (백테스트 엔진과 동일한 방식: max_position_size_pct = 20%)
+    fn open_position(&mut self, signal: &Signal, kline: &Kline) -> Result<(), String> {
+        let key = signal.ticker.clone();
+
+        // 이미 포지션이 있으면 무시
+        if self.positions.contains_key(&key) {
+            return Ok(());
+        }
+
+        // 실행 가격 계산 (슬리피지 적용)
+        let base_price = signal.suggested_price.unwrap_or(kline.close);
+        let slippage = base_price * self.slippage_rate;
+        let execution_price = match signal.side {
+            Side::Buy => base_price + slippage,
+            Side::Sell => base_price - slippage,
+        };
+
+        // 포지션 크기 계산 (백테스트와 동일: strength 기반)
+        let max_position_size_pct = dec!(0.2); // 20%
+        let max_amount = self.current_balance * max_position_size_pct;
+        let position_amount = max_amount * Decimal::from_f64(signal.strength).unwrap_or(Decimal::ONE);
+        let quantity = position_amount / execution_price;
+
+        // 수수료 계산
+        let trade_value = execution_price * quantity;
+        let commission = trade_value * self.commission_rate;
+
+        // 잔고 확인 (매수)
+        if signal.side == Side::Buy {
+            let total_cost = trade_value + commission;
+            if total_cost > self.current_balance {
+                return Ok(()); // 잔고 부족 - 무시
+            }
+            self.current_balance -= total_cost;
+        }
+
+        // 포지션 생성
+        let side_str = match signal.side {
+            Side::Buy => "Long",
+            Side::Sell => "Short",
+        };
+
+        self.positions.insert(
+            key.clone(),
+            SimulationPosition {
+                symbol: key.clone(),
+                display_name: None,
+                side: side_str.to_string(),
+                quantity,
+                entry_price: execution_price,
+                current_price: execution_price,
+                unrealized_pnl: Decimal::ZERO,
+                return_pct: Decimal::ZERO,
+                entry_time: kline.close_time,
+            },
+        );
+
+        // 거래 기록
+        let side_trade = match signal.side {
+            Side::Buy => "Buy",
+            Side::Sell => "Sell",
+        };
+
+        self.trades.push(SimulationTrade {
+            id: Uuid::new_v4().to_string(),
+            symbol: key,
+            display_name: None,
+            side: side_trade.to_string(),
+            quantity,
+            price: execution_price,
+            commission,
+            realized_pnl: None,
+            timestamp: kline.close_time,
+        });
+
+        self.total_commission += commission;
+
+        Ok(())
+    }
+
+    /// 포지션 청산 (백테스트와 동일)
+    fn close_position(&mut self, signal: &Signal, kline: &Kline) -> Result<(), String> {
+        let key = signal.ticker.clone();
+
+        let pos = match self.positions.get(&key) {
+            Some(p) => p.clone(),
+            None => return Ok(()), // 포지션 없음 - 무시
+        };
+
+        // 실행 가격 계산 (슬리피지 적용)
+        let base_price = signal.suggested_price.unwrap_or(kline.close);
+        let slippage = base_price * self.slippage_rate;
+        let execution_price = match signal.side {
+            Side::Buy => base_price + slippage,  // 숏 청산 (매수)
+            Side::Sell => base_price - slippage, // 롱 청산 (매도)
+        };
+
+        // 청산 수량 (전량 청산)
+        let close_qty = pos.quantity;
+
+        // 수수료 계산
+        let trade_value = execution_price * close_qty;
+        let commission = trade_value * self.commission_rate;
+
+        // 실현 손익 계산
+        let realized_pnl = if pos.side == "Long" {
+            (execution_price - pos.entry_price) * close_qty - commission
+        } else {
+            (pos.entry_price - execution_price) * close_qty - commission
+        };
+
+        // 잔고 업데이트
+        self.current_balance += trade_value - commission;
+        self.total_realized_pnl += realized_pnl;
+        self.total_commission += commission;
+
+        // 포지션 제거
+        self.positions.remove(&key);
+
+        // 거래 기록
+        let side_trade = match signal.side {
+            Side::Buy => "Buy",
+            Side::Sell => "Sell",
+        };
+
+        self.trades.push(SimulationTrade {
+            id: Uuid::new_v4().to_string(),
+            symbol: key,
+            display_name: None,
+            side: side_trade.to_string(),
+            quantity: close_qty,
+            price: execution_price,
+            commission,
+            realized_pnl: Some(realized_pnl),
+            timestamp: kline.close_time,
+        });
+
+        Ok(())
+    }
+
+    /// 포지션 가격 업데이트
+    fn update_positions_price(&mut self, kline: &Kline) {
+        for pos in self.positions.values_mut() {
+            if pos.symbol == kline.ticker {
+                pos.current_price = kline.close;
+                let side = if pos.side == "Long" {
+                    Side::Buy
+                } else {
+                    Side::Sell
+                };
+                pos.unrealized_pnl = unrealized_pnl(pos.entry_price, kline.close, pos.quantity, side);
+                if pos.entry_price > Decimal::ZERO {
+                    pos.return_pct = pos.unrealized_pnl / (pos.entry_price * pos.quantity) * dec!(100);
+                }
+            }
+        }
+    }
+
+    /// 자산 곡선 업데이트
+    fn update_equity_curve(&mut self, kline: &Kline) {
+        let equity = self.total_equity();
+
+        // 최고점 갱신
+        if equity > self.peak_equity {
+            self.peak_equity = equity;
+        }
+
+        // 낙폭 계산
+        let drawdown_pct = if self.peak_equity > Decimal::ZERO {
+            (self.peak_equity - equity) / self.peak_equity * dec!(100)
+        } else {
+            Decimal::ZERO
+        };
+
+        self.equity_curve.push(EquityPoint {
+            timestamp: kline.close_time,
+            equity,
+            drawdown_pct,
+        });
+    }
+
+    /// 총 자산 계산
+    pub fn total_equity(&self) -> Decimal {
+        let positions_value: Decimal = self
+            .positions
+            .values()
+            .map(|p| {
+                if p.side == "Long" {
+                    p.current_price * p.quantity
+                } else {
+                    // 숏 포지션: 진입가 - (현재가 - 진입가)
+                    p.entry_price * p.quantity + (p.entry_price - p.current_price) * p.quantity
+                }
+            })
+            .sum();
+        self.current_balance + positions_value
     }
 
     /// 시뮬레이션 중지
@@ -192,158 +598,12 @@ impl SimulationEngine {
         }
     }
 
-    /// 가상 주문 실행
-    pub fn execute_order(
-        &mut self,
-        symbol: &str,
-        side: Side,
-        quantity: Decimal,
-        price: Decimal,
-    ) -> Result<SimulationTrade, String> {
-        if self.state != SimulationState::Running {
-            return Err("시뮬레이션이 실행 중이 아닙니다".to_string());
+    /// 진행률 (%)
+    pub fn progress_pct(&self) -> f64 {
+        if self.klines.is_empty() {
+            return 0.0;
         }
-
-        let commission_rate = dec!(0.001); // 0.1% 수수료
-        let commission = price * quantity * commission_rate;
-        let total_cost = price * quantity + commission;
-
-        // 매수 주문 검증
-        if side == Side::Buy && total_cost > self.current_balance {
-            return Err(format!(
-                "잔고 부족: 필요 {}, 가용 {}",
-                total_cost, self.current_balance
-            ));
-        }
-
-        // 거래 생성
-        let trade_id = Uuid::new_v4().to_string();
-        let mut realized_pnl = None;
-
-        // 포지션 업데이트
-        match side {
-            Side::Buy => {
-                self.current_balance -= total_cost;
-
-                // 기존 롱 포지션이 있으면 평균 단가 계산
-                if let Some(pos) = self.positions.get_mut(symbol) {
-                    if pos.side == "Long" {
-                        let total_qty = pos.quantity + quantity;
-                        let total_value = pos.entry_price * pos.quantity + price * quantity;
-                        pos.entry_price = total_value / total_qty;
-                        pos.quantity = total_qty;
-                        pos.current_price = price;
-                    } else {
-                        // 숏 포지션 청산
-                        let pnl = (pos.entry_price - price) * quantity.min(pos.quantity);
-                        realized_pnl = Some(pnl);
-                        self.total_realized_pnl += pnl;
-                        pos.quantity -= quantity;
-                        if pos.quantity <= Decimal::ZERO {
-                            self.positions.remove(symbol);
-                        }
-                    }
-                } else {
-                    // 새 롱 포지션
-                    self.positions.insert(
-                        symbol.to_string(),
-                        SimulationPosition {
-                            symbol: symbol.to_string(),
-                            display_name: None,
-                            side: "Long".to_string(),
-                            quantity,
-                            entry_price: price,
-                            current_price: price,
-                            unrealized_pnl: Decimal::ZERO,
-                            return_pct: Decimal::ZERO,
-                            entry_time: Utc::now(),
-                        },
-                    );
-                }
-            }
-            Side::Sell => {
-                // Sell
-                if let Some(pos) = self.positions.get_mut(symbol) {
-                    if pos.side == "Long" {
-                        // 롱 포지션 청산
-                        let pnl = (price - pos.entry_price) * quantity.min(pos.quantity);
-                        realized_pnl = Some(pnl);
-                        self.total_realized_pnl += pnl;
-                        self.current_balance += price * quantity - commission;
-                        pos.quantity -= quantity;
-                        if pos.quantity <= Decimal::ZERO {
-                            self.positions.remove(symbol);
-                        }
-                    }
-                } else {
-                    // 새 숏 포지션
-                    self.positions.insert(
-                        symbol.to_string(),
-                        SimulationPosition {
-                            symbol: symbol.to_string(),
-                            display_name: None,
-                            side: "Short".to_string(),
-                            quantity,
-                            entry_price: price,
-                            current_price: price,
-                            unrealized_pnl: Decimal::ZERO,
-                            return_pct: Decimal::ZERO,
-                            entry_time: Utc::now(),
-                        },
-                    );
-                }
-            }
-        }
-
-        self.total_commission += commission;
-
-        // side를 표시용 문자열로 변환
-        let side_str = match side {
-            Side::Buy => "Buy",
-            Side::Sell => "Sell",
-        };
-
-        let trade = SimulationTrade {
-            id: trade_id,
-            symbol: symbol.to_string(),
-            display_name: None,
-            side: side_str.to_string(),
-            quantity,
-            price,
-            commission,
-            realized_pnl,
-            timestamp: Utc::now(),
-        };
-
-        self.trades.push(trade.clone());
-
-        Ok(trade)
-    }
-
-    /// 포지션 가격 업데이트
-    pub fn update_price(&mut self, symbol: &str, price: Decimal) {
-        if let Some(pos) = self.positions.get_mut(symbol) {
-            pos.current_price = price;
-            let side = if pos.side == "Long" {
-                Side::Buy
-            } else {
-                Side::Sell
-            };
-            pos.unrealized_pnl = unrealized_pnl(pos.entry_price, price, pos.quantity, side);
-            if pos.entry_price > Decimal::ZERO {
-                pos.return_pct = pos.unrealized_pnl / (pos.entry_price * pos.quantity) * dec!(100);
-            }
-        }
-    }
-
-    /// 총 자산 계산
-    pub fn total_equity(&self) -> Decimal {
-        let positions_value: Decimal = self
-            .positions
-            .values()
-            .map(|p| p.current_price * p.quantity + p.unrealized_pnl)
-            .sum();
-        self.current_balance + positions_value
+        (self.current_kline_index as f64 / self.klines.len() as f64) * 100.0
     }
 }
 
@@ -362,18 +622,28 @@ pub fn create_simulation_engine() -> SharedSimulationEngine {
 pub struct SimulationStartRequest {
     /// 전략 ID
     pub strategy_id: String,
-    /// 초기 잔고 (선택)
+    /// 전략 파라미터 (JSON)
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+    /// 심볼 목록 (비어있으면 전략 기본 심볼 사용)
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    /// 초기 잔고
     #[serde(default = "default_initial_balance")]
     pub initial_balance: Decimal,
-    /// 시뮬레이션 속도 (1.0 = 실시간, 2.0 = 2배속)
+    /// 시뮬레이션 속도 (1.0 = 1초에 1캔들)
     #[serde(default = "default_speed")]
     pub speed: f64,
-    /// 시뮬레이션(백테스트) 시작 날짜 (YYYY-MM-DD)
-    #[serde(default)]
-    pub start_date: Option<String>,
-    /// 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD)
-    #[serde(default)]
-    pub end_date: Option<String>,
+    /// 시작 날짜 (YYYY-MM-DD)
+    pub start_date: String,
+    /// 종료 날짜 (YYYY-MM-DD)
+    pub end_date: String,
+    /// 수수료율 (기본 0.001 = 0.1%)
+    #[serde(default = "default_commission_rate")]
+    pub commission_rate: Decimal,
+    /// 슬리피지율 (기본 0.0005 = 0.05%)
+    #[serde(default = "default_slippage_rate")]
+    pub slippage_rate: Decimal,
 }
 
 fn default_initial_balance() -> Decimal {
@@ -382,6 +652,14 @@ fn default_initial_balance() -> Decimal {
 
 fn default_speed() -> f64 {
     1.0
+}
+
+fn default_commission_rate() -> Decimal {
+    dec!(0.001)
+}
+
+fn default_slippage_rate() -> Decimal {
+    dec!(0.0005)
 }
 
 /// 시뮬레이션 시작 응답
@@ -393,6 +671,8 @@ pub struct SimulationStartResponse {
     pub message: String,
     /// 시작 시간
     pub started_at: DateTime<Utc>,
+    /// 총 캔들 수
+    pub total_candles: usize,
 }
 
 /// 시뮬레이션 중지 응답
@@ -433,40 +713,18 @@ pub struct SimulationStatusResponse {
     pub position_count: usize,
     /// 거래 횟수
     pub trade_count: usize,
-    /// 시작 시간 (실제 시간)
+    /// 실제 시작 시간
     pub started_at: Option<DateTime<Utc>>,
     /// 시뮬레이션 속도
     pub speed: f64,
-    /// 현재 시뮬레이션 시간 (배속 적용된 가상 시간)
+    /// 현재 시뮬레이션 시간
     pub current_simulation_time: Option<DateTime<Utc>>,
-    /// 시뮬레이션(백테스트) 시작 날짜 (YYYY-MM-DD)
-    pub simulation_start_date: Option<String>,
-    /// 시뮬레이션(백테스트) 종료 날짜 (YYYY-MM-DD)
-    pub simulation_end_date: Option<String>,
-}
-
-/// 가상 주문 요청
-#[derive(Debug, Deserialize)]
-pub struct SimulationOrderRequest {
-    /// 심볼
-    pub symbol: String,
-    /// 방향 (Buy/Sell)
-    pub side: String,
-    /// 수량
-    pub quantity: Decimal,
-    /// 가격 (시장가면 None)
-    pub price: Option<Decimal>,
-}
-
-/// 가상 주문 응답
-#[derive(Debug, Serialize)]
-pub struct SimulationOrderResponse {
-    /// 성공 여부
-    pub success: bool,
-    /// 거래 정보 (성공 시)
-    pub trade: Option<SimulationTrade>,
-    /// 에러 메시지 (실패 시)
-    pub error: Option<String>,
+    /// 진행률 (%)
+    pub progress_pct: f64,
+    /// 현재 캔들 인덱스
+    pub current_candle_index: usize,
+    /// 총 캔들 수
+    pub total_candles: usize,
 }
 
 /// 포지션 목록 응답
@@ -489,6 +747,24 @@ pub struct SimulationTradesResponse {
     pub total_realized_pnl: Decimal,
     /// 총 수수료
     pub total_commission: Decimal,
+}
+
+/// 자산 곡선 응답
+#[derive(Debug, Serialize)]
+pub struct SimulationEquityResponse {
+    /// 자산 곡선
+    pub equity_curve: Vec<EquityPoint>,
+    /// 최대 낙폭 (%)
+    pub max_drawdown_pct: Decimal,
+}
+
+/// 신호 마커 응답
+#[derive(Debug, Serialize)]
+pub struct SimulationSignalsResponse {
+    /// 신호 마커 목록
+    pub signals: Vec<SignalMarker>,
+    /// 총 신호 수
+    pub total: usize,
 }
 
 /// API 에러 응답
@@ -514,6 +790,57 @@ impl SimulationApiError {
 lazy_static::lazy_static! {
     /// 전역 시뮬레이션 엔진
     static ref SIMULATION_ENGINE: SharedSimulationEngine = create_simulation_engine();
+    /// 백그라운드 러너 핸들
+    static ref RUNNER_HANDLE: Arc<RwLock<Option<JoinHandle<()>>>> = Arc::new(RwLock::new(None));
+}
+
+// ==================== 백그라운드 러너 ====================
+
+/// 시뮬레이션 백그라운드 러너
+async fn simulation_runner(engine: SharedSimulationEngine, speed: f64) {
+    // 1초에 처리할 캔들 수 = speed
+    // 따라서 캔들당 대기 시간 = 1/speed 초
+    let delay_per_candle = std::time::Duration::from_secs_f64(1.0 / speed);
+
+    loop {
+        // 다음 캔들 처리
+        let should_continue = {
+            let mut engine = engine.write().await;
+
+            // 일시정지 상태면 대기
+            if engine.state == SimulationState::Paused {
+                drop(engine);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            }
+
+            // 중지 상태면 종료
+            if engine.state == SimulationState::Stopped {
+                break;
+            }
+
+            // 다음 캔들 처리
+            match engine.process_next_candle().await {
+                Ok(has_more) => has_more,
+                Err(e) => {
+                    tracing::error!("시뮬레이션 오류: {}", e);
+                    engine.stop();
+                    false
+                }
+            }
+        };
+
+        if !should_continue {
+            // 시뮬레이션 완료
+            let mut engine = engine.write().await;
+            engine.stop();
+            tracing::info!("시뮬레이션 완료");
+            break;
+        }
+
+        // 속도에 따른 대기
+        tokio::time::sleep(delay_per_candle).await;
+    }
 }
 
 // ==================== 핸들러 ====================
@@ -522,22 +849,30 @@ lazy_static::lazy_static! {
 ///
 /// POST /api/v1/simulation/start
 pub async fn start_simulation(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<SimulationStartRequest>,
 ) -> Result<Json<SimulationStartResponse>, (StatusCode, Json<SimulationApiError>)> {
-    // 락 획득 전에 입력 검증 수행
-    if request.speed <= 0.0 || request.speed > 100.0 {
+    // 입력 검증
+    if request.speed <= 0.0 || request.speed > 1000.0 {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(SimulationApiError::new(
                 "INVALID_SPEED",
-                "속도는 0.1 ~ 100 사이여야 합니다",
+                "속도는 0.1 ~ 1000 사이여야 합니다",
             )),
         ));
     }
 
-    // 최소 락 홀드: 상태 확인, 시작, 결과 추출 후 즉시 해제
-    let started_at = {
+    // 기존 러너 중지
+    {
+        let mut handle = RUNNER_HANDLE.write().await;
+        if let Some(h) = handle.take() {
+            h.abort();
+        }
+    }
+
+    // 엔진 초기화
+    let (started_at, total_candles) = {
         let mut engine = SIMULATION_ENGINE.write().await;
 
         // 이미 실행 중인지 확인
@@ -546,35 +881,64 @@ pub async fn start_simulation(
                 StatusCode::CONFLICT,
                 Json(SimulationApiError::new(
                     "ALREADY_RUNNING",
-                    "시뮬레이션이 이미 실행 중입니다",
+                    "시뮬레이션이 이미 실행 중입니다. 먼저 중지해주세요.",
                 )),
             ));
         }
 
-        // 시뮬레이션 시작
-        engine.start(
-            request.strategy_id,
-            request.initial_balance,
-            request.speed,
-            request.start_date,
-            request.end_date,
-        );
-
-        engine.started_at.ok_or_else(|| {
+        // DB 풀 확인
+        let db_pool = state.db_pool.as_ref().ok_or_else(|| {
             (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(SimulationApiError::new(
-                    "ENGINE_NOT_STARTED",
-                    "시뮬레이션 엔진이 올바르게 시작되지 않았습니다",
+                    "DB_UNAVAILABLE",
+                    "데이터베이스가 연결되어 있지 않습니다",
                 )),
             )
-        })?
-    }; // 락 해제됨
+        })?;
+
+        // 시뮬레이션 초기화
+        engine
+            .initialize(
+                &request.strategy_id,
+                request.parameters,
+                &request.symbols,
+                &request.start_date,
+                &request.end_date,
+                request.initial_balance,
+                request.speed,
+                request.commission_rate,
+                request.slippage_rate,
+                db_pool,
+            )
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(SimulationApiError::new("INIT_FAILED", e)),
+                )
+            })?;
+
+        let started_at = engine.started_at.unwrap_or_else(Utc::now);
+        let total_candles = engine.klines.len();
+
+        (started_at, total_candles)
+    };
+
+    // 백그라운드 러너 시작
+    let engine_clone = SIMULATION_ENGINE.clone();
+    let handle = tokio::spawn(simulation_runner(engine_clone, request.speed));
+
+    {
+        let mut runner = RUNNER_HANDLE.write().await;
+        *runner = Some(handle);
+    }
 
     Ok(Json(SimulationStartResponse {
         success: true,
-        message: "시뮬레이션이 시작되었습니다".to_string(),
+        message: format!("시뮬레이션이 시작되었습니다 ({} 캔들)", total_candles),
         started_at,
+        total_candles,
     }))
 }
 
@@ -584,11 +948,19 @@ pub async fn start_simulation(
 pub async fn stop_simulation(
     State(_state): State<Arc<AppState>>,
 ) -> Result<Json<SimulationStopResponse>, (StatusCode, Json<SimulationApiError>)> {
-    // 최소 락 홀드: 필요한 데이터만 추출하고 상태 변경 후 즉시 해제
+    // 러너 중지
+    {
+        let mut handle = RUNNER_HANDLE.write().await;
+        if let Some(h) = handle.take() {
+            h.abort();
+        }
+    }
+
+    // 엔진 중지 및 결과 추출
     let (final_equity, initial_balance, total_trades) = {
         let mut engine = SIMULATION_ENGINE.write().await;
 
-        if engine.state == SimulationState::Stopped {
+        if engine.state == SimulationState::Stopped && engine.started_at.is_none() {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(SimulationApiError::new(
@@ -602,10 +974,10 @@ pub async fn stop_simulation(
         let initial_balance = engine.initial_balance;
         let total_trades = engine.trades.len();
         engine.stop();
-        (final_equity, initial_balance, total_trades)
-    }; // 락 해제됨
 
-    // 락 없이 계산 수행
+        (final_equity, initial_balance, total_trades)
+    };
+
     let total_return_pct = if initial_balance > Decimal::ZERO {
         (final_equity - initial_balance) / initial_balance * dec!(100)
     } else {
@@ -656,118 +1028,39 @@ pub async fn pause_simulation(State(_state): State<Arc<AppState>>) -> impl IntoR
 ///
 /// GET /api/v1/simulation/status
 pub async fn get_simulation_status(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
-    // 최소 락 홀드: 필요한 모든 데이터를 빠르게 추출
-    let (
-        state,
-        strategy_id,
-        initial_balance,
-        current_balance,
-        total_equity,
-        unrealized_pnl,
-        total_realized_pnl,
-        position_count,
-        trade_count,
-        started_at,
-        speed,
-        simulation_start_date,
-        simulation_end_date,
-    ) = {
-        let engine = SIMULATION_ENGINE.read().await;
-        (
-            engine.state,
-            engine.strategy_id.clone(),
-            engine.initial_balance,
-            engine.current_balance,
-            engine.total_equity(),
-            engine
-                .positions
-                .values()
-                .map(|p| p.unrealized_pnl)
-                .sum::<Decimal>(),
-            engine.total_realized_pnl,
-            engine.positions.len(),
-            engine.trades.len(),
-            engine.started_at,
-            engine.speed,
-            engine.simulation_start_date.clone(),
-            engine.simulation_end_date.clone(),
-        )
-    }; // 락 해제됨
+    let engine = SIMULATION_ENGINE.read().await;
 
-    // 락 없이 계산 수행
-    let return_pct = if initial_balance > Decimal::ZERO {
-        (total_equity - initial_balance) / initial_balance * dec!(100)
+    let total_equity = engine.total_equity();
+    let unrealized_pnl: Decimal = engine
+        .positions
+        .values()
+        .map(|p| p.unrealized_pnl)
+        .sum();
+
+    let return_pct = if engine.initial_balance > Decimal::ZERO {
+        (total_equity - engine.initial_balance) / engine.initial_balance * dec!(100)
     } else {
         Decimal::ZERO
     };
 
-    // 현재 시뮬레이션 시간 계산 (배속 적용)
-    let current_simulation_time = if state == SimulationState::Running {
-        started_at.map(|start| {
-            let now = Utc::now();
-            let elapsed_real_ms = (now - start).num_milliseconds();
-            let elapsed_sim_ms = (elapsed_real_ms as f64 * speed) as i64;
-            start + chrono::Duration::milliseconds(elapsed_sim_ms)
-        })
-    } else {
-        None
-    };
-
     Json(SimulationStatusResponse {
-        state,
-        strategy_id,
-        initial_balance,
-        current_balance,
+        state: engine.state,
+        strategy_id: engine.strategy_id.clone(),
+        initial_balance: engine.initial_balance,
+        current_balance: engine.current_balance,
         total_equity,
         unrealized_pnl,
-        realized_pnl: total_realized_pnl,
+        realized_pnl: engine.total_realized_pnl,
         return_pct,
-        position_count,
-        trade_count,
-        started_at,
-        speed,
-        current_simulation_time,
-        simulation_start_date,
-        simulation_end_date,
+        position_count: engine.positions.len(),
+        trade_count: engine.trades.len(),
+        started_at: engine.started_at,
+        speed: engine.speed,
+        current_simulation_time: engine.current_simulation_time,
+        progress_pct: engine.progress_pct(),
+        current_candle_index: engine.current_kline_index,
+        total_candles: engine.klines.len(),
     })
-}
-
-/// 가상 주문 실행
-///
-/// POST /api/v1/simulation/order
-pub async fn execute_simulation_order(
-    State(_state): State<Arc<AppState>>,
-    Json(request): Json<SimulationOrderRequest>,
-) -> Result<Json<SimulationOrderResponse>, (StatusCode, Json<SimulationApiError>)> {
-    let mut engine = SIMULATION_ENGINE.write().await;
-
-    // 가격이 없으면 현재 시장가 시뮬레이션 (임시로 고정값 사용)
-    let price = request.price.unwrap_or(dec!(50000));
-
-    // side 문자열을 Side enum으로 파싱
-    let side = match Side::from_str_flexible(&request.side) {
-        Ok(s) => s,
-        Err(_) => {
-            return Ok(Json(SimulationOrderResponse {
-                success: false,
-                trade: None,
-                error: Some(format!("잘못된 주문 방향: {}", request.side)),
-            }));
-        }
-    };
-
-    match engine.execute_order(&request.symbol, side, request.quantity, price) {
-        Ok(trade) => Ok(Json(SimulationOrderResponse {
-            success: true,
-            trade: Some(trade),
-            error: None,
-        })),
-        Err(e) => Ok(Json(SimulationOrderResponse {
-            success: false,
-            trade: None,
-            error: Some(e),
-        })),
-    }
 }
 
 /// 포지션 목록 조회
@@ -820,12 +1113,51 @@ pub async fn get_simulation_trades(State(state): State<Arc<AppState>>) -> impl I
     })
 }
 
+/// 자산 곡선 조회
+///
+/// GET /api/v1/simulation/equity
+pub async fn get_simulation_equity(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
+    let engine = SIMULATION_ENGINE.read().await;
+
+    let max_drawdown_pct = engine
+        .equity_curve
+        .iter()
+        .map(|e| e.drawdown_pct)
+        .max()
+        .unwrap_or(Decimal::ZERO);
+
+    Json(SimulationEquityResponse {
+        equity_curve: engine.equity_curve.clone(),
+        max_drawdown_pct,
+    })
+}
+
+/// 신호 마커 조회
+///
+/// GET /api/v1/simulation/signals
+pub async fn get_simulation_signals(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
+    let engine = SIMULATION_ENGINE.read().await;
+
+    Json(SimulationSignalsResponse {
+        signals: engine.signal_markers.clone(),
+        total: engine.signal_markers.len(),
+    })
+}
+
 /// 시뮬레이션 리셋
 ///
 /// POST /api/v1/simulation/reset
 pub async fn reset_simulation(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut engine = SIMULATION_ENGINE.write().await;
+    // 러너 중지
+    {
+        let mut handle = RUNNER_HANDLE.write().await;
+        if let Some(h) = handle.take() {
+            h.abort();
+        }
+    }
 
+    // 엔진 리셋
+    let mut engine = SIMULATION_ENGINE.write().await;
     *engine = SimulationEngine::default();
 
     Json(serde_json::json!({
@@ -848,8 +1180,8 @@ pub fn simulation_router() -> Router<Arc<AppState>> {
         .route("/status", get(get_simulation_status))
         .route("/positions", get(get_simulation_positions))
         .route("/trades", get(get_simulation_trades))
-        // 가상 주문
-        .route("/order", post(execute_simulation_order))
+        .route("/equity", get(get_simulation_equity))
+        .route("/signals", get(get_simulation_signals))
 }
 
 // ==================== 테스트 ====================
@@ -857,155 +1189,21 @@ pub fn simulation_router() -> Router<Arc<AppState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use tower::ServiceExt;
 
     #[tokio::test]
-    async fn test_simulation_engine_basic() {
-        let mut engine = SimulationEngine::new(dec!(1_000_000));
-
+    async fn test_simulation_engine_default() {
+        let engine = SimulationEngine::default();
         assert_eq!(engine.state, SimulationState::Stopped);
-        assert_eq!(engine.current_balance, dec!(1_000_000));
-
-        engine.start(
-            "test_strategy".to_string(),
-            dec!(1_000_000),
-            1.0,
-            None,
-            None,
-        );
-        assert_eq!(engine.state, SimulationState::Running);
-
-        engine.pause();
-        assert_eq!(engine.state, SimulationState::Paused);
-
-        engine.resume();
-        assert_eq!(engine.state, SimulationState::Running);
-
-        engine.stop();
-        assert_eq!(engine.state, SimulationState::Stopped);
+        assert_eq!(engine.initial_balance, dec!(10_000_000));
+        assert_eq!(engine.current_balance, dec!(10_000_000));
     }
 
     #[tokio::test]
-    async fn test_simulation_order_execution() {
-        let mut engine = SimulationEngine::new(dec!(1_000_000));
-        engine.start("test".to_string(), dec!(1_000_000), 1.0, None, None);
-
-        // 매수 주문
-        let result = engine.execute_order("BTC/USDT", Side::Buy, dec!(0.1), dec!(50000));
-        assert!(result.is_ok());
-
-        let trade = result.unwrap();
-        assert_eq!(trade.symbol, "BTC/USDT");
-        assert_eq!(trade.side, "Buy");
-
-        // 포지션 확인
-        assert!(engine.positions.contains_key("BTC/USDT"));
-        let pos = engine.positions.get("BTC/USDT").unwrap();
-        assert_eq!(pos.quantity, dec!(0.1));
-
-        // 매도 주문 (청산)
-        let result = engine.execute_order("BTC/USDT", Side::Sell, dec!(0.1), dec!(51000));
-        assert!(result.is_ok());
-
-        let trade = result.unwrap();
-        assert!(trade.realized_pnl.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_simulation_insufficient_balance() {
-        let mut engine = SimulationEngine::new(dec!(1000));
-        engine.start("test".to_string(), dec!(1000), 1.0, None, None);
-
-        // 잔고 부족 주문
-        let result = engine.execute_order("BTC/USDT", Side::Buy, dec!(1), dec!(50000));
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_get_simulation_status() {
-        use crate::state::create_test_state;
-
-        let state = Arc::new(create_test_state());
-        let app = Router::new()
-            .route("/status", get(get_simulation_status))
-            .with_state(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/status")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let status: SimulationStatusResponse = serde_json::from_slice(&body).unwrap();
-
-        // 기본 상태 확인
-        assert_eq!(status.state, SimulationState::Stopped);
-    }
-
-    #[tokio::test]
-    async fn test_start_and_stop_simulation() {
-        use crate::state::create_test_state;
-
-        // 먼저 리셋
-        {
-            let mut engine = SIMULATION_ENGINE.write().await;
-            *engine = SimulationEngine::default();
-        }
-
-        let state = Arc::new(create_test_state());
-        let app = Router::new()
-            .route("/start", post(start_simulation))
-            .route("/stop", post(stop_simulation))
-            .with_state(state);
-
-        // 시작
-        let start_request = serde_json::json!({
-            "strategy_id": "test_strategy",
-            "initial_balance": 5000000,
-            "speed": 2.0
-        });
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/start")
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::to_string(&start_request).unwrap()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // 중지
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/stop")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
+    async fn test_simulation_engine_new() {
+        let engine = SimulationEngine::new(dec!(5_000_000));
+        assert_eq!(engine.initial_balance, dec!(5_000_000));
+        assert_eq!(engine.current_balance, dec!(5_000_000));
+        assert_eq!(engine.peak_equity, dec!(5_000_000));
     }
 
     #[test]

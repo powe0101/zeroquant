@@ -6,7 +6,57 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use super::{PendingOrder, StrategyAccountInfo, StrategyPositionInfo};
+use super::{PendingOrder, StrategyAccountInfo, StrategyPositionInfo, Trade};
+
+// =============================================================================
+// 요청/응답 타입
+// =============================================================================
+
+/// 체결 내역 조회 요청.
+#[derive(Debug, Clone)]
+pub struct ExecutionHistoryRequest {
+    /// 조회 시작 날짜 (YYYYMMDD 형식)
+    pub start_date: String,
+    /// 조회 종료 날짜 (YYYYMMDD 형식)
+    pub end_date: String,
+    /// 매수/매도 구분 (거래소별로 다름, 예: "00"=전체, "01"=매도, "02"=매수)
+    pub side: Option<String>,
+    /// 페이지네이션 커서 (거래소별로 다름)
+    pub cursor: Option<String>,
+}
+
+impl ExecutionHistoryRequest {
+    /// 새 요청 생성.
+    pub fn new(start_date: impl Into<String>, end_date: impl Into<String>) -> Self {
+        Self {
+            start_date: start_date.into(),
+            end_date: end_date.into(),
+            side: None,
+            cursor: None,
+        }
+    }
+
+    /// 매수/매도 구분 설정.
+    pub fn with_side(mut self, side: impl Into<String>) -> Self {
+        self.side = Some(side.into());
+        self
+    }
+
+    /// 커서 설정.
+    pub fn with_cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.cursor = Some(cursor.into());
+        self
+    }
+}
+
+/// 체결 내역 조회 응답.
+#[derive(Debug, Clone)]
+pub struct ExecutionHistoryResponse {
+    /// 체결 내역 목록
+    pub trades: Vec<Trade>,
+    /// 다음 페이지 커서 (없으면 None)
+    pub next_cursor: Option<String>,
+}
 
 // =============================================================================
 // 에러 타입
@@ -120,6 +170,39 @@ pub trait ExchangeProvider: Send + Sync {
     /// assert_eq!(provider.exchange_name(), "Binance");
     /// ```
     fn exchange_name(&self) -> &str;
+
+    /// 체결 내역 조회.
+    ///
+    /// 지정된 기간 동안의 체결 내역을 조회합니다.
+    /// 거래소마다 페이지네이션 방식이 다를 수 있으므로 커서를 지원합니다.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - 체결 내역 조회 요청 (날짜, side, 커서 포함)
+    ///
+    /// # Returns
+    ///
+    /// 체결 내역 목록 및 다음 페이지 커서.
+    ///
+    /// # Errors
+    ///
+    /// - `ProviderError::Network`: 네트워크 연결 실패
+    /// - `ProviderError::Authentication`: 인증 실패
+    /// - `ProviderError::Api`: 거래소 API 에러
+    /// - `ProviderError::Unsupported`: 거래소가 체결 내역 조회를 지원하지 않음
+    ///
+    /// # 기본 구현
+    ///
+    /// 기본적으로 `Unsupported` 에러를 반환합니다.
+    /// 거래소별로 이 메서드를 구현하여 체결 내역 조회를 지원할 수 있습니다.
+    async fn fetch_execution_history(
+        &self,
+        _request: &ExecutionHistoryRequest,
+    ) -> Result<ExecutionHistoryResponse, ProviderError> {
+        Err(ProviderError::Unsupported(
+            "이 거래소는 체결 내역 조회를 지원하지 않습니다".to_string(),
+        ))
+    }
 }
 
 // =============================================================================
@@ -130,7 +213,6 @@ pub trait ExchangeProvider: Send + Sync {
 mod tests {
     use super::*;
     use crate::domain::order::Side;
-    use crate::types::{MarketType, Symbol};
     use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
 
@@ -159,8 +241,8 @@ mod tests {
             if self.should_fail {
                 return Err(ProviderError::Api("Mock API error".to_string()));
             }
-            let symbol = Symbol::new("BTC", "USDT", MarketType::Crypto);
-            let pos = StrategyPositionInfo::new(symbol, Side::Buy, dec!(0.5), dec!(50000));
+            let ticker = "BTC/USDT".to_string();
+            let pos = StrategyPositionInfo::new(ticker, Side::Buy, dec!(0.5), dec!(50000));
             Ok(vec![pos])
         }
 
@@ -194,7 +276,7 @@ mod tests {
         // fetch_positions 테스트
         let positions = provider.fetch_positions().await.unwrap();
         assert_eq!(positions.len(), 1);
-        assert_eq!(positions[0].symbol.base, "BTC");
+        assert_eq!(positions[0].ticker, "BTC/USDT");
 
         // fetch_pending_orders 테스트
         let orders = provider.fetch_pending_orders().await.unwrap();

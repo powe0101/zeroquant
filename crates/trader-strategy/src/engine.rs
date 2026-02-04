@@ -12,7 +12,10 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{debug, error, info, warn};
-use trader_core::{MarketData, Order, Position, Signal};
+use trader_core::{
+    domain::{MarketDataType, StrategyContext},
+    Kline, MarketData, Order, Position, Signal, Timeframe,
+};
 
 /// 전략 엔진 에러.
 #[derive(Error, Debug)]
@@ -51,6 +54,8 @@ pub struct StrategyInstance {
     stats: StrategyStats,
     /// 사용자 지정 이름 (없으면 전략 기본 이름 사용)
     custom_name: Option<String>,
+    /// 전략 컨텍스트 (다중 타임프레임 데이터 등)
+    context: Arc<RwLock<StrategyContext>>,
 }
 
 /// 전략 통계.
@@ -204,7 +209,7 @@ impl StrategyEngine {
     pub async fn register_strategy(
         &self,
         id: impl Into<String>,
-        strategy: Box<dyn Strategy>,
+        mut strategy: Box<dyn Strategy>,
         config: Value,
         custom_name: Option<String>,
     ) -> Result<(), EngineError> {
@@ -232,6 +237,10 @@ impl StrategyEngine {
             "Registering strategy"
         );
 
+        // 전략 컨텍스트 생성 및 주입
+        let context = Arc::new(RwLock::new(StrategyContext::default()));
+        strategy.set_context(Arc::clone(&context));
+
         strategies.insert(
             id,
             StrategyInstance {
@@ -240,6 +249,7 @@ impl StrategyEngine {
                 running: false,
                 stats: StrategyStats::default(),
                 custom_name,
+                context,
             },
         );
 
@@ -421,7 +431,79 @@ impl StrategyEngine {
         statuses
     }
 
+    // =========================================================================
+    // 다중 타임프레임 지원 메서드 (Phase 1.4)
+    // =========================================================================
+
+    /// 전략의 다중 타임프레임 설정 조회.
+    ///
+    /// # 반환
+    ///
+    /// 전략이 다중 타임프레임을 사용하면 `Some(config)`, 아니면 `None`
+    pub async fn get_strategy_multi_tf_config(
+        &self,
+        id: &str,
+    ) -> Result<Option<trader_core::domain::MultiTimeframeConfig>, EngineError> {
+        let strategies = self.strategies.read().await;
+
+        let instance = strategies
+            .get(id)
+            .ok_or_else(|| EngineError::StrategyNotFound(id.to_string()))?;
+
+        Ok(instance.strategy.multi_timeframe_config())
+    }
+
+    /// 전략 컨텍스트 참조 반환.
+    ///
+    /// 외부에서 전략의 컨텍스트를 업데이트할 때 사용합니다.
+    /// 예: 전략 시작 전 히스토리 데이터 로드
+    pub async fn get_strategy_context(
+        &self,
+        id: &str,
+    ) -> Result<Arc<RwLock<StrategyContext>>, EngineError> {
+        let strategies = self.strategies.read().await;
+
+        let instance = strategies
+            .get(id)
+            .ok_or_else(|| EngineError::StrategyNotFound(id.to_string()))?;
+
+        Ok(Arc::clone(&instance.context))
+    }
+
+    /// 전략 컨텍스트에 캔들 데이터 업데이트.
+    ///
+    /// 여러 타임프레임의 캔들 데이터를 한 번에 업데이트합니다.
+    ///
+    /// # 인자
+    ///
+    /// * `id` - 전략 ID
+    /// * `ticker` - 심볼
+    /// * `data` - (타임프레임, 캔들 목록) 튜플 벡터
+    pub async fn update_strategy_klines(
+        &self,
+        id: &str,
+        ticker: &str,
+        data: Vec<(Timeframe, Vec<Kline>)>,
+    ) -> Result<(), EngineError> {
+        let context = self.get_strategy_context(id).await?;
+        let mut ctx = context.write().await;
+
+        ctx.update_multi_timeframe_klines(ticker, data);
+
+        debug!(
+            strategy_id = %id,
+            ticker = %ticker,
+            "Updated strategy klines"
+        );
+
+        Ok(())
+    }
+
     /// 시장 데이터 처리 및 모든 실행 중 전략에 라우팅.
+    ///
+    /// 다중 타임프레임 전략의 경우:
+    /// - Secondary TF 데이터: 컨텍스트만 업데이트, 전략 재평가 안 함
+    /// - Primary TF 데이터: 모든 TF 데이터와 함께 `on_multi_timeframe_data()` 호출
     pub async fn process_market_data(&self, data: MarketData) -> Result<Vec<Signal>, EngineError> {
         let mut all_signals = Vec::new();
         let mut strategies = self.strategies.write().await;
@@ -431,10 +513,15 @@ impl StrategyEngine {
                 continue;
             }
 
-            // 전략이 이 심볼에 관심이 있는지 확인
-            // (현재는 모든 전략이 모든 데이터를 수신)
+            // 다중 타임프레임 전략 처리
+            let signals_result = if let Some(mtf_config) = instance.strategy.multi_timeframe_config() {
+                self.process_multi_timeframe_data(instance, &data, &mtf_config).await
+            } else {
+                // 일반 전략: 기존 방식대로 처리
+                instance.strategy.on_market_data(&data).await
+            };
 
-            match instance.strategy.on_market_data(&data).await {
+            match signals_result {
                 Ok(signals) => {
                     instance.stats.market_data_processed += 1;
 
@@ -445,7 +532,7 @@ impl StrategyEngine {
                         debug!(
                             strategy_id = %id,
                             signal_type = %signal.signal_type,
-                            symbol = %signal.symbol,
+                            ticker = %signal.ticker,
                             side = ?signal.side,
                             "Strategy generated signal"
                         );
@@ -482,6 +569,93 @@ impl StrategyEngine {
         Ok(all_signals)
     }
 
+    /// 다중 타임프레임 데이터 처리.
+    ///
+    /// - Kline 데이터가 아니면 기존 방식대로 `on_market_data()` 호출
+    /// - Kline 데이터면:
+    ///   - 컨텍스트에 캔들 데이터 업데이트
+    ///   - Primary TF인 경우에만 `on_multi_timeframe_data()` 호출
+    ///   - Secondary TF인 경우 빈 벡터 반환 (캐시만 업데이트)
+    async fn process_multi_timeframe_data(
+        &self,
+        instance: &mut StrategyInstance,
+        data: &MarketData,
+        mtf_config: &trader_core::domain::MultiTimeframeConfig,
+    ) -> Result<Vec<Signal>, Box<dyn std::error::Error + Send + Sync>> {
+        // Kline 데이터가 아니면 일반 처리
+        let kline = match &data.data {
+            MarketDataType::Kline(k) => k.clone(),
+            _ => return instance.strategy.on_market_data(data).await,
+        };
+
+        let incoming_tf = kline.timeframe;
+        let ticker = &kline.ticker;
+
+        // 컨텍스트에 캔들 데이터 업데이트
+        {
+            let mut ctx = instance.context.write().await;
+            let candle_count = mtf_config.get_candle_count(incoming_tf);
+
+            // 기존 캔들 목록 가져오기
+            let mut klines = ctx.get_klines(ticker, incoming_tf).to_vec();
+
+            // 새 캔들 추가 (시간순 정렬 유지)
+            if klines.last().map(|k| k.open_time) != Some(kline.open_time) {
+                klines.push(kline.clone());
+            } else {
+                // 같은 시간의 캔들이면 업데이트
+                if let Some(last) = klines.last_mut() {
+                    *last = kline.clone();
+                }
+            }
+
+            // 캔들 수 제한 (오래된 것부터 제거)
+            if klines.len() > candle_count {
+                klines.drain(0..klines.len() - candle_count);
+            }
+
+            ctx.update_klines(ticker, incoming_tf, klines);
+        }
+
+        // Primary TF 확인
+        let primary_tf = mtf_config.get_primary_timeframe();
+
+        // Primary TF가 아니면 캐시만 업데이트하고 신호 생성 안 함
+        if primary_tf.is_some() && Some(incoming_tf) != primary_tf {
+            debug!(
+                ticker = %ticker,
+                incoming_tf = ?incoming_tf,
+                primary_tf = ?primary_tf,
+                "Secondary TF 데이터 캐시 업데이트 (전략 재평가 스킵)"
+            );
+            return Ok(vec![]);
+        }
+
+        // Primary TF 데이터 → 모든 타임프레임 데이터와 함께 전략 호출
+        let secondary_data = {
+            let ctx = instance.context.read().await;
+            let mut data_map: HashMap<Timeframe, Vec<Kline>> = HashMap::new();
+
+            for (&tf, _) in &mtf_config.timeframes {
+                if Some(tf) != primary_tf {
+                    let klines = ctx.get_klines(ticker, tf).to_vec();
+                    data_map.insert(tf, klines);
+                }
+            }
+
+            data_map
+        };
+
+        debug!(
+            ticker = %ticker,
+            primary_tf = ?primary_tf,
+            secondary_tfs = ?secondary_data.keys().collect::<Vec<_>>(),
+            "Primary TF 완료 - 전략 재평가 실행"
+        );
+
+        instance.strategy.on_multi_timeframe_data(data, &secondary_data).await
+    }
+
     /// 중복 제거 윈도우 내 신호 중복 제거.
     async fn deduplicate_signals(&self, signals: Vec<Signal>) -> Vec<Signal> {
         let mut recent = self.recent_signals.write().await;
@@ -496,7 +670,7 @@ impl StrategyEngine {
         for signal in signals {
             let key = format!(
                 "{}:{}:{}:{:?}",
-                signal.strategy_id, signal.symbol, signal.signal_type, signal.side
+                signal.strategy_id, signal.ticker, signal.signal_type, signal.side
             );
 
             use std::collections::hash_map::Entry;
@@ -508,7 +682,7 @@ impl StrategyEngine {
                 Entry::Occupied(_) => {
                     debug!(
                         strategy_id = %signal.strategy_id,
-                        symbol = %signal.symbol,
+                        ticker = %signal.ticker,
                         "Duplicate signal filtered"
                     );
                 }
@@ -796,7 +970,7 @@ mod tests {
 
             // 10개 데이터 포인트마다 신호 생성
             if self.signal_count % 10 == 0 {
-                let signal = Signal::entry(&self.name, data.symbol.clone(), trader_core::Side::Buy);
+                let signal = Signal::entry(&self.name, data.ticker.clone(), trader_core::Side::Buy);
                 Ok(vec![signal])
             } else {
                 Ok(vec![])

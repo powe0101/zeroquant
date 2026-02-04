@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use super::loader::parse_symbol;
 use super::types::{
     BacktestConfigSummary, BacktestMetricsResponse, BacktestMultiRunResponse, BacktestRunResponse,
-    EquityCurvePoint, TradeHistoryItem,
+    EquityCurvePoint, MultiTimeframeRequest, TradeHistoryItem,
 };
 
 use trader_analytics::backtest::{BacktestConfig, BacktestEngine, BacktestReport};
@@ -82,7 +82,7 @@ async fn run_strategy_backtest_inner(
 
     // 심볼 추출 (klines에서)
     let symbol_str = if let Some(first_kline) = klines.first() {
-        first_kline.symbol.to_string()
+        first_kline.ticker.to_string()
     } else {
         "BTC/USDT".to_string()
     };
@@ -90,7 +90,7 @@ async fn run_strategy_backtest_inner(
     // 기본 전략 설정 생성
     let _default_config = |strategy_symbol: &str| -> serde_json::Value {
         serde_json::json!({
-            "symbol": strategy_symbol,
+            "ticker": strategy_symbol,
             "amount": "100000"
         })
     };
@@ -116,7 +116,7 @@ async fn run_strategy_backtest_inner(
             let mut strategy = RsiStrategy::new();
             let strategy_config = merge_params(
                 serde_json::json!({
-                    "symbol": symbol_str,
+                    "ticker": symbol_str,
                     "period": 14,
                     "oversold_threshold": 30.0,
                     "overbought_threshold": 70.0,
@@ -137,7 +137,7 @@ async fn run_strategy_backtest_inner(
             let mut strategy = GridStrategy::new();
             let strategy_config = merge_params(
                 serde_json::json!({
-                    "symbol": symbol_str,
+                    "ticker": symbol_str,
                     "grid_spacing_pct": 1.0,
                     "grid_levels": 10,
                     "amount_per_level": "100000"
@@ -157,7 +157,7 @@ async fn run_strategy_backtest_inner(
             let mut strategy = BollingerStrategy::new();
             let strategy_config = merge_params(
                 serde_json::json!({
-                    "symbol": symbol_str,
+                    "ticker": symbol_str,
                     "period": 20,
                     "std_multiplier": 1.5,
                     "use_rsi_confirmation": false,
@@ -179,7 +179,7 @@ async fn run_strategy_backtest_inner(
             let mut strategy = VolatilityBreakoutStrategy::new();
             let strategy_config = merge_params(
                 serde_json::json!({
-                    "symbol": symbol_str,
+                    "ticker": symbol_str,
                     "k_factor": 0.3,
                     "lookback_period": 1,
                     "use_atr": true,
@@ -202,7 +202,7 @@ async fn run_strategy_backtest_inner(
             let mut strategy = MagicSplitStrategy::new();
             let strategy_config = merge_params(
                 serde_json::json!({
-                    "symbol": symbol_str,
+                    "ticker": symbol_str,
                     "levels": [
                         {"number": 1, "target_rate": "10.0", "trigger_rate": null, "invest_money": "200000"},
                         {"number": 2, "target_rate": "2.0", "trigger_rate": "-3.0", "invest_money": "100000"},
@@ -285,7 +285,7 @@ async fn run_strategy_backtest_inner(
             let mut strategy = SmaStrategy::new();
             let strategy_config = merge_params(
                 serde_json::json!({
-                    "symbol": symbol_str,
+                    "ticker": symbol_str,
                     "short_period": 10,
                     "long_period": 20,
                     "amount": "100000"
@@ -1038,7 +1038,7 @@ pub fn generate_multi_sample_klines(
                 let volume = 1000000.0 * (1.0 + noise.abs());
 
                 Kline {
-                    symbol: symbol.clone(),
+                    ticker: symbol.to_string(),
                     timeframe: Timeframe::D1,
                     open_time,
                     close_time,

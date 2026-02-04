@@ -26,7 +26,7 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
-use trader_core::{types::{MarketType, Symbol}, GlobalScoreResult, Kline};
+use trader_core::{types::{MarketType}, GlobalScoreResult, Kline};
 
 use crate::indicators::{BollingerBandsParams, IndicatorEngine, IndicatorError, MacdParams, RsiParams, SmaParams, StructuralFeatures};
 
@@ -82,7 +82,7 @@ impl Default for FactorWeights {
 #[derive(Debug, Clone)]
 pub struct GlobalScorerParams {
     /// 심볼
-    pub symbol: Option<Symbol>,
+    pub symbol: Option<String>,
 
     /// 시장 유형
     pub market_type: Option<MarketType>,
@@ -231,7 +231,7 @@ impl GlobalScorer {
 
         Ok(GlobalScoreResult {
             // Symbol을 ticker 문자열로 변환
-            ticker: params.symbol.map(|s| s.to_standard_string()),
+            ticker: params.symbol.clone(),
             market_type: params.market_type,
             overall_score: overall_score_dec,
             component_scores: component_scores_dec,
@@ -795,7 +795,7 @@ mod tests {
                 let price = dec!(100) + Decimal::from(i);
                 let timestamp = chrono::Utc::now() - chrono::Duration::days((count - i) as i64);
                 Kline {
-                    symbol: Symbol::new("TEST", "KRW", MarketType::Stock),
+                    ticker: "TEST/KRW".to_string(),
                     timeframe: Timeframe::D1,
                     open_time: timestamp,
                     open: price,
@@ -817,7 +817,7 @@ mod tests {
         let candles = create_test_candles(60);
 
         let params = GlobalScorerParams {
-            symbol: Some(Symbol::new("TEST", "KRW", MarketType::Stock)),
+            symbol: Some("TEST/KRW".to_string()),
             market_type: Some(MarketType::Stock),
             entry_price: Some(dec!(150)),
             target_price: Some(dec!(180)),
@@ -960,7 +960,7 @@ mod tests {
         };
 
         let params = GlobalScorerParams {
-            symbol: Some(Symbol::new("TEST", "KRW", MarketType::Stock)),
+            symbol: Some("TEST/KRW".to_string()),
             market_type: Some(MarketType::Stock),
             structural_features: Some(structural),
             volume_percentile: Some(0.8),

@@ -11,7 +11,7 @@ name = "trader-api"
 path = "src/main.rs"
 
 [dependencies]
-trader-core = { path = "../trader-core", features = ["sqlx-support", "utoipa-support"] }
+trader-core = { path = "../trader-core", features = ["sqlx-support", "utoipa-support", "ts-rs-support"] }
 trader-exchange = { path = "../trader-exchange" }
 trader-strategy = { path = "../trader-strategy" }
 trader-risk = { path = "../trader-risk" }
@@ -89,6 +89,9 @@ utoipa-swagger-ui = { workspace = true }
 
 # Validation
 validator = { workspace = true }
+
+# TypeScript 타입 생성
+ts-rs = { workspace = true }
 
 [features]
 # 기본 feature set - 핵심 기능 포함

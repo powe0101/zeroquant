@@ -1,10 +1,11 @@
 import { createSignal, For, Show } from 'solid-js'
-import { X, ChevronRight, Search, RefreshCw, AlertCircle } from 'lucide-solid'
+import { X, ChevronRight, Search, RefreshCw, AlertCircle, Clock } from 'lucide-solid'
 import { createStrategy } from '../api/client'
-import type { BacktestStrategy } from '../api/client'
+import type { BacktestStrategy, MultiTimeframeConfig, Timeframe } from '../api/client'
 import { DynamicForm } from './DynamicForm'
 import { useToast } from './Toast'
 import { getDefaultTimeframe } from '../utils/format'
+import { MultiTimeframeSelector } from './strategy/MultiTimeframeSelector'
 
 export interface AddStrategyModalProps {
   open: boolean
@@ -25,6 +26,10 @@ export function AddStrategyModal(props: AddStrategyModalProps) {
   const [customName, setCustomName] = createSignal('')
   const [searchQuery, setSearchQuery] = createSignal('')
   const [selectedCategory, setSelectedCategory] = createSignal<string | null>(null)
+
+  // 다중 타임프레임 설정 상태
+  const [multiTfConfig, setMultiTfConfig] = createSignal<MultiTimeframeConfig | null>(null)
+  const [enableMultiTf, setEnableMultiTf] = createSignal(false)
 
   // 생성 상태
   const [isCreating, setIsCreating] = createSignal(false)
@@ -83,6 +88,16 @@ export function AddStrategyModal(props: AddStrategyModalProps) {
     setStrategyParams(initialParams)
     setFormErrors({})
     setCustomName(template.name)
+
+    // 다중 타임프레임 설정 초기화
+    if (template.isMultiTimeframe && template.defaultMultiTimeframeConfig) {
+      setMultiTfConfig(template.defaultMultiTimeframeConfig)
+      setEnableMultiTf(true)
+    } else {
+      setMultiTfConfig(null)
+      setEnableMultiTf(false)
+    }
+
     setModalStep('configure')
   }
 
@@ -161,6 +176,8 @@ export function AddStrategyModal(props: AddStrategyModalProps) {
         strategy_type: template.id,
         name: customName() || template.name,
         parameters: strategyParams(),
+        // 다중 타임프레임 설정 (활성화된 경우만)
+        multiTimeframeConfig: enableMultiTf() && multiTfConfig() ? multiTfConfig() : undefined,
       })
 
       console.log('Strategy created:', response)
@@ -193,6 +210,8 @@ export function AddStrategyModal(props: AddStrategyModalProps) {
     setSearchQuery('')
     setSelectedCategory(null)
     setCreateError(null)
+    setMultiTfConfig(null)
+    setEnableMultiTf(false)
   }
 
   // 선택 단계로 돌아가기
@@ -202,6 +221,8 @@ export function AddStrategyModal(props: AddStrategyModalProps) {
     setStrategyParams({})
     setFormErrors({})
     setCustomName('')
+    setMultiTfConfig(null)
+    setEnableMultiTf(false)
   }
 
   return (
@@ -447,6 +468,65 @@ export function AddStrategyModal(props: AddStrategyModalProps) {
                     전략 실행에 사용할 캔들 주기를 선택하세요.
                   </p>
                 </div>
+
+                {/* 다중 타임프레임 설정 (지원 전략만) */}
+                <Show when={selectedStrategy()?.isMultiTimeframe}>
+                  <div class="p-4 bg-[var(--color-surface)] border border-[var(--color-surface-light)] rounded-lg">
+                    <div class="flex items-center justify-between mb-4">
+                      <div class="flex items-center gap-2">
+                        <Clock class="w-5 h-5 text-[var(--color-primary)]" />
+                        <span class="font-medium text-[var(--color-text)]">다중 타임프레임 설정</span>
+                      </div>
+                      <label class="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={enableMultiTf()}
+                          onChange={(e) => {
+                            const enabled = e.currentTarget.checked
+                            setEnableMultiTf(enabled)
+                            if (enabled && !multiTfConfig()) {
+                              // 기본값 설정: 현재 선택된 타임프레임을 Primary로
+                              const currentTf = (strategyParams().timeframe as Timeframe) || '5m'
+                              setMultiTfConfig({
+                                primary: currentTf,
+                                secondary: [],
+                              })
+                            }
+                          }}
+                          class="w-4 h-4 text-[var(--color-primary)] rounded focus:ring-[var(--color-primary)]"
+                        />
+                        <span class="text-sm text-[var(--color-text-muted)]">활성화</span>
+                      </label>
+                    </div>
+                    <Show when={enableMultiTf()}>
+                      <MultiTimeframeSelector
+                        primaryTimeframe={multiTfConfig()?.primary || '5m'}
+                        secondaryTimeframes={(multiTfConfig()?.secondary || []).map(s => s.timeframe)}
+                        onPrimaryChange={(tf) => {
+                          setMultiTfConfig(prev => prev ? {
+                            ...prev,
+                            primary: tf,
+                            // Primary보다 작은 Secondary는 제거
+                            secondary: prev.secondary.filter(s => {
+                              const tfOrder: Timeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M']
+                              return tfOrder.indexOf(s.timeframe) > tfOrder.indexOf(tf)
+                            }),
+                          } : { primary: tf, secondary: [] })
+                        }}
+                        onSecondaryChange={(tfs) => {
+                          setMultiTfConfig(prev => prev ? {
+                            ...prev,
+                            secondary: tfs.map(tf => ({ timeframe: tf, candle_count: 100 })),
+                          } : { primary: '5m', secondary: tfs.map(tf => ({ timeframe: tf, candle_count: 100 })) })
+                        }}
+                        maxSecondary={3}
+                      />
+                      <p class="mt-3 text-xs text-[var(--color-text-muted)]">
+                        Primary 타임프레임으로 전략이 실행되고, Secondary 타임프레임으로 추세를 확인합니다.
+                      </p>
+                    </Show>
+                  </div>
+                </Show>
 
                 {/* 동적 폼 */}
                 <Show

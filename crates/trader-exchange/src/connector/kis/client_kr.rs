@@ -24,7 +24,19 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
-use trader_core::{ExecutionHistory, ExecutionRecord, OrderStatusType, Side, Symbol};
+use trader_core::{ExecutionHistory, ExecutionRecord, OrderStatusType, RoundMethod, Side, TickSizeProvider};
+
+/// KIS API Rate Limit 에러 메시지 코드.
+/// KIS는 HTTP 500과 함께 이 코드를 반환합니다.
+const KIS_RATE_LIMIT_MSG_CODE: &str = "EGW00201";
+
+/// KIS API 응답이 Rate Limit 에러인지 확인.
+///
+/// KIS API는 초당 거래건수 초과 시 HTTP 500 + JSON body로 에러를 반환합니다:
+/// `{"rt_cd":"1","msg_cd":"EGW00201","msg1":"초당 거래건수를 초과하였습니다."}`
+fn is_kis_rate_limit_error(body: &str) -> bool {
+    body.contains(KIS_RATE_LIMIT_MSG_CODE)
+}
 
 /// KIS 국내 주식 REST API 클라이언트.
 ///
@@ -39,6 +51,8 @@ pub struct KisKrClient {
     oauth: Arc<KisOAuth>,
     client: Client,
     retry_config: RetryConfig,
+    /// 호가 단위 제공자 (옵션, 설정 시 주문 가격 자동 라운딩)
+    tick_size_provider: Option<Arc<dyn TickSizeProvider>>,
 }
 
 impl KisKrClient {
@@ -88,7 +102,21 @@ impl KisKrClient {
             oauth,
             client,
             retry_config,
+            tick_size_provider: None,
         })
+    }
+
+    /// 호가 단위 제공자를 설정합니다.
+    ///
+    /// 설정 시 주문 가격이 자동으로 호가 단위로 라운딩됩니다.
+    /// - 매수 주문: Floor (내림) - 보수적으로 더 낮은 가격
+    /// - 매도 주문: Ceil (올림) - 보수적으로 더 높은 가격
+    ///
+    /// # Arguments
+    /// * `provider` - 호가 단위 제공자 (예: `KrxTickSize`)
+    pub fn with_tick_size_provider(mut self, provider: Arc<dyn TickSizeProvider>) -> Self {
+        self.tick_size_provider = Some(provider);
+        self
     }
 
     /// 내부 OAuth 참조 반환 (토큰 캐싱용).
@@ -149,7 +177,8 @@ impl KisKrClient {
                     }
 
                     // HTTP 에러 코드별 처리
-                    let err = if status.as_u16() == 429 {
+                    // KIS API는 rate limit 시 HTTP 500 + msg_cd="EGW00201" 반환
+                    let err = if status.as_u16() == 429 || is_kis_rate_limit_error(&body) {
                         ExchangeError::RateLimited
                     } else if status.as_u16() == 401 {
                         ExchangeError::Unauthorized(body.clone())
@@ -250,7 +279,8 @@ impl KisKrClient {
                         return parse_response(&resp_body);
                     }
 
-                    let err = if status.as_u16() == 429 {
+                    // KIS API는 rate limit 시 HTTP 500 + msg_cd="EGW00201" 반환
+                    let err = if status.as_u16() == 429 || is_kis_rate_limit_error(&resp_body) {
                         ExchangeError::RateLimited
                     } else if status.as_u16() == 401 {
                         ExchangeError::Unauthorized(resp_body.clone())
@@ -453,6 +483,9 @@ impl KisKrClient {
     }
 
     /// 내부 주문 실행.
+    ///
+    /// # ISA 계좌 제한
+    /// ISA 계좌(RealIsa)는 정책 변경으로 조회만 가능하며, 자동 거래가 지원되지 않습니다.
     async fn place_order(
         &self,
         stock_code: &str,
@@ -461,6 +494,46 @@ impl KisKrClient {
         order_type: &str,
         is_buy: bool,
     ) -> Result<KrOrderResponse, ExchangeError> {
+        // ISA 계좌 거래 차단 (정책 변경으로 조회만 가능)
+        if self.oauth.config().account_type == KisAccountType::RealIsa {
+            warn!(
+                "ISA 계좌 거래 차단됨: stock_code={}, is_buy={}",
+                stock_code, is_buy
+            );
+            return Err(ExchangeError::NotSupported(
+                "ISA 계좌는 정책 변경으로 조회만 가능합니다. 자동 거래가 지원되지 않습니다."
+                    .to_string(),
+            ));
+        }
+
+        // 호가 단위 라운딩 (시장가 주문이 아닌 경우)
+        let rounded_price = if !price.is_zero() {
+            if let Some(ref provider) = self.tick_size_provider {
+                // 매수: Floor (내림) - 보수적으로 더 낮은 가격
+                // 매도: Ceil (올림) - 보수적으로 더 높은 가격
+                let method = if is_buy {
+                    RoundMethod::Floor
+                } else {
+                    RoundMethod::Ceil
+                };
+                let adjusted = provider.round_to_tick(price, method);
+                if adjusted != price {
+                    warn!(
+                        "주문 가격 호가 단위 조정: {} -> {} (종목: {}, 방향: {})",
+                        price,
+                        adjusted,
+                        stock_code,
+                        if is_buy { "매수" } else { "매도" }
+                    );
+                }
+                adjusted
+            } else {
+                price
+            }
+        } else {
+            price
+        };
+
         let tr_id = if is_buy {
             self.get_tr_id(tr_id::KR_BUY_REAL, tr_id::KR_BUY_PAPER)
         } else {
@@ -472,14 +545,14 @@ impl KisKrClient {
             self.oauth.config().rest_base_url()
         );
 
-        // 요청 본문 구성
+        // 요청 본문 구성 (라운딩된 가격 사용)
         let body = serde_json::json!({
             "CANO": self.oauth.config().cano(),
             "ACNT_PRDT_CD": self.oauth.config().acnt_prdt_cd(),
             "PDNO": stock_code,
             "ORD_DVSN": order_type,
             "ORD_QTY": quantity.to_string(),
-            "ORD_UNPR": price.to_string(),
+            "ORD_UNPR": rounded_price.to_string(),
         });
 
         // POST 요청용 해시 키 생성
@@ -659,7 +732,17 @@ impl KisKrClient {
     // ========================================
 
     /// 잔고 조회.
+    ///
+    /// # 계좌 유형별 처리
+    /// - 일반 계좌: `TTTC8434R` (실전) / `VTTC8434R` (모의)
+    /// - ISA 계좌: 일반 tr_id를 먼저 시도 (ISA 전용 `CTSC9015R`은 해당 엔드포인트 미지원)
+    ///
+    /// # Note
+    /// ISA 계좌에서 잔고 조회가 실패할 경우 provider 레벨에서 체결 내역 기반
+    /// fallback이 작동합니다.
     pub async fn get_balance(&self) -> Result<KrBalance, ExchangeError> {
+        // ISA 계좌도 일반 tr_id 사용 (CTSC9015R은 해당 엔드포인트에서 지원되지 않음)
+        // ISA 전용 API가 별도로 존재하지만, 현재 엔드포인트에서는 일반 tr_id로 조회 시도
         let tr_id = self.get_tr_id(tr_id::KR_BALANCE_REAL, tr_id::KR_BALANCE_PAPER);
         let url = format!(
             "{}/uapi/domestic-stock/v1/trading/inquire-balance",
@@ -706,6 +789,7 @@ impl KisKrClient {
         debug!("KR balance response: {}", body);
 
         let resp: KisKrBalanceResponse = serde_json::from_str(&body).map_err(|e| {
+            error!("KIS balance response parse failed. Body: {}", body);
             ExchangeError::ParseError(format!("Failed to parse balance response: {}", e))
         })?;
 
@@ -717,8 +801,8 @@ impl KisKrClient {
         }
 
         Ok(KrBalance {
-            holdings: resp.output1,
-            summary: resp.output2.into_iter().next(),
+            holdings: resp.output1.unwrap_or_default(),
+            summary: resp.output2.and_then(|v| v.into_iter().next()),
         })
     }
 
@@ -973,7 +1057,7 @@ impl KisKrClient {
             _ => self.get_tr_id(tr_id::KR_ORDER_HISTORY_REAL, tr_id::KR_ORDER_HISTORY_PAPER),
         };
 
-        info!(
+        debug!(
             "Using tr_id {} for order history (account_type: {:?})",
             tr_id,
             self.oauth.config().account_type
@@ -1026,10 +1110,10 @@ impl KisKrClient {
             });
         }
 
-        // 디버깅용: 실제 API 응답 출력
-        info!(
-            "KR order history response (first 2000 chars): {}",
-            &body[..body.len().min(2000)]
+        // 디버깅용: 실제 API 응답 (DEBUG 레벨)
+        debug!(
+            "KR order history response (first 500 chars): {}",
+            &body[..body.len().min(500)]
         );
 
         let resp: KisKrOrderHistoryResponse = serde_json::from_str(&body).map_err(|e| {
@@ -1052,7 +1136,7 @@ impl KisKrClient {
         // Python 로직: NKKey가 비어있지 않고, 실제 데이터가 있으면 연속 조회
         let has_more = !ctx_nk.is_empty() && !resp.output1.is_empty();
 
-        info!(
+        debug!(
             "KR order history loaded: {} executions, has_more={}, ctx_fk_len={}, ctx_nk_len={}",
             resp.output1.len(),
             has_more,
@@ -1481,7 +1565,7 @@ impl KrOrderExecution {
             } else {
                 Some(self.original_order_no.clone())
             },
-            symbol: Symbol::stock(&self.stock_code, "KRW"),
+            symbol: self.stock_code.clone(),
             asset_name: self.stock_name.clone(),
             side,
             order_type: self.order_type_name.clone(),
@@ -1558,8 +1642,8 @@ struct KisKrBalanceResponse {
     rt_cd: String,
     msg_cd: String,
     msg1: String,
-    output1: Vec<KrHolding>,
-    output2: Vec<KrAccountSummary>,
+    output1: Option<Vec<KrHolding>>,
+    output2: Option<Vec<KrAccountSummary>>,
 }
 
 #[derive(Debug, Deserialize)]

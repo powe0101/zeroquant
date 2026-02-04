@@ -6,6 +6,8 @@
 //!
 //! - `GET /api/v1/dataset` - 캐시된 데이터셋 목록 조회
 //! - `POST /api/v1/dataset/fetch` - 새 데이터셋 다운로드 요청
+//! - `GET /api/v1/dataset/search` - 심볼 검색
+//! - `POST /api/v1/dataset/symbols/batch` - 여러 티커의 심볼 정보 일괄 조회
 //! - `GET /api/v1/dataset/:symbol` - 특정 심볼의 캔들 데이터 조회
 //! - `DELETE /api/v1/dataset/:symbol` - 특정 심볼 캐시 삭제
 
@@ -1002,6 +1004,100 @@ pub async fn search_symbols(
     Ok(Json(SymbolSearchResponse { results, total }))
 }
 
+// ==================== 심볼 배치 조회 ====================
+
+/// 심볼 배치 조회 요청.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolBatchRequest {
+    /// 조회할 티커 목록 (최대 100개)
+    pub tickers: Vec<String>,
+}
+
+/// 심볼 배치 조회 응답.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolBatchResponse {
+    /// 심볼 정보 목록
+    pub symbols: Vec<SymbolSearchResult>,
+    /// 조회된 심볼 수
+    pub total: usize,
+}
+
+/// 여러 티커의 심볼 정보 일괄 조회.
+///
+/// POST /api/v1/dataset/symbols/batch
+///
+/// # 요청 본문
+/// ```json
+/// {
+///   "tickers": ["005930", "AAPL", "BTCUSDT"]
+/// }
+/// ```
+///
+/// # 응답
+/// ```json
+/// {
+///   "symbols": [
+///     { "ticker": "005930", "name": "삼성전자", "market": "KOSPI", "yahooSymbol": "005930.KS" },
+///     { "ticker": "AAPL", "name": "Apple Inc.", "market": "NASDAQ", "yahooSymbol": "AAPL" }
+///   ],
+///   "total": 2
+/// }
+/// ```
+pub async fn get_symbols_batch(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SymbolBatchRequest>,
+) -> Result<Json<SymbolBatchResponse>, (StatusCode, Json<ApiError>)> {
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new(
+                "DB_NOT_CONFIGURED",
+                "데이터베이스가 설정되지 않았습니다",
+            )),
+        )
+    })?;
+
+    // 최대 100개 제한
+    if request.tickers.len() > 100 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "TOO_MANY_TICKERS",
+                "한 번에 최대 100개의 티커만 조회할 수 있습니다",
+            )),
+        ));
+    }
+
+    // 빈 요청 처리
+    if request.tickers.is_empty() {
+        return Ok(Json(SymbolBatchResponse {
+            symbols: vec![],
+            total: 0,
+        }));
+    }
+
+    let results = SymbolInfoRepository::get_by_tickers(pool, &request.tickers)
+        .await
+        .map_err(|e| {
+            error!("심볼 배치 조회 실패: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError::new(
+                    "QUERY_ERROR",
+                    &format!("심볼 조회 실패: {}", e),
+                )),
+            )
+        })?;
+
+    let total = results.len();
+    Ok(Json(SymbolBatchResponse {
+        symbols: results,
+        total,
+    }))
+}
+
 // ==================== CSV 동기화 기능 제거됨 ====================
 // KRX, EOD CSV 동기화는 trader-collector로 이동되었습니다.
 // API 엔드포인트로 제공되던 기능은 CLI 도구를 통해 수행할 수 있습니다.
@@ -1015,7 +1111,8 @@ pub fn dataset_router() -> Router<Arc<AppState>> {
         .route("/", get(list_datasets))
         .route("/fetch", post(fetch_dataset))
         .route("/search", get(search_symbols))
-        // CSV 동기화 기능은 trader-collector로 이동됨
+        // 심볼 배치 조회
+        .route("/symbols/batch", post(get_symbols_batch))
         // 심볼 상태 관리 (실패/비활성화)
         .route("/symbols/failed", get(get_failed_symbols))
         .route("/symbols/stats", get(get_symbol_stats))

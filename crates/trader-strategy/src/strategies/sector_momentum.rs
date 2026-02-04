@@ -45,7 +45,7 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 시장 타입.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -70,14 +70,14 @@ pub enum WeightingMethod {
 /// 섹터 정보.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SectorInfo {
-    pub symbol: String,
+    pub ticker:  String,
     pub name: String,
 }
 
 impl SectorInfo {
-    pub fn new(symbol: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn new(ticker: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             name: name.into(),
         }
     }
@@ -247,7 +247,7 @@ impl SectorMomentumConfig {
 /// 섹터별 모멘텀 데이터.
 #[derive(Debug, Clone)]
 struct SectorData {
-    symbol: String,
+    ticker:  String,
     name: String,
     current_price: Decimal,
     prices: Vec<Decimal>,
@@ -256,9 +256,9 @@ struct SectorData {
 }
 
 impl SectorData {
-    fn new(symbol: String, name: String) -> Self {
+    fn new(ticker:  String, name: String) -> Self {
         Self {
-            symbol,
+            ticker,
             name,
             current_price: Decimal::ZERO,
             prices: Vec::new(),
@@ -320,7 +320,7 @@ impl SectorData {
 /// 섹터 모멘텀 전략.
 pub struct SectorMomentumStrategy {
     config: Option<SectorMomentumConfig>,
-    symbols: Vec<Symbol>,
+    tickers: Vec<String>,
     sector_data: HashMap<String, SectorData>,
 
     /// 마지막 리밸런싱 날짜
@@ -340,7 +340,7 @@ impl SectorMomentumStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             sector_data: HashMap::new(),
             last_rebalance_month: None,
             trades_count: 0,
@@ -400,7 +400,7 @@ impl SectorMomentumStrategy {
             .sector_data
             .values()
             .filter(|s| s.momentum_score > Decimal::ZERO)
-            .map(|s| (s.symbol.clone(), s.momentum_score))
+            .map(|s| (s.ticker.clone(), s.momentum_score))
             .collect();
 
         sectors.sort_by(|a, b| b.1.cmp(&a.1));
@@ -428,23 +428,23 @@ impl SectorMomentumStrategy {
             WeightingMethod::Equal => {
                 let weight = dec!(1) / Decimal::from(top_sectors.len());
 
-                for (symbol, score) in top_sectors {
-                    allocations.push(TargetAllocation::new(symbol.clone(), weight));
-                    debug!(symbol = %symbol, score = %score, weight = %weight, "섹터 선택");
+                for (ticker, score) in top_sectors {
+                    allocations.push(TargetAllocation::new(ticker.clone(), weight));
+                    debug!(ticker = %ticker, score = %score, weight = %weight, "섹터 선택");
                 }
             }
             WeightingMethod::Momentum => {
                 let total_score: Decimal = top_sectors.iter().map(|(_, s)| *s).sum();
 
-                for (symbol, score) in top_sectors {
+                for (ticker, score) in top_sectors {
                     let weight = if total_score > Decimal::ZERO {
                         score / total_score
                     } else {
                         dec!(1) / Decimal::from(config.top_n)
                     };
 
-                    allocations.push(TargetAllocation::new(symbol.clone(), weight));
-                    debug!(symbol = %symbol, score = %score, weight = %weight, "모멘텀 비중 섹터");
+                    allocations.push(TargetAllocation::new(ticker.clone(), weight));
+                    debug!(ticker = %ticker, score = %score, weight = %weight, "모멘텀 비중 섹터");
                 }
             }
         }
@@ -487,7 +487,7 @@ impl SectorMomentumStrategy {
             .sector_data
             .values()
             .filter(|d| d.current_holdings > Decimal::ZERO)
-            .map(|d| PortfolioPosition::new(&d.symbol, d.current_holdings, d.current_price))
+            .map(|d| PortfolioPosition::new(&d.ticker, d.current_holdings, d.current_price))
             .collect();
 
         // 현금 포지션 추가
@@ -509,7 +509,7 @@ impl SectorMomentumStrategy {
         let mut signals = Vec::new();
 
         for order in result.orders {
-            let symbol = Symbol::stock(&order.symbol, quote_currency);
+            let ticker = format!("{}/{}", order.ticker, quote_currency);
 
             let side = match order.side {
                 RebalanceOrderSide::Buy => Side::Buy,
@@ -524,21 +524,21 @@ impl SectorMomentumStrategy {
             };
 
             // BUY 신호는 StrategyContext 조건 확인 (매도는 항상 허용)
-            if order.side == RebalanceOrderSide::Buy && !self.can_enter(&order.symbol) {
+            if order.side == RebalanceOrderSide::Buy && !self.can_enter(&order.ticker) {
                 debug!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     "BUY 신호 스킵: StrategyContext 조건 미충족"
                 );
                 continue;
             }
 
             let signal = if order.side == RebalanceOrderSide::Buy {
-                Signal::entry("sector_momentum", symbol, side)
+                Signal::entry("sector_momentum", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
             } else {
-                Signal::exit("sector_momentum", symbol, side)
+                Signal::exit("sector_momentum", ticker, side)
                     .with_strength(0.5)
                     .with_prices(Some(price), None, None)
                     .with_metadata("reason", json!("rebalance"))
@@ -595,12 +595,12 @@ impl Strategy for SectorMomentumStrategy {
         let quote = sm_config.get_quote_currency();
 
         for sector in sm_config.get_sectors() {
-            let symbol = Symbol::stock(&sector.symbol, quote);
-            self.symbols.push(symbol);
+            let ticker = format!("{}/{}", sector.ticker, quote);
+            self.tickers.push(ticker);
 
             self.sector_data.insert(
-                sector.symbol.clone(),
-                SectorData::new(sector.symbol, sector.name),
+                sector.ticker.clone(),
+                SectorData::new(sector.ticker, sector.name),
             );
         }
 
@@ -618,10 +618,10 @@ impl Strategy for SectorMomentumStrategy {
             return Ok(vec![]);
         }
 
-        // base 심볼만 추출 (XLK/USD -> XLK)
-        let symbol_str = data.symbol.base.clone();
+        // base 티커만 추출 (XLK/USD -> XLK)
+        let ticker_str = data.ticker.clone();
 
-        if !self.sector_data.contains_key(&symbol_str) {
+        if !self.sector_data.contains_key(&ticker_str) {
             return Ok(vec![]);
         }
 
@@ -630,7 +630,7 @@ impl Strategy for SectorMomentumStrategy {
             _ => return Ok(vec![]),
         };
 
-        if let Some(sector) = self.sector_data.get_mut(&symbol_str) {
+        if let Some(sector) = self.sector_data.get_mut(&ticker_str) {
             sector.add_price(close);
         }
 
@@ -649,10 +649,10 @@ impl Strategy for SectorMomentumStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // base 심볼만 추출 (XLK/USD -> XLK)
-        let symbol_str = order.symbol.base.clone();
+        // base 티커만 추출 (XLK/USD -> XLK)
+        let ticker_str = order.ticker.clone();
 
-        if let Some(sector) = self.sector_data.get_mut(&symbol_str) {
+        if let Some(sector) = self.sector_data.get_mut(&ticker_str) {
             match order.side {
                 Side::Buy => sector.current_holdings += order.quantity,
                 Side::Sell => {
@@ -739,7 +739,7 @@ register_strategy! {
     name: "섹터 모멘텀",
     description: "섹터별 모멘텀 분석으로 상위 섹터에 투자합니다.",
     timeframe: "1d",
-    symbols: ["XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE"],
+    tickers: ["XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE"],
     category: Daily,
     markets: [Stock, Stock],
     type: SectorMomentumStrategy

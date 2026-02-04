@@ -717,14 +717,44 @@ impl EquityHistoryRepository {
         }
 
         // 3. 현재 보유 중인 심볼만 필터링 (수량 > 0)
-        let active_symbols: Vec<String> = all_holdings
+        let positive_holdings: Vec<String> = all_holdings
             .iter()
             .filter(|(_, qty)| **qty > Decimal::ZERO)
             .map(|(symbol, _)| symbol.clone())
             .collect();
 
-        if active_symbols.is_empty() {
+        if positive_holdings.is_empty() {
             info!("활성 포지션 없음 (credential: {})", credential_id);
+            return Ok(0);
+        }
+
+        // 4. 상장폐지 종목 제외 (is_active = false인 심볼 필터링)
+        let delisted_symbols: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT ticker FROM symbol_info
+            WHERE ticker = ANY($1) AND is_active = false
+            "#,
+        )
+        .bind(&positive_holdings)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        let active_symbols: Vec<String> = positive_holdings
+            .into_iter()
+            .filter(|s| !delisted_symbols.contains(s))
+            .collect();
+
+        if !delisted_symbols.is_empty() {
+            warn!(
+                "상장폐지 종목 {} 개 제외: {:?}",
+                delisted_symbols.len(),
+                delisted_symbols
+            );
+        }
+
+        if active_symbols.is_empty() {
+            info!("활성 포지션 없음 (상장폐지 제외 후, credential: {})", credential_id);
             return Ok(0);
         }
 
@@ -826,12 +856,19 @@ impl EquityHistoryRepository {
             price_cache.len()
         );
 
-        // 6. 일별 자산 계산 및 저장 (주식 가치만)
+        // 6. 각 심볼의 마지막 알려진 가격 추출 (fallback용)
+        let mut last_known_prices: HashMap<String, Decimal> = HashMap::new();
+        for ((symbol, _), price) in &price_cache {
+            last_known_prices.insert(symbol.clone(), *price);
+        }
+
+        // 7. 일별 자산 계산 및 저장 (주식 가치만)
         let mut active_holdings: HashMap<String, Decimal> = HashMap::new();
         let mut saved_count = 0;
         let mut prev_equity = Decimal::ZERO;
         let mut initial_equity = Decimal::ZERO;
         let mut is_first = true;
+        let mut missing_price_symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         let mut current_date = start_date;
         while current_date <= end_date {
@@ -840,14 +877,15 @@ impl EquityHistoryRepository {
             }
 
             let mut securities_value = Decimal::ZERO;
-            let mut has_all_prices = true;
+            let mut _has_all_prices = true;
 
             for (symbol, qty) in &active_holdings {
                 if *qty > Decimal::ZERO {
                     let mut price = None;
                     let mut lookup_date = current_date;
-                    for _ in 0..7 {
-                        // 최대 7일 전까지 탐색 (주말/공휴일)
+
+                    // 1차: 최대 14일 전까지 탐색 (주말/공휴일/연휴)
+                    for _ in 0..14 {
                         if let Some(p) = price_cache.get(&(symbol.clone(), lookup_date)) {
                             price = Some(*p);
                             break;
@@ -855,17 +893,34 @@ impl EquityHistoryRepository {
                         lookup_date = lookup_date.pred_opt().unwrap_or(lookup_date);
                     }
 
+                    // 2차: 전체 캐시에서 마지막 알려진 가격 사용
+                    if price.is_none() {
+                        if let Some(p) = last_known_prices.get(symbol) {
+                            price = Some(*p);
+                            if !missing_price_symbols.contains(symbol) {
+                                warn!(
+                                    "{} 종가 없음, 마지막 알려진 가격 {} 사용: {} (보유: {})",
+                                    current_date, p, symbol, qty
+                                );
+                                missing_price_symbols.insert(symbol.clone());
+                            }
+                        }
+                    }
+
                     if let Some(p) = price {
                         securities_value += *qty * p;
                     } else {
-                        has_all_prices = false;
-                        warn!("{} 종가 없음: {} (보유: {})", current_date, symbol, qty);
+                        _has_all_prices = false;
+                        if !missing_price_symbols.contains(symbol) {
+                            warn!("{} 종가 전혀 없음: {} (보유: {})", current_date, symbol, qty);
+                            missing_price_symbols.insert(symbol.clone());
+                        }
                     }
                 }
             }
 
-            // 모든 종가가 있고 보유 종목이 있는 날만 저장
-            if has_all_prices && securities_value > Decimal::ZERO {
+            // 보유 종목이 있는 날만 저장 (일부 가격 누락되어도 계산된 값 사용)
+            if securities_value > Decimal::ZERO {
                 if is_first {
                     initial_equity = securities_value;
                     prev_equity = securities_value;

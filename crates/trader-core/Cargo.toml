@@ -46,10 +46,14 @@ sqlx = { workspace = true, optional = true }
 # API documentation (optional)
 utoipa = { workspace = true, optional = true }
 
+# TypeScript 타입 생성 (optional)
+ts-rs = { workspace = true, optional = true }
+
 [features]
 default = []
 sqlx-support = ["sqlx"]
 utoipa-support = ["utoipa"]
+ts-rs-support = ["ts-rs"]
 
 [dev-dependencies]
 proptest = { workspace = true }

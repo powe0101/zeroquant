@@ -4,7 +4,7 @@
  * 0-100 점수에 따라 색상이 변하는 뱃지를 표시합니다.
  * 점수대별 추천 등급도 함께 표시 가능합니다.
  */
-import { Component, createMemo, Show } from 'solid-js'
+import { type Component, createMemo, Show } from 'solid-js'
 import {
   TrendingUp,
   TrendingDown,
@@ -103,7 +103,9 @@ const sizeStyles = {
 }
 
 export const GlobalScoreBadge: Component<GlobalScoreBadgeProps> = (props) => {
-  const config = createMemo(() => getScoreConfig(props.score))
+  // score가 undefined/null이면 0으로 처리
+  const score = () => props.score ?? 0
+  const config = createMemo(() => getScoreConfig(score()))
   const size = createMemo(() => sizeStyles[props.size || 'md'])
   const showGrade = () => props.showGrade !== false
   const showIcon = () => props.showIcon !== false
@@ -125,7 +127,7 @@ export const GlobalScoreBadge: Component<GlobalScoreBadgeProps> = (props) => {
       <Show when={showIcon()}>
         <Icon />
       </Show>
-      <span>{props.score.toFixed(0)}</span>
+      <span>{score().toFixed(0)}</span>
       <Show when={showGrade()}>
         <span class="text-xs opacity-75">({config().grade})</span>
       </Show>
@@ -142,13 +144,16 @@ export const GlobalScoreBar: Component<{
   height?: 'sm' | 'md' | 'lg'
   className?: string
 }> = (props) => {
-  const config = createMemo(() => getScoreConfig(props.score))
+  // score가 undefined/null이면 0으로 처리
+  const score = () => props.score ?? 0
+  const config = createMemo(() => getScoreConfig(score()))
 
   const barColor = createMemo(() => {
-    if (props.score >= 80) return 'bg-green-500'
-    if (props.score >= 70) return 'bg-lime-500'
-    if (props.score >= 60) return 'bg-yellow-500'
-    if (props.score >= 50) return 'bg-orange-500'
+    const s = score()
+    if (s >= 80) return 'bg-green-500'
+    if (s >= 70) return 'bg-lime-500'
+    if (s >= 60) return 'bg-yellow-500'
+    if (s >= 50) return 'bg-orange-500'
     return 'bg-red-500'
   })
 
@@ -165,12 +170,12 @@ export const GlobalScoreBar: Component<{
       <div class={`flex-1 bg-gray-200 dark:bg-gray-700 rounded-full ${heightClass()}`}>
         <div
           class={`${barColor()} ${heightClass()} rounded-full transition-all duration-300`}
-          style={{ width: `${Math.min(100, Math.max(0, props.score))}%` }}
+          style={{ width: `${Math.min(100, Math.max(0, score()))}%` }}
         />
       </div>
       <Show when={props.showLabel !== false}>
         <span class={`text-sm font-medium ${config().text}`}>
-          {props.score.toFixed(0)}
+          {score().toFixed(0)}
         </span>
       </Show>
     </div>

@@ -20,27 +20,9 @@ use trader_risk::RiskManager;
 use trader_strategy::StrategyEngine;
 use uuid::Uuid;
 
+use crate::repository::ExchangeProviderPair;
 use crate::services::context_sync::start_context_sync_service;
-
 use crate::websocket::{ServerMessage, SharedSubscriptionManager};
-
-/// KIS 국내/해외 클라이언트 쌍.
-///
-/// 토큰 재사용을 위해 credential_id별로 캐싱됩니다.
-pub struct KisClientPair {
-    pub kr: Arc<KisKrClient>,
-    pub us: Arc<KisUsClient>,
-}
-
-impl KisClientPair {
-    /// 새 클라이언트 쌍 생성.
-    pub fn new(kr: KisKrClient, us: KisUsClient) -> Self {
-        Self {
-            kr: Arc::new(kr),
-            us: Arc::new(us),
-        }
-    }
-}
 
 /// 애플리케이션 공유 상태.
 ///
@@ -70,11 +52,11 @@ pub struct AppState {
     /// KIS 해외 주식 클라이언트 (한국투자증권 API - 미국 등)
     pub kis_us_client: Option<Arc<KisUsClient>>,
 
-    /// credential_id별 KIS 클라이언트 캐시.
+    /// credential_id별 거래소 Provider 캐시 (거래소 중립).
     ///
-    /// 매 요청마다 새 클라이언트를 생성하면 토큰 발급 제한(1분 1회)에 걸리므로,
-    /// 캐시된 클라이언트를 재사용합니다.
-    pub kis_clients_cache: Arc<RwLock<HashMap<Uuid, Arc<KisClientPair>>>>,
+    /// 매 요청마다 새 Provider를 생성하면 토큰 발급 제한(1분 1회)에 걸리므로,
+    /// 캐시된 Provider를 재사용합니다.
+    pub exchange_providers_cache: Arc<RwLock<HashMap<Uuid, Arc<ExchangeProviderPair>>>>,
 
     /// app_key 기반 KisOAuth 캐시 (토큰 공유).
     ///
@@ -152,7 +134,7 @@ impl AppState {
             cache: None,
             kis_kr_client: None,
             kis_us_client: None,
-            kis_clients_cache: Arc::new(RwLock::new(HashMap::new())),
+            exchange_providers_cache: Arc::new(RwLock::new(HashMap::new())),
             kis_oauth_cache: Arc::new(RwLock::new(HashMap::new())),
             encryptor,
             subscriptions: None,

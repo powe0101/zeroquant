@@ -81,7 +81,7 @@ impl From<&Order> for OrderResponse {
         Self {
             id: order.id.to_string(),
             exchange_order_id: order.exchange_order_id.clone(),
-            symbol: order.symbol.to_string(),
+            symbol: order.ticker.to_string(),
             display_name: None, // 핸들러에서 설정
             side: order.side,
             order_type: order.order_type,
@@ -187,7 +187,7 @@ pub async fn create_order(
 
     // OrderRequest 생성
     let order_request = OrderRequest {
-        symbol: symbol.clone(),
+        ticker: symbol.to_string(),
         side: request.side,
         order_type: request.order_type,
         quantity: request.quantity,
@@ -263,14 +263,14 @@ pub async fn list_orders(State(state): State<Arc<AppState>>) -> impl IntoRespons
     }; // 락 해제됨
 
     // 락 없이 후속 작업 수행
-    let symbols: Vec<String> = orders.iter().map(|o| o.symbol.to_string()).collect();
+    let symbols: Vec<String> = orders.iter().map(|o| o.ticker.clone()).collect();
     let display_names = state.get_display_names(&symbols, false).await;
 
     let order_responses: Vec<OrderResponse> = orders
         .iter()
         .map(|o| {
             let mut resp = OrderResponse::from(o);
-            if let Some(name) = display_names.get(&o.symbol.to_string()) {
+            if let Some(name) = display_names.get(&o.ticker) {
                 resp.display_name = Some(name.clone());
             }
             resp
@@ -315,7 +315,7 @@ pub async fn get_order(
             let mut resp = OrderResponse::from(&order);
             resp.display_name = Some(
                 state
-                    .get_display_name(&order.symbol.to_string(), false)
+                    .get_display_name(&order.ticker.to_string(), false)
                     .await,
             );
             Ok(Json(resp))
@@ -381,12 +381,12 @@ pub async fn cancel_order(
                 Side::Buy => "buy",
                 Side::Sell => "sell",
             };
-            record_order(&order_info.symbol.to_string(), "cancelled", "default");
+            record_order(&order_info.ticker, "cancelled", "default");
 
             // WebSocket 브로드캐스트: 주문 취소 알림
             state.broadcast(ServerMessage::OrderUpdate(OrderUpdateData {
                 order_id: order_id.to_string(),
-                symbol: order_info.symbol.to_string(),
+                symbol: order_info.ticker.clone(),
                 status: "cancelled".to_string(),
                 side: side_str.to_string(),
                 order_type: format!("{:?}", order_info.order_type).to_lowercase(),

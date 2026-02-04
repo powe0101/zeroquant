@@ -255,7 +255,7 @@ impl UnifiedHistoricalProvider {
         let close_time = open_time + Self::timeframe_duration(timeframe);
 
         Kline {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             timeframe,
             open_time,
             open: data.open,
@@ -279,7 +279,7 @@ impl UnifiedHistoricalProvider {
         let close_time = open_time + Self::timeframe_duration(timeframe);
 
         Kline {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             timeframe,
             open_time,
             open: data.open,
@@ -303,7 +303,7 @@ impl UnifiedHistoricalProvider {
         let close_time = open_time + Self::timeframe_duration(timeframe);
 
         Kline {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             timeframe,
             open_time,
             open: data.open,

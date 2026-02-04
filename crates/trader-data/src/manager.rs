@@ -148,10 +148,26 @@ impl DataManager {
     // 심볼 작업
     // =========================================================================
 
+    /// ticker 문자열에서 Symbol 객체를 생성합니다 (Kline 생성용).
+    fn ticker_to_symbol(ticker: &str) -> Symbol {
+        let parts: Vec<&str> = ticker.split('/').collect();
+        if parts.len() == 2 {
+            Symbol::crypto(parts[0], parts[1])
+        } else {
+            // 주식 심볼은 통화를 추정
+            let currency = if ticker.ends_with(".KS") || ticker.ends_with(".KQ") {
+                "KRW"
+            } else {
+                "USD"
+            };
+            Symbol::stock(ticker, currency)
+        }
+    }
+
     /// 스토리지 작업을 위한 심볼 ID를 가져오거나 생성합니다.
     #[instrument(skip(self))]
-    pub async fn get_symbol_id(&self, symbol: &Symbol, exchange: &str) -> Result<Uuid> {
-        let key = (exchange.to_string(), symbol.to_string());
+    pub async fn get_symbol_id(&self, ticker: &str, exchange: &str) -> Result<Uuid> {
+        let key = (exchange.to_string(), ticker.to_string());
 
         // 먼저 인메모리 캐시 확인
         {
@@ -162,7 +178,11 @@ impl DataManager {
         }
 
         // 데이터베이스에서 가져오거나 생성
-        let id = self.symbols.get_or_create(symbol, exchange).await?;
+        // TODO: SymbolResolver를 통해 ticker로부터 quote, market_type 조회
+        // 임시로 기본값 사용
+        let quote = if exchange == "kis" { "KRW" } else { "USD" };
+        let market_type = "stock";
+        let id = self.symbols.get_or_create(ticker, quote, market_type, exchange).await?;
 
         // 메모리 캐시에 저장
         {
@@ -185,7 +205,7 @@ impl DataManager {
     /// Kline을 저장합니다.
     #[instrument(skip(self, kline))]
     pub async fn store_kline(&self, exchange: &str, kline: &Kline) -> Result<()> {
-        let symbol_id = self.get_symbol_id(&kline.symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(&kline.ticker, exchange).await?;
 
         // 데이터베이스에 저장
         self.klines.insert(symbol_id, kline).await?;
@@ -195,7 +215,7 @@ impl DataManager {
             cache
                 .append_kline(
                     exchange,
-                    &kline.symbol.to_string(),
+                    &kline.ticker.to_string(),
                     &kline.timeframe,
                     kline,
                     self.config.max_cached_klines,
@@ -214,7 +234,7 @@ impl DataManager {
             return Ok(0);
         }
 
-        let symbol_id = self.get_symbol_id(&klines[0].symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(&klines[0].ticker, exchange).await?;
 
         self.klines.insert_batch(symbol_id, klines).await
     }
@@ -224,7 +244,7 @@ impl DataManager {
     pub async fn get_klines(
         &self,
         exchange: &str,
-        symbol: &Symbol,
+        ticker: &str,
         timeframe: Timeframe,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
@@ -233,7 +253,7 @@ impl DataManager {
         // 최근 데이터는 먼저 캐시에서 시도
         if let Some(cache) = &self.cache {
             if let Some(cached) = cache
-                .get_klines(exchange, &symbol.to_string(), &timeframe)
+                .get_klines(exchange, ticker, &timeframe)
                 .await
                 .ok()
                 .flatten()
@@ -252,22 +272,25 @@ impl DataManager {
         }
 
         // 데이터베이스로 폴백
-        let symbol_id = self.get_symbol_id(symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(ticker, exchange).await?;
         let records = self
             .klines
             .get_range(symbol_id, timeframe, start, end, limit)
             .await?;
 
+        // ticker에서 Symbol 생성 (Kline 생성을 위해)
+        let symbol_obj = Self::ticker_to_symbol(ticker);
+
         let klines: Vec<Kline> = records
             .into_iter()
-            .map(|r| r.to_kline(symbol.clone()))
+            .map(|r| r.to_kline(symbol_obj.clone()))
             .collect();
 
         // 가져온 데이터로 캐시 업데이트
         if let Some(cache) = &self.cache {
             if !klines.is_empty() {
                 cache
-                    .set_klines(exchange, &symbol.to_string(), &timeframe, &klines)
+                    .set_klines(exchange, ticker, &timeframe, &klines)
                     .await
                     .ok();
             }
@@ -280,14 +303,14 @@ impl DataManager {
     pub async fn get_latest_klines(
         &self,
         exchange: &str,
-        symbol: &Symbol,
+        ticker: &str,
         timeframe: Timeframe,
         count: i32,
     ) -> Result<Vec<Kline>> {
         // 먼저 캐시에서 시도
         if let Some(cache) = &self.cache {
             if let Some(cached) = cache
-                .get_klines(exchange, &symbol.to_string(), &timeframe)
+                .get_klines(exchange, ticker, &timeframe)
                 .await
                 .ok()
                 .flatten()
@@ -300,12 +323,15 @@ impl DataManager {
         }
 
         // 데이터베이스로 폴백
-        let symbol_id = self.get_symbol_id(symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(ticker, exchange).await?;
         let records = self.klines.get_latest(symbol_id, timeframe, count).await?;
+
+        // ticker에서 Symbol 생성 (Kline 생성을 위해)
+        let symbol_obj = Self::ticker_to_symbol(ticker);
 
         Ok(records
             .into_iter()
-            .map(|r| r.to_kline(symbol.clone()))
+            .map(|r| r.to_kline(symbol_obj.clone()))
             .collect())
     }
 
@@ -355,7 +381,7 @@ impl DataManager {
 
     /// 체결 틱을 저장합니다.
     pub async fn store_trade_tick(&self, exchange: &str, trade: &TradeTick) -> Result<()> {
-        let symbol_id = self.get_symbol_id(&trade.symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(&trade.ticker, exchange).await?;
         self.trade_ticks.insert(symbol_id, trade).await
     }
 
@@ -365,7 +391,7 @@ impl DataManager {
             return Ok(0);
         }
 
-        let symbol_id = self.get_symbol_id(&trades[0].symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(&trades[0].ticker, exchange).await?;
         self.trade_ticks.insert_batch(symbol_id, trades).await
     }
 
@@ -373,10 +399,10 @@ impl DataManager {
     pub async fn get_recent_trades(
         &self,
         exchange: &str,
-        symbol: &Symbol,
+        ticker: &str,
         count: i32,
     ) -> Result<Vec<TradeTickRecord>> {
-        let symbol_id = self.get_symbol_id(symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(ticker, exchange).await?;
         self.trade_ticks.get_recent(symbol_id, count).await
     }
 
@@ -566,11 +592,11 @@ impl DataManager {
     pub async fn cleanup_old_klines(
         &self,
         exchange: &str,
-        symbol: &Symbol,
+        ticker: &str,
         timeframe: Timeframe,
         retention_days: i64,
     ) -> Result<u64> {
-        let symbol_id = self.get_symbol_id(symbol, exchange).await?;
+        let symbol_id = self.get_symbol_id(ticker, exchange).await?;
         let before = Utc::now() - Duration::days(retention_days);
         self.klines
             .delete_older_than(symbol_id, timeframe, before)

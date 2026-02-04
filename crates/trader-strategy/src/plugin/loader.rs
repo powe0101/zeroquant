@@ -4,7 +4,7 @@
 //! 플러그인 업데이트 시 핫 리로딩을 지원합니다.
 
 use crate::Strategy;
-use libloading::{Library, Symbol};
+use libloading::Library;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -48,7 +48,7 @@ pub struct PluginMetadata {
     /// 필수 설정 키
     pub required_config: Vec<String>,
     /// 지원되는 심볼 (비어있으면 전체)
-    pub supported_symbols: Vec<String>,
+    pub supported_tickers: Vec<String>,
 }
 
 // 참고: 이러한 FFI 타입은 엄격히 FFI 안전하지 않은 트레이트 객체를 사용하지만,
@@ -98,7 +98,7 @@ impl LoadedPlugin {
 
         // Try to get metadata (optional)
         let metadata =
-            if let Ok(get_metadata) = library.get::<Symbol<GetMetadataFn>>(b"get_metadata") {
+            if let Ok(get_metadata) = library.get::<libloading::Symbol<GetMetadataFn>>(b"get_metadata") {
                 get_metadata()
             } else {
                 // Default metadata if not provided
@@ -111,12 +111,12 @@ impl LoadedPlugin {
                     version: "1.0.0".to_string(),
                     description: "Strategy plugin".to_string(),
                     required_config: Vec::new(),
-                    supported_symbols: Vec::new(),
+                    supported_tickers: Vec::new(),
                 }
             };
 
-        // Verify required symbols exist
-        let _: Symbol<CreateStrategyFn> = library
+        // Verify required tickers exist
+        let _: libloading::Symbol<CreateStrategyFn> = library
             .get(b"create_strategy")
             .map_err(|_| PluginError::SymbolNotFound("create_strategy".to_string()))?;
 
@@ -141,7 +141,7 @@ impl LoadedPlugin {
     /// - 플러그인이 `LoadedPlugin::load`를 통해 올바르게 로드됨
     /// - 반환된 `Box<dyn Strategy>`가 스레드 안전한 방식으로 사용됨
     pub unsafe fn create_strategy(&self) -> Result<Box<dyn Strategy>, PluginError> {
-        let create_fn: Symbol<CreateStrategyFn> = self
+        let create_fn: libloading::Symbol<CreateStrategyFn> = self
             .library
             .get(b"create_strategy")
             .map_err(|_| PluginError::SymbolNotFound("create_strategy".to_string()))?;

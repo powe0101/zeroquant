@@ -154,7 +154,7 @@ impl SymbolRepository {
 
     /// 심볼을 조회하거나 생성하고 데이터베이스 ID를 반환합니다.
     #[instrument(skip(self))]
-    pub async fn get_or_create(&self, symbol: &Symbol, exchange: &str) -> Result<Uuid> {
+    pub async fn get_or_create(&self, ticker: &str, quote: &str, market_type: &str, exchange: &str) -> Result<Uuid> {
         // 기존 레코드 찾기 시도
         let existing: Option<(Uuid,)> = sqlx::query_as(
             r#"
@@ -163,8 +163,8 @@ impl SymbolRepository {
             "#,
         )
         .bind(exchange)
-        .bind(&symbol.base)
-        .bind(&symbol.quote)
+        .bind(ticker)
+        .bind(quote)
         .fetch_optional(self.db.pool())
         .await?;
 
@@ -181,13 +181,13 @@ impl SymbolRepository {
             "#,
         )
         .bind(exchange)
-        .bind(&symbol.base)
-        .bind(&symbol.quote)
-        .bind(symbol.market_type.to_string().to_lowercase())
+        .bind(ticker)
+        .bind(quote)
+        .bind(market_type)
         .fetch_one(self.db.pool())
         .await?;
 
-        debug!(symbol = %symbol, id = %id, "Created new symbol record");
+        debug!(ticker = %ticker, id = %id, "Created new symbol record");
         Ok(id)
     }
 
@@ -515,7 +515,7 @@ impl KlineRecord {
         };
 
         Kline {
-            symbol,
+            ticker: symbol.to_string(),
             timeframe,
             open_time: self.time,
             open: self.open,
@@ -689,7 +689,7 @@ impl OrderRepository {
         .bind(order.id)
         .bind(&order.exchange)
         .bind(&order.exchange_order_id)
-        .bind(order.symbol.to_string())
+        .bind(order.ticker.to_string())
         .bind(order.side.to_string())
         .bind(order.order_type.to_string())
         .bind(order.quantity)

@@ -55,6 +55,7 @@ pub mod market_cap_top;
 pub mod market_interest_day;
 pub mod pension_bot;
 pub mod rsi;
+pub mod rsi_multi_tf;
 pub mod sector_momentum;
 pub mod sector_vb;
 pub mod simple_power;
@@ -88,6 +89,7 @@ pub use market_cap_top::{
 pub use market_interest_day::*;
 pub use pension_bot::*;
 pub use rsi::*;
+pub use rsi_multi_tf::*;
 pub use sector_momentum::{
     SectorInfo, SectorMomentumConfig, SectorMomentumMarket, SectorMomentumStrategy,
     WeightingMethod as SectorWeightingMethod,

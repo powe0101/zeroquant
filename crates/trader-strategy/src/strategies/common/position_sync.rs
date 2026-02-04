@@ -30,13 +30,13 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
-use trader_core::{unrealized_pnl, Order, OrderStatusType, Side, Symbol};
+use trader_core::{unrealized_pnl, Order, OrderStatusType, Side};
 
 /// 동기화된 포지션 상태.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncedPosition {
     /// 포지션 심볼.
-    pub symbol: Symbol,
+    pub ticker:  String,
     /// 포지션 방향.
     pub side: Side,
     /// 현재 수량.
@@ -55,9 +55,9 @@ pub struct SyncedPosition {
 
 impl SyncedPosition {
     /// 새 포지션 생성.
-    pub fn new(symbol: Symbol, side: Side, quantity: Decimal, entry_price: Decimal) -> Self {
+    pub fn new(ticker:  String, side: Side, quantity: Decimal, entry_price: Decimal) -> Self {
         Self {
-            symbol,
+            ticker,
             side,
             quantity,
             entry_price,
@@ -140,7 +140,7 @@ pub struct PositionSync {
     /// 현재 포지션.
     position: Option<SyncedPosition>,
     /// 대상 심볼 (특정 심볼만 추적).
-    target_symbol: Option<Symbol>,
+    target_ticker: Option<String>,
 }
 
 impl PositionSync {
@@ -150,8 +150,8 @@ impl PositionSync {
     }
 
     /// 특정 심볼만 추적하도록 설정.
-    pub fn with_symbol(mut self, symbol: Symbol) -> Self {
-        self.target_symbol = Some(symbol);
+    pub fn with_ticker(mut self, ticker:  String) -> Self {
+        self.target_ticker = Some(ticker);
         self
     }
 
@@ -197,11 +197,11 @@ impl PositionSync {
         }
 
         // 대상 심볼 필터링
-        if let Some(ref target) = self.target_symbol {
-            if &order.symbol != target {
+        if let Some(ref target) = self.target_ticker {
+            if &order.ticker != target {
                 debug!(
-                    order_symbol = %order.symbol,
-                    target_symbol = %target,
+                    order_ticker = %order.ticker,
+                    target_ticker = %target,
                     "대상 심볼 불일치, 건너뜀"
                 );
                 return FillResult::NoChange;
@@ -231,9 +231,9 @@ impl PositionSync {
             // 포지션 없는 상태에서 매수 → 롱 포지션 진입
             (None, Side::Buy) => {
                 let position =
-                    SyncedPosition::new(order.symbol.clone(), Side::Buy, fill_qty, fill_price);
+                    SyncedPosition::new(order.ticker.clone(), Side::Buy, fill_qty, fill_price);
                 info!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     side = "Buy",
                     quantity = %fill_qty,
                     price = %fill_price,
@@ -246,9 +246,9 @@ impl PositionSync {
             // 포지션 없는 상태에서 매도 → 숏 포지션 진입
             (None, Side::Sell) => {
                 let position =
-                    SyncedPosition::new(order.symbol.clone(), Side::Sell, fill_qty, fill_price);
+                    SyncedPosition::new(order.ticker.clone(), Side::Sell, fill_qty, fill_price);
                 info!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     side = "Sell",
                     quantity = %fill_qty,
                     price = %fill_price,
@@ -262,7 +262,7 @@ impl PositionSync {
             (Some(ref mut pos), Side::Buy) if pos.side == Side::Buy => {
                 pos.add(fill_qty, fill_price);
                 info!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     new_quantity = %pos.quantity,
                     avg_price = %pos.entry_price,
                     "롱 포지션 추가"
@@ -280,7 +280,7 @@ impl PositionSync {
 
                 if pos.quantity <= Decimal::ZERO {
                     info!(
-                        symbol = %order.symbol,
+                        ticker = %order.ticker,
                         entry = %entry_price,
                         exit = %fill_price,
                         pnl = %pnl,
@@ -294,7 +294,7 @@ impl PositionSync {
                     }
                 } else {
                     info!(
-                        symbol = %order.symbol,
+                        ticker = %order.ticker,
                         remaining = %pos.quantity,
                         partial_pnl = %pnl,
                         "롱 포지션 부분 청산"
@@ -310,7 +310,7 @@ impl PositionSync {
             (Some(ref mut pos), Side::Sell) if pos.side == Side::Sell => {
                 pos.add(fill_qty, fill_price);
                 info!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     new_quantity = %pos.quantity,
                     avg_price = %pos.entry_price,
                     "숏 포지션 추가"
@@ -328,7 +328,7 @@ impl PositionSync {
 
                 if pos.quantity <= Decimal::ZERO {
                     info!(
-                        symbol = %order.symbol,
+                        ticker = %order.ticker,
                         entry = %entry_price,
                         exit = %fill_price,
                         pnl = %pnl,
@@ -342,7 +342,7 @@ impl PositionSync {
                     }
                 } else {
                     info!(
-                        symbol = %order.symbol,
+                        ticker = %order.ticker,
                         remaining = %pos.quantity,
                         partial_pnl = %pnl,
                         "숏 포지션 부분 청산"
@@ -367,7 +367,7 @@ impl PositionSync {
         if external_position.quantity == Decimal::ZERO {
             if self.position.is_some() {
                 warn!(
-                    symbol = %external_position.symbol,
+                    ticker = %external_position.ticker,
                     "외부 동기화: 포지션이 예상과 달리 없음, 내부 상태 초기화"
                 );
                 self.position = None;
@@ -396,12 +396,12 @@ impl PositionSync {
             None => {
                 // 내부 포지션 없는데 외부에 있음 → 생성
                 warn!(
-                    symbol = %external_position.symbol,
+                    ticker = %external_position.ticker,
                     quantity = %external_position.quantity,
                     "외부 동기화: 예상치 못한 포지션 발견, 내부 상태 생성"
                 );
                 self.position = Some(SyncedPosition::new(
-                    external_position.symbol.clone(),
+                    external_position.ticker.clone(),
                     external_position.side,
                     external_position.quantity,
                     external_position.entry_price,
@@ -418,21 +418,21 @@ mod tests {
     use trader_core::{OrderType, TimeInForce};
     use uuid::Uuid;
 
-    fn create_filled_order(symbol: &str, side: Side, qty: Decimal, price: Decimal) -> Order {
+    fn create_filled_order(ticker: &str, side: Side, qty: Decimal, price: Decimal) -> Order {
         // 테스트용 심볼 파싱 (예: "BTCUSDT" -> BTC/USDT)
-        let (base, quote) = if symbol.ends_with("USDT") {
-            (symbol.strip_suffix("USDT").unwrap(), "USDT")
-        } else if symbol.ends_with("USD") {
-            (symbol.strip_suffix("USD").unwrap(), "USD")
+        let (base, quote) = if ticker.ends_with("USDT") {
+            (ticker.strip_suffix("USDT").unwrap(), "USDT")
+        } else if ticker.ends_with("USD") {
+            (ticker.strip_suffix("USD").unwrap(), "USD")
         } else {
-            (symbol, "USD")
+            (ticker, "USD")
         };
 
         Order {
             id: Uuid::new_v4(),
             exchange: "test".to_string(),
             exchange_order_id: Some("123".to_string()),
-            symbol: Symbol::new(base, quote, trader_core::MarketType::Crypto),
+            ticker: base.to_string(),
             side,
             order_type: OrderType::Market,
             quantity: qty,
@@ -537,8 +537,8 @@ mod tests {
     }
 
     #[test]
-    fn test_symbol_filter() {
-        let mut sync = PositionSync::new().with_symbol(Symbol::crypto("BTC", "USDT"));
+    fn test_ticker_filter() {
+        let mut sync = PositionSync::new().with_ticker("BTC/USDT".to_string());
 
         // 다른 심볼 주문은 무시
         let eth_order = create_filled_order("ETHUSDT", Side::Buy, dec!(10), dec!(3000));

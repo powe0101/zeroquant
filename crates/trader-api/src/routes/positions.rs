@@ -78,7 +78,7 @@ impl From<&Position> for PositionResponse {
         Self {
             id: position.id.to_string(),
             exchange: position.exchange.clone(),
-            symbol: position.symbol.to_string(),
+            symbol: position.ticker.to_string(),
             display_name: None, // 핸들러에서 설정
             side: position.side,
             quantity: position.quantity,
@@ -152,7 +152,7 @@ pub async fn list_positions(State(state): State<Arc<AppState>>) -> impl IntoResp
     let positions = executor.get_open_positions().await;
 
     // 심볼 목록 추출
-    let symbols: Vec<String> = positions.iter().map(|p| p.symbol.to_string()).collect();
+    let symbols: Vec<String> = positions.iter().map(|p| p.ticker.to_string()).collect();
 
     // display name 배치 조회
     let display_names = state.get_display_names(&symbols, false).await;
@@ -162,7 +162,7 @@ pub async fn list_positions(State(state): State<Arc<AppState>>) -> impl IntoResp
         .iter()
         .map(|p| {
             let mut resp = PositionResponse::from(p);
-            if let Some(name) = display_names.get(&p.symbol.to_string()) {
+            if let Some(name) = display_names.get(&p.ticker.to_string()) {
                 resp.display_name = Some(name.clone());
             }
             resp
@@ -330,26 +330,25 @@ mod tests {
     #[test]
     fn test_position_summary_calculation() {
         use rust_decimal_macros::dec;
-        use trader_core::Symbol;
 
         let mut positions = vec![
             Position::new(
                 "binance",
-                Symbol::crypto("BTC", "USDT"),
+                "BTC/USDT".to_string(),
                 Side::Buy,
                 dec!(1.0),
                 dec!(50000),
             ),
             Position::new(
                 "binance",
-                Symbol::crypto("ETH", "USDT"),
+                "ETH/USDT".to_string(),
                 Side::Buy,
                 dec!(10.0),
                 dec!(3000),
             ),
             Position::new(
                 "binance",
-                Symbol::crypto("SOL", "USDT"),
+                "SOL/USDT".to_string(),
                 Side::Sell,
                 dec!(100.0),
                 dec!(100),

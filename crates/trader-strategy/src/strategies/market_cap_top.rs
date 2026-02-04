@@ -32,7 +32,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::domain::{RouteState, StrategyContext};
 use trader_core::{
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// 비중 할당 방식
@@ -77,7 +77,7 @@ pub struct MarketCapTopConfig {
 
     /// 대상 종목 리스트 (빈 경우 기본 TOP 종목 사용)
     #[serde(default)]
-    pub symbols: Vec<String>,
+    pub tickers: Vec<String>,
 
     /// 모멘텀 필터 사용 여부
     #[serde(default)]
@@ -119,7 +119,7 @@ impl Default for MarketCapTopConfig {
             weighting_method: WeightingMethod::Equal,
             rebalance_days: default_rebalance_days(),
             rebalance_threshold: default_rebalance_threshold(),
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             use_momentum_filter: false,
             momentum_period: default_momentum_period(),
             min_global_score: default_min_global_score(),
@@ -128,7 +128,7 @@ impl Default for MarketCapTopConfig {
 }
 
 /// 기본 시총 TOP 종목
-fn default_top_symbols() -> Vec<&'static str> {
+fn default_top_tickers() -> Vec<&'static str> {
     vec![
         "AAPL",  // Apple
         "MSFT",  // Microsoft
@@ -151,7 +151,7 @@ fn default_top_symbols() -> Vec<&'static str> {
 /// 종목별 포지션 정보
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionInfo {
-    pub symbol: String,
+    pub ticker:  String,
     pub target_weight: Decimal,
     pub current_weight: Decimal,
     pub quantity: Decimal,
@@ -188,12 +188,12 @@ impl Default for MarketCapTopState {
 pub struct MarketCapTopStrategy {
     config: Option<MarketCapTopConfig>,
     state: MarketCapTopState,
-    /// 심볼별 가격 히스토리
+    /// 티커별 가격 히스토리
     price_history: HashMap<String, Vec<Decimal>>,
     /// 현재 날짜
     current_day: u32,
-    /// 활성 심볼 리스트
-    active_symbols: Vec<String>,
+    /// 활성 티커 리스트
+    active_tickers: Vec<String>,
     initialized: bool,
     /// 전략 컨텍스트
     context: Option<Arc<RwLock<StrategyContext>>>,
@@ -206,14 +206,14 @@ impl MarketCapTopStrategy {
             state: MarketCapTopState::default(),
             price_history: HashMap::new(),
             current_day: 0,
-            active_symbols: Vec::new(),
+            active_tickers: Vec::new(),
             initialized: false,
             context: None,
         }
     }
 
     /// RouteState와 GlobalScore 기반 진입 조건 체크
-    fn can_enter(&self, symbol: &str) -> bool {
+    fn can_enter(&self, ticker: &str) -> bool {
         let context = match &self.context {
             Some(ctx) => ctx,
             None => return true,
@@ -230,7 +230,7 @@ impl MarketCapTopStrategy {
         };
 
         // RouteState 체크
-        if let Some(route) = ctx.get_route_state(symbol) {
+        if let Some(route) = ctx.get_route_state(ticker) {
             match route {
                 RouteState::Wait | RouteState::Overheat => {
                     debug!("[MarketCapTop] RouteState가 {:?}이므로 진입 불가", route);
@@ -241,11 +241,11 @@ impl MarketCapTopStrategy {
         }
 
         // GlobalScore 체크
-        if let Some(score) = ctx.get_global_score(symbol) {
+        if let Some(score) = ctx.get_global_score(ticker) {
             if score.overall_score < config.min_global_score {
                 debug!(
                     "[MarketCapTop] {} GlobalScore {} < {} 기준 미달",
-                    symbol, score.overall_score, config.min_global_score
+                    ticker, score.overall_score, config.min_global_score
                 );
                 return false;
             }
@@ -265,16 +265,16 @@ impl MarketCapTopStrategy {
 
         match config.weighting_method {
             WeightingMethod::Equal => {
-                let weight = Decimal::ONE / Decimal::from(self.active_symbols.len());
-                for symbol in &self.active_symbols {
-                    weights.insert(symbol.clone(), weight);
+                let weight = Decimal::ONE / Decimal::from(self.active_tickers.len());
+                for ticker in &self.active_tickers {
+                    weights.insert(ticker.clone(), weight);
                 }
             }
             WeightingMethod::MarketCapWeighted => {
                 // 실제로는 시총 데이터가 필요하지만, 여기서는 동일 비중 사용
-                let weight = Decimal::ONE / Decimal::from(self.active_symbols.len());
-                for symbol in &self.active_symbols {
-                    weights.insert(symbol.clone(), weight);
+                let weight = Decimal::ONE / Decimal::from(self.active_tickers.len());
+                for ticker in &self.active_tickers {
+                    weights.insert(ticker.clone(), weight);
                 }
             }
             WeightingMethod::InverseVolatility => {
@@ -282,13 +282,13 @@ impl MarketCapTopStrategy {
                 let mut volatilities = HashMap::new();
                 let mut total_inv_vol = Decimal::ZERO;
 
-                for symbol in &self.active_symbols {
-                    if let Some(prices) = self.price_history.get(symbol) {
+                for ticker in &self.active_tickers {
+                    if let Some(prices) = self.price_history.get(ticker) {
                         if prices.len() >= 20 {
                             let vol = self.calculate_volatility(prices, 20);
                             if vol > Decimal::ZERO {
                                 let inv_vol = Decimal::ONE / vol;
-                                volatilities.insert(symbol.clone(), inv_vol);
+                                volatilities.insert(ticker.clone(), inv_vol);
                                 total_inv_vol += inv_vol;
                             }
                         }
@@ -296,16 +296,16 @@ impl MarketCapTopStrategy {
                 }
 
                 if total_inv_vol > Decimal::ZERO {
-                    for symbol in &self.active_symbols {
+                    for ticker in &self.active_tickers {
                         let weight =
-                            volatilities.get(symbol).unwrap_or(&Decimal::ZERO) / total_inv_vol;
-                        weights.insert(symbol.clone(), weight);
+                            volatilities.get(ticker).unwrap_or(&Decimal::ZERO) / total_inv_vol;
+                        weights.insert(ticker.clone(), weight);
                     }
                 } else {
                     // 데이터 부족 시 동일 비중
-                    let weight = Decimal::ONE / Decimal::from(self.active_symbols.len());
-                    for symbol in &self.active_symbols {
-                        weights.insert(symbol.clone(), weight);
+                    let weight = Decimal::ONE / Decimal::from(self.active_tickers.len());
+                    for ticker in &self.active_tickers {
+                        weights.insert(ticker.clone(), weight);
                     }
                 }
             }
@@ -382,20 +382,20 @@ impl MarketCapTopStrategy {
     fn filter_by_momentum(&self) -> Vec<String> {
         let config = match &self.config {
             Some(c) => c,
-            None => return self.active_symbols.clone(),
+            None => return self.active_tickers.clone(),
         };
 
         if !config.use_momentum_filter {
-            return self.active_symbols.clone();
+            return self.active_tickers.clone();
         }
 
         let mut momentum_scores: Vec<(String, Decimal)> = self
-            .active_symbols
+            .active_tickers
             .iter()
-            .filter_map(|symbol| {
-                self.price_history.get(symbol).map(|prices| {
+            .filter_map(|ticker| {
+                self.price_history.get(ticker).map(|prices| {
                     let momentum = self.calculate_momentum(prices);
-                    (symbol.clone(), momentum)
+                    (ticker.clone(), momentum)
                 })
             })
             .collect();
@@ -412,9 +412,9 @@ impl MarketCapTopStrategy {
 
         if filtered.is_empty() {
             // 모든 종목이 음의 모멘텀이면 상위 절반만
-            self.active_symbols
+            self.active_tickers
                 .iter()
-                .take(self.active_symbols.len() / 2)
+                .take(self.active_tickers.len() / 2)
                 .cloned()
                 .collect()
         } else {
@@ -448,11 +448,11 @@ impl MarketCapTopStrategy {
             None => return false,
         };
 
-        for (symbol, target) in target_weights {
+        for (ticker, target) in target_weights {
             let current = self
                 .state
                 .positions
-                .get(symbol)
+                .get(ticker)
                 .map(|p| p.current_weight)
                 .unwrap_or(Decimal::ZERO);
 
@@ -467,7 +467,7 @@ impl MarketCapTopStrategy {
     /// 신호 생성
     fn generate_signals(
         &mut self,
-        symbol_data: &str,
+        ticker_data: &str,
         current_price: Decimal,
         timestamp: i64,
     ) -> Vec<Signal> {
@@ -482,15 +482,15 @@ impl MarketCapTopStrategy {
         self.current_day = day_of_year;
 
         // 포지션 업데이트
-        if let Some(pos) = self.state.positions.get_mut(symbol_data) {
+        if let Some(pos) = self.state.positions.get_mut(ticker_data) {
             pos.current_price = current_price;
             pos.pnl = (current_price - pos.avg_price) * pos.quantity;
         }
 
-        // 첫 번째 심볼에서만 리밸런싱 체크
-        if symbol_data
+        // 첫 번째 티커에서만 리밸런싱 체크
+        if ticker_data
             != self
-                .active_symbols
+                .active_tickers
                 .first()
                 .map(|s| s.as_str())
                 .unwrap_or("")
@@ -503,7 +503,7 @@ impl MarketCapTopStrategy {
         }
 
         // 목표 비중 계산
-        let filtered_symbols = self.filter_by_momentum();
+        let filtered_tickers = self.filter_by_momentum();
         let target_weights = self.calculate_target_weights();
 
         if !self.needs_rebalancing(&target_weights) {
@@ -514,7 +514,7 @@ impl MarketCapTopStrategy {
         self.state.last_rebalance_day = Some(self.current_day);
 
         // 각 종목별 신호 생성
-        for sym in &filtered_symbols {
+        for sym in &filtered_tickers {
             let target_weight = target_weights.get(sym).unwrap_or(&Decimal::ZERO);
             let target_value = config.total_amount * target_weight;
 
@@ -536,7 +536,7 @@ impl MarketCapTopStrategy {
                     self.state.positions.insert(
                         sym.clone(),
                         PositionInfo {
-                            symbol: sym.clone(),
+                            ticker: sym.clone(),
                             target_weight: *target_weight,
                             current_weight: *target_weight,
                             quantity: target_quantity,
@@ -546,8 +546,8 @@ impl MarketCapTopStrategy {
                         },
                     );
 
-                    // 심볼 생성
-                    let symbol = Symbol::new(sym, "USD", MarketType::Stock);
+                    // 티커 생성
+                    let ticker = format!("{}/USD", sym);
 
                     let (side, signal_type) = if diff > Decimal::ZERO {
                         // BUY 신호 생성 전 can_enter 체크
@@ -559,7 +559,7 @@ impl MarketCapTopStrategy {
                         (Side::Sell, SignalType::Exit)
                     };
 
-                    let signal = Signal::new("market_cap_top", symbol, side, signal_type)
+                    let signal = Signal::new("market_cap_top", ticker, side, signal_type)
                         .with_strength(1.0)
                         .with_metadata("target_weight", json!(target_weight.to_string()))
                         .with_metadata("current_quantity", json!(current_quantity.to_string()))
@@ -610,16 +610,16 @@ impl Strategy for MarketCapTopStrategy {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mct_config: MarketCapTopConfig = serde_json::from_value(config)?;
 
-        // 활성 심볼 설정
-        self.active_symbols = if mct_config.symbols.is_empty() {
-            default_top_symbols()
+        // 활성 티커 설정
+        self.active_tickers = if mct_config.tickers.is_empty() {
+            default_top_tickers()
                 .into_iter()
                 .take(mct_config.top_n)
                 .map(|s| s.to_string())
                 .collect()
         } else {
             mct_config
-                .symbols
+                .tickers
                 .clone()
                 .into_iter()
                 .take(mct_config.top_n)
@@ -629,7 +629,7 @@ impl Strategy for MarketCapTopStrategy {
         info!(
             top_n = %mct_config.top_n,
             weighting = ?mct_config.weighting_method,
-            symbols = ?self.active_symbols,
+            tickers = ?self.active_tickers,
             "Initializing Market Cap TOP strategy"
         );
 
@@ -651,11 +651,11 @@ impl Strategy for MarketCapTopStrategy {
             return Ok(vec![]);
         }
 
-        // base 심볼만 추출 (AAPL/USD -> AAPL)
-        let symbol_str = data.symbol.base.clone();
+        // base 티커만 추출 (AAPL/USD -> AAPL)
+        let ticker_str = data.ticker.clone();
 
-        // 활성 심볼이 아니면 무시
-        if !self.active_symbols.contains(&symbol_str) {
+        // 활성 티커이 아니면 무시
+        if !self.active_tickers.contains(&ticker_str) {
             return Ok(vec![]);
         }
 
@@ -668,14 +668,14 @@ impl Strategy for MarketCapTopStrategy {
         };
 
         // 가격 히스토리 업데이트
-        let prices = self.price_history.entry(symbol_str.clone()).or_default();
+        let prices = self.price_history.entry(ticker_str.clone()).or_default();
         prices.insert(0, current_price);
         if prices.len() > 260 {
             prices.pop();
         }
 
         // 신호 생성
-        let signals = self.generate_signals(&symbol_str, current_price, timestamp);
+        let signals = self.generate_signals(&ticker_str, current_price, timestamp);
 
         Ok(signals)
     }
@@ -691,7 +691,7 @@ impl Strategy for MarketCapTopStrategy {
 
         info!(
             "[MarketCapTOP] 주문 체결: {} {} @ {}",
-            order.symbol, order.quantity, fill_price
+            order.ticker, order.quantity, fill_price
         );
 
         Ok(())
@@ -720,7 +720,7 @@ impl Strategy for MarketCapTopStrategy {
         json!({
             "config": self.config,
             "state": self.state,
-            "active_symbols": self.active_symbols,
+            "active_tickers": self.active_tickers,
             "positions_count": self.state.positions.len(),
             "initialized": self.initialized,
         })
@@ -754,7 +754,7 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
         assert!(strategy.initialized);
-        assert_eq!(strategy.active_symbols.len(), 5);
+        assert_eq!(strategy.active_tickers.len(), 5);
     }
 
     #[test]
@@ -782,16 +782,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_custom_symbols() {
+    async fn test_custom_tickers() {
         let mut strategy = MarketCapTopStrategy::new();
 
         let config = json!({
-            "symbols": ["AAPL", "MSFT", "GOOGL"],
+            "tickers": ["AAPL", "MSFT", "GOOGL"],
             "top_n": 10
         });
 
         strategy.initialize(config).await.unwrap();
-        assert_eq!(strategy.active_symbols.len(), 3);
+        assert_eq!(strategy.active_tickers.len(), 3);
     }
 }
 
@@ -804,7 +804,7 @@ register_strategy! {
     name: "시총 TOP",
     description: "시가총액 상위 종목에 투자하는 전략입니다.",
     timeframe: "1d",
-    symbols: ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "JPM", "V"],
+    tickers: ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "JPM", "V"],
     category: Daily,
     markets: [Stock, Stock],
     type: MarketCapTopStrategy

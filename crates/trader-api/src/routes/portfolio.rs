@@ -26,15 +26,14 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::repository::{
-    EquityHistoryRepository, HoldingPosition, PortfolioSnapshot, PositionRepository,
+    create_exchange_providers_from_credential, EquityHistoryRepository, ExchangeProviderPair,
+    HoldingPosition, PortfolioSnapshot, PositionRepository,
 };
-use crate::routes::credentials::EncryptedCredentials;
 use crate::routes::strategies::ApiError;
 use crate::state::AppState;
 use chrono::Utc;
-use trader_core::ExecutionRecord;
-use trader_exchange::connector::kis::{
-    KisAccountType, KisConfig, KisEnvironment, KisKrClient, KisOAuth, KisUsClient,
+use trader_core::{
+    ExecutionHistoryRequest, ExecutionRecord, ExchangeProvider,
 };
 
 // ==================== 응답 타입 ====================
@@ -166,66 +165,43 @@ pub struct OrderHistoryQuery {
 
 // ==================== 헬퍼 함수 ====================
 
-/// DB에서 자격증명 row 타입.
-#[derive(sqlx::FromRow)]
-struct CredentialRow {
-    encrypted_credentials: Vec<u8>,
-    encryption_nonce: Vec<u8>,
-    is_testnet: bool,
-    settings: Option<serde_json::Value>,
-    exchange_name: String,
-}
-
-/// ISA 계좌 여부 확인.
-fn is_isa_account(settings: &Option<serde_json::Value>, exchange_name: &str) -> bool {
-    // settings에서 account_type 확인
-    if let Some(s) = settings {
-        if let Some(account_type) = s.get("account_type").and_then(|v| v.as_str()) {
-            return account_type.to_uppercase().contains("ISA");
-        }
-    }
-    // 이름에서 ISA 확인
-    exchange_name.to_uppercase().contains("ISA")
-}
-
-/// OAuth 캐시 키 생성.
+/// 특정 credential_id로 거래소 Provider 조회 (캐시 우선) 또는 생성 (거래소 중립).
 ///
-/// 동일한 app_key와 environment를 사용하는 모든 credential이 토큰을 공유합니다.
-fn make_oauth_cache_key(app_key: &str, environment: KisEnvironment) -> String {
-    let env_str = match environment {
-        KisEnvironment::Real => "real",
-        KisEnvironment::Paper => "paper",
-    };
-    format!("{}:{}", app_key, env_str)
-}
-
-/// 특정 credential_id로 KIS 클라이언트 조회 (캐시 우선) 또는 생성.
-///
+/// # Single Source of Truth
+/// 
+/// 이 함수는 `create_exchange_providers_from_credential()`를 통해서만 Provider를 생성합니다.
 /// 토큰 재사용을 위해 AppState의 캐시를 먼저 확인합니다.
-/// KIS API는 토큰 발급을 1분에 1회로 제한하므로 캐시가 필수입니다.
 ///
-/// **중요**: 동일한 `app_key`를 사용하는 모든 클라이언트(실계좌/모의투자, 국내/해외)가
-/// `KisOAuth`를 공유하여 토큰을 재사용합니다. 이를 통해 rate limit 문제를 해결합니다.
-pub async fn get_or_create_kis_client(
+/// # Returns
+///
+/// 거래소 Provider 쌍 (KR, US)
+pub async fn get_or_create_exchange_providers(
     state: &AppState,
     credential_id: Uuid,
-) -> Result<(Arc<KisKrClient>, Arc<KisUsClient>), String> {
-    use crate::state::KisClientPair;
-
-    // 1. 클라이언트 캐시 확인
+) -> Result<Arc<ExchangeProviderPair>, String> {
+    // 1. Provider 캐시 확인
     {
-        let cache = state.kis_clients_cache.read().await;
+        let cache = state.exchange_providers_cache.read().await;
         if let Some(pair) = cache.get(&credential_id) {
-            debug!("KIS 클라이언트 캐시 히트: credential_id={}", credential_id);
-            return Ok((Arc::clone(&pair.kr), Arc::clone(&pair.us)));
+            debug!("거래소 Provider 캐시 히트: credential_id={}", credential_id);
+            return Ok(Arc::clone(pair));
         }
     }
 
-    // 2. 캐시 미스 - 새 클라이언트 생성
+    // 2. 캐시 미스 - 쓰기 락으로 전환하여 생성
     info!(
-        "KIS 클라이언트 캐시 미스, 새로 생성: credential_id={}",
+        "거래소 Provider 캐시 미스, 새로 생성: credential_id={}",
         credential_id
     );
+
+    // Double-Check Locking: 쓰기 락 획득 후 다시 확인
+    let mut cache = state.exchange_providers_cache.write().await;
+
+    // 다른 스레드가 이미 생성했을 수 있으므로 다시 확인
+    if let Some(pair) = cache.get(&credential_id) {
+        debug!("거래소 Provider 캐시 히트 (재확인): credential_id={}", credential_id);
+        return Ok(Arc::clone(pair));
+    }
 
     // DB 연결 확인
     let pool = state
@@ -239,122 +215,25 @@ pub async fn get_or_create_kis_client(
         .as_ref()
         .ok_or("암호화 설정이 없습니다. ENCRYPTION_MASTER_KEY를 설정하세요.")?;
 
-    // 특정 자격증명 조회
-    let row: CredentialRow = sqlx::query_as(
-        r#"
-        SELECT encrypted_credentials, encryption_nonce, is_testnet, settings, exchange_name
-        FROM exchange_credentials
-        WHERE id = $1 AND exchange_id = 'kis' AND is_active = true
-        "#,
+    // 3. Repository 함수를 통해 Provider 생성 (Single Source of Truth)
+    let provider_pair = crate::repository::create_exchange_providers_from_credential(
+        pool,
+        encryptor,
+        credential_id,
+        None,  // OAuth 캐시는 repository에서 관리
     )
-    .bind(credential_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("자격증명 조회 실패: {}", e))?
-    .ok_or_else(|| "해당 자격증명을 찾을 수 없습니다.".to_string())?;
+    .await?;
 
+    // 4. Provider 캐시에 저장
+    let pair_arc = Arc::new(provider_pair);
+    cache.insert(credential_id, Arc::clone(&pair_arc));
     info!(
-        "KIS 계좌 선택: id={}, name={}, is_testnet={}, is_isa={}",
+        "거래소 Provider 캐시 저장: credential_id={}, 캐시 크기={}",
         credential_id,
-        row.exchange_name,
-        row.is_testnet,
-        is_isa_account(&row.settings, &row.exchange_name)
+        cache.len()
     );
 
-    // 복호화
-    let credentials: EncryptedCredentials = encryptor
-        .decrypt_json(&row.encrypted_credentials, &row.encryption_nonce)
-        .map_err(|e| format!("자격증명 복호화 실패: {}", e))?;
-
-    // 추가 필드에서 계좌번호 추출
-    let account_number = credentials
-        .additional
-        .as_ref()
-        .and_then(|a| a.get("account_number").cloned())
-        .unwrap_or_else(|| "00000000-01".to_string());
-
-    // 계좌 유형 결정
-    let account_type = if row.is_testnet {
-        KisAccountType::Paper
-    } else if is_isa_account(&row.settings, &row.exchange_name) {
-        KisAccountType::RealIsa
-    } else {
-        KisAccountType::RealGeneral
-    };
-
-    // 환경 결정
-    let environment = if row.is_testnet {
-        KisEnvironment::Paper
-    } else {
-        KisEnvironment::Real
-    };
-
-    info!(
-        "KIS 클라이언트 생성: credential_id={}, account_type={:?}, account={}***",
-        credential_id,
-        account_type,
-        if account_number.len() > 4 {
-            &account_number[..4]
-        } else {
-            &account_number
-        }
-    );
-
-    // 3. OAuth 캐시 확인 (app_key + environment 기반)
-    //
-    // 동일한 app_key를 사용하는 여러 credential이 있어도 OAuth(토큰)를 공유합니다.
-    // 이를 통해 토큰 발급 rate limit (1분 1회) 문제를 해결합니다.
-    let oauth_cache_key = make_oauth_cache_key(&credentials.api_key, environment);
-    let shared_oauth: Arc<KisOAuth> = {
-        let oauth_cache = state.kis_oauth_cache.read().await;
-        if let Some(oauth) = oauth_cache.get(&oauth_cache_key) {
-            debug!("KIS OAuth 캐시 히트: key={}", oauth_cache_key);
-            Arc::clone(oauth)
-        } else {
-            drop(oauth_cache); // read lock 해제
-
-            // 새 OAuth 생성
-            let config = KisConfig::new(
-                credentials.api_key.clone(),
-                credentials.api_secret.clone(),
-                account_number.clone(),
-                account_type,
-            );
-            let new_oauth =
-                Arc::new(KisOAuth::new(config).map_err(|e| format!("KIS OAuth 생성 실패: {}", e))?);
-
-            // 캐시에 저장
-            let mut oauth_cache = state.kis_oauth_cache.write().await;
-            oauth_cache.insert(oauth_cache_key.clone(), Arc::clone(&new_oauth));
-            info!(
-                "KIS OAuth 캐시 저장: key={}, 캐시 크기={}",
-                oauth_cache_key,
-                oauth_cache.len()
-            );
-
-            new_oauth
-        }
-    };
-
-    // 4. 클라이언트 생성 (공유된 OAuth 사용)
-    let kr_client = KisKrClient::with_shared_oauth(Arc::clone(&shared_oauth))
-        .map_err(|e| format!("KIS KR 클라이언트 생성 실패: {}", e))?;
-    let us_client = KisUsClient::with_shared_oauth(shared_oauth)
-        .map_err(|e| format!("KIS US 클라이언트 생성 실패: {}", e))?;
-
-    // 5. 클라이언트 캐시에 저장
-    let pair = Arc::new(KisClientPair::new(kr_client, us_client));
-    {
-        let mut cache = state.kis_clients_cache.write().await;
-        cache.insert(credential_id, Arc::clone(&pair));
-        info!(
-            "KIS 클라이언트 캐시 저장: credential_id={}, 캐시 크기={}",
-            credential_id,
-            cache.len()
-        );
-    }
-
-    Ok((Arc::clone(&pair.kr), Arc::clone(&pair.us)))
+    Ok(pair_arc)
 }
 
 // ==================== Handler ====================
@@ -377,39 +256,37 @@ pub async fn get_portfolio_summary(
     if let Some(credential_id) = params.credential_id {
         info!("포트폴리오 조회: credential_id={}", credential_id);
 
-        match get_or_create_kis_client(&state, credential_id).await {
-            Ok((kr_client, _us_client)) => {
-                // 한국 주식 잔고 조회
-                match kr_client.get_balance().await {
-                    Ok(balance) => {
+        match get_or_create_exchange_providers(&state, credential_id).await {
+            Ok(providers) => {
+                // 한국 주식 잔고 조회 (ExchangeProvider 사용)
+                match providers.kr.fetch_account().await {
+                    Ok(account_info) => {
                         debug!(
-                            "KR balance fetched for credential {}: {:?}",
-                            credential_id, balance
+                            "KR account info fetched for credential {}: total={}, available={}",
+                            credential_id, account_info.total_balance, account_info.available_balance
                         );
 
-                        if let Some(summary) = &balance.summary {
-                            cash_balance = summary.cash_balance;
-                            total_value = summary.total_eval_amount;
-                            total_pnl = summary.total_profit_loss;
-                        }
+                        cash_balance = account_info.available_balance;
+                        total_value = account_info.total_balance;
+                        total_pnl = account_info.unrealized_pnl;
                     }
                     Err(e) => {
                         error!(
-                            "KR balance fetch failed for credential {}: {}",
+                            "KR account fetch failed for credential {}: {:?}",
                             credential_id, e
                         );
                         return Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(ApiError::new(
                                 "BALANCE_FETCH_ERROR",
-                                &format!("잔고 조회 실패: {}", e),
+                                &format!("계좌 조회 실패: {:?}", e),
                             )),
                         ));
                     }
                 }
             }
             Err(e) => {
-                error!("KIS 클라이언트 생성 실패: {}", e);
+                error!("거래소 Provider 생성 실패: {}", e);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiError::new("CLIENT_ERROR", &e)),
@@ -472,8 +349,9 @@ pub async fn get_portfolio_summary(
     if let (Some(db_pool), Some(credential_id)) = (&state.db_pool, params.credential_id) {
         let securities_value = total_value - cash_balance;
 
-        // 검증: 모든 값이 0 이상이고, 합계가 맞는지 확인
-        let is_valid = total_value >= Decimal::ZERO
+        // 검증: 총 자산이 0보다 크고, 합계가 맞는지 확인
+        // (총 자산 0인 스냅샷은 MDD 계산을 왜곡하므로 저장하지 않음)
+        let is_valid = total_value > Decimal::ZERO
             && cash_balance >= Decimal::ZERO
             && securities_value >= Decimal::ZERO
             && (cash_balance + securities_value - total_value).abs() < Decimal::ONE; // 허용 오차 1원
@@ -535,25 +413,25 @@ pub async fn get_balance(
 
     // credential_id가 제공된 경우 동적으로 클라이언트 생성
     if let Some(credential_id) = params.credential_id {
-        match get_or_create_kis_client(&state, credential_id).await {
-            Ok((kr_client, _us_client)) => {
-                if let Ok(balance) = kr_client.get_balance().await {
-                    let holdings_count = balance.holdings.len();
-
-                    if let Some(summary) = balance.summary {
-                        total_value = summary.total_eval_amount;
+        match get_or_create_exchange_providers(&state, credential_id).await {
+            Ok(providers) => {
+                // 계좌 정보 및 포지션 조회 (ExchangeProvider 사용)
+                if let Ok(account_info) = providers.kr.fetch_account().await {
+                    if let Ok(positions) = providers.kr.fetch_positions().await {
+                        let holdings_count = positions.len();
+                        total_value = account_info.total_balance;
 
                         kr_info = Some(KrBalanceInfo {
-                            cash_balance: summary.cash_balance,
-                            total_eval_amount: summary.total_eval_amount,
-                            total_profit_loss: summary.total_profit_loss,
+                            cash_balance: account_info.available_balance,
+                            total_eval_amount: account_info.total_balance,
+                            total_profit_loss: account_info.unrealized_pnl,
                             holdings_count,
                         });
                     }
                 }
             }
             Err(e) => {
-                error!("KIS 클라이언트 생성 실패: {}", e);
+                error!("거래소 Provider 생성 실패: {}", e);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiError::new("CLIENT_ERROR", &e)),
@@ -619,35 +497,43 @@ pub async fn get_holdings(
     if let Some(credential_id) = params.credential_id {
         info!("보유종목 조회: credential_id={}", credential_id);
 
-        match get_or_create_kis_client(&state, credential_id).await {
-            Ok((kr_client, _us_client)) => {
-                // 한국 주식 보유 종목
-                match kr_client.get_balance().await {
-                    Ok(balance) => {
-                        for holding in balance.holdings {
-                            let display_name =
-                                format!("{}({})", holding.stock_code, holding.stock_name);
+        match get_or_create_exchange_providers(&state, credential_id).await {
+            Ok(providers) => {
+                // 한국 주식 보유 종목 (ExchangeProvider 사용)
+                match providers.kr.fetch_positions().await {
+                    Ok(positions) => {
+                        for position in positions {
+                            let symbol_str = position.ticker.clone();
+                            let eval_amount = position.quantity * position.current_price;
+                            let profit_loss_rate = if position.avg_entry_price > Decimal::ZERO {
+                                ((position.current_price - position.avg_entry_price)
+                                    / position.avg_entry_price)
+                                    * Decimal::from(100)
+                            } else {
+                                Decimal::ZERO
+                            };
+
                             kr_holdings.push(HoldingInfo {
-                                symbol: holding.stock_code,
-                                display_name: Some(display_name),
-                                name: holding.stock_name,
-                                quantity: holding.quantity,
-                                avg_price: holding.avg_price,
-                                current_price: holding.current_price,
-                                eval_amount: holding.eval_amount,
-                                profit_loss: holding.profit_loss,
-                                profit_loss_rate: holding.profit_loss_rate,
+                                symbol: symbol_str.clone(),
+                                display_name: Some(symbol_str.clone()),
+                                name: symbol_str,
+                                quantity: position.quantity,
+                                avg_price: position.avg_entry_price,
+                                current_price: position.current_price,
+                                eval_amount,
+                                profit_loss: position.unrealized_pnl,
+                                profit_loss_rate,
                                 market: "KR".to_string(),
                             });
                         }
                     }
                     Err(e) => {
-                        warn!("보유종목 조회 실패 (credential {}): {}", credential_id, e);
+                        warn!("보유종목 조회 실패 (credential {}): {:?}", credential_id, e);
                     }
                 }
             }
             Err(e) => {
-                error!("KIS 클라이언트 생성 실패: {}", e);
+                error!("거래소 Provider 생성 실패: {}", e);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiError::new("CLIENT_ERROR", &e)),
@@ -867,53 +753,77 @@ pub async fn get_order_history(
         (String::new(), String::new())
     };
 
-    // KIS 클라이언트 획득
-    let (kr_client, _us_client) = get_or_create_kis_client(&state, params.credential_id)
+    // ExchangeProvider 획득
+    let providers = get_or_create_exchange_providers(&state, params.credential_id)
         .await
         .map_err(|e| {
-            error!("KIS 클라이언트 생성 실패: {}", e);
+            error!("거래소 Provider 생성 실패: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError::new("CLIENT_ERROR", &e)),
             )
         })?;
 
-    // 체결 내역 조회
-    let history = kr_client
-        .get_order_history(&start_date, &end_date, &side, &ctx_fk100, &ctx_nk100)
+    // 체결 내역 조회 (ExchangeProvider 사용)
+    let mut request = ExecutionHistoryRequest::new(&start_date, &end_date).with_side(&side);
+    if !ctx_fk100.is_empty() && !ctx_nk100.is_empty() {
+        request = request.with_cursor(format!("{}|{}", ctx_fk100, ctx_nk100));
+    }
+
+    let history_response = providers
+        .kr
+        .fetch_execution_history(&request)
         .await
         .map_err(|e| {
-            error!("체결 내역 조회 실패: {}", e);
+            error!("체결 내역 조회 실패: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError::new(
                     "HISTORY_FETCH_ERROR",
-                    &format!("체결 내역 조회 실패: {}", e),
+                    &format!("체결 내역 조회 실패: {:?}", e),
                 )),
             )
         })?;
 
-    // 거래소 중립적 타입으로 변환
-    let execution_history = history.to_execution_history();
-
-    // DTO로 변환
-    let records: Vec<ExecutionRecordDto> = execution_history
-        .records
+    // Trade를 ExecutionRecordDto로 변환
+    let records: Vec<ExecutionRecordDto> = history_response
+        .trades
         .iter()
-        .map(ExecutionRecordDto::from)
+        .map(|trade| ExecutionRecordDto {
+            exchange: trade.exchange.clone(),
+            order_id: trade.exchange_trade_id.clone(),
+            symbol: trade.ticker.clone(),
+            asset_name: trade
+                .metadata
+                .get("stock_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&trade.ticker)
+                .to_string(),
+            side: match trade.side {
+                trader_core::Side::Buy => "BUY".to_string(),
+                trader_core::Side::Sell => "SELL".to_string(),
+            },
+            order_type: "LIMIT".to_string(), // KIS API는 주문 유형을 제공하지 않음
+            order_qty: trade.quantity,
+            order_price: trade.price,
+            filled_qty: trade.quantity, // Trade는 이미 체결된 것
+            filled_price: trade.price,
+            filled_amount: trade.quantity * trade.price,
+            status: "FILLED".to_string(),
+            is_cancelled: false,
+            ordered_at: trade.executed_at.to_rfc3339(),
+        })
         .collect();
 
     let count = records.len();
+    let has_more = history_response.next_cursor.is_some();
 
-    info!(
-        "체결 내역 조회 완료: {} 건, has_more={}",
-        count, execution_history.has_more
-    );
+    info!("체결 내역 조회 완료: {} 건, has_more={}", count, has_more);
 
     Ok(Json(OrderHistoryResponse {
         records,
-        has_more: execution_history.has_more,
-        next_cursor: execution_history.next_cursor,
+        has_more,
+        next_cursor: history_response.next_cursor,
         count,
     }))
 }

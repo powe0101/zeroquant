@@ -5,7 +5,7 @@
 //! - `PositionSummary` - 포트폴리오 요약
 
 use crate::domain::Side;
-use crate::types::{Price, Quantity, Symbol};
+use crate::types::{Price, Quantity};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,8 @@ pub struct Position {
     pub id: Uuid,
     /// 거래소 이름
     pub exchange: String,
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 ticker
+    pub ticker: String,
     /// 포지션 방향 (롱 = Buy, 숏 = Sell)
     pub side: Side,
     /// 현재 보유 수량
@@ -51,7 +51,7 @@ impl Position {
     /// 새 포지션을 생성합니다.
     pub fn new(
         exchange: impl Into<String>,
-        symbol: Symbol,
+        ticker: String,
         side: Side,
         quantity: Quantity,
         entry_price: Price,
@@ -60,7 +60,7 @@ impl Position {
         Self {
             id: Uuid::new_v4(),
             exchange: exchange.into(),
-            symbol,
+            ticker,
             side,
             quantity,
             entry_price,
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_position_pnl() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let mut position = Position::new("binance", symbol, Side::Buy, dec!(1.0), dec!(50000));
 
         position.update_price(dec!(55000));
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_position_add() {
-        let symbol = Symbol::crypto("ETH", "USDT");
+        let symbol = "ETH/USDT".to_string();
         let mut position = Position::new("binance", symbol, Side::Buy, dec!(1.0), dec!(2000));
 
         // Add more at a higher price
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_position_reduce() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let mut position = Position::new("binance", symbol, Side::Buy, dec!(2.0), dec!(50000));
 
         let pnl = position.reduce(dec!(1.0), dec!(55000));

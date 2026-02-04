@@ -7,7 +7,8 @@ use rust_decimal::prelude::FromStr;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use trader_core::{Side, TradeInfo};
+use trader_core::{Side, Timeframe, TradeInfo};
+use ts_rs::TS;
 use validator::{Validate, ValidationError};
 
 // ==================== 커스텀 검증 함수 ====================
@@ -328,10 +329,57 @@ impl ExecutionSchedule {
     }
 }
 
+// ==================== 다중 타임프레임 설정 ====================
+
+/// Secondary 타임프레임 설정 (API 요청용)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecondaryTimeframeConfig {
+    /// 타임프레임
+    pub timeframe: Timeframe,
+    /// 캔들 개수 (선택, 기본값: 60)
+    #[serde(default)]
+    pub candle_count: Option<usize>,
+}
+
+/// 다중 타임프레임 설정 (API 요청용)
+///
+/// 프론트엔드에서 전송하는 형식과 일치합니다.
+/// 백엔드의 `trader_core::MultiTimeframeConfig`로 변환되어 사용됩니다.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiTimeframeRequest {
+    /// Primary 타임프레임 (전략 실행 기준)
+    pub primary: Timeframe,
+    /// Secondary 타임프레임 목록 (추세 확인용, 최대 3개)
+    #[serde(default)]
+    pub secondary: Vec<SecondaryTimeframeConfig>,
+}
+
+impl MultiTimeframeRequest {
+    /// trader_core::MultiTimeframeConfig로 변환
+    pub fn to_core_config(&self) -> trader_core::domain::MultiTimeframeConfig {
+        let mut config = trader_core::domain::MultiTimeframeConfig::new()
+            .with_primary(self.primary);
+
+        for sec in &self.secondary {
+            let count = sec.candle_count.unwrap_or(60);
+            config = config.with_timeframe(sec.timeframe, count);
+        }
+
+        config
+    }
+
+    /// Secondary 타임프레임 목록만 반환
+    pub fn secondary_timeframes(&self) -> Vec<Timeframe> {
+        self.secondary.iter().map(|s| s.timeframe).collect()
+    }
+}
+
 // ==================== 요청/응답 타입 ====================
 
 /// 백테스트 가능한 전략 항목
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Note: 복잡한 타입(UiSchema, ExecutionSchedule)은 skip 처리
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "backtest/")]
 pub struct BacktestableStrategy {
     /// 전략 ID
     pub id: String,
@@ -342,9 +390,11 @@ pub struct BacktestableStrategy {
     /// 지원하는 심볼 목록
     pub supported_symbols: Vec<String>,
     /// 기본 설정 파라미터
+    #[ts(skip)]
     pub default_params: serde_json::Value,
     /// SDUI 스키마 (UI 메타데이터)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
     pub ui_schema: Option<UiSchema>,
     /// 전략 카테고리
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -354,6 +404,7 @@ pub struct BacktestableStrategy {
     pub tags: Vec<String>,
     /// 실행 주기
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
     pub execution_schedule: Option<ExecutionSchedule>,
     /// 실행 주기 상세 설명 (예: "장 시작 5분 후", "매월 첫 거래일")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -364,7 +415,8 @@ pub struct BacktestableStrategy {
 }
 
 /// 백테스트 가능한 전략 목록 응답
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "backtest/")]
 pub struct BacktestStrategiesResponse {
     /// 전략 목록
     pub strategies: Vec<BacktestableStrategy>,
@@ -401,6 +453,10 @@ pub struct BacktestRunRequest {
     /// 전략 파라미터 (선택)
     #[serde(default)]
     pub parameters: Option<serde_json::Value>,
+    /// 다중 타임프레임 설정 (선택)
+    /// 지정 시 secondary 타임프레임 데이터도 로드하여 전략에 전달
+    #[serde(default)]
+    pub multi_timeframe_config: Option<MultiTimeframeRequest>,
 }
 
 /// 다중 자산 백테스트 실행 요청
@@ -462,35 +518,49 @@ pub struct BacktestMultiRunResponse {
 }
 
 /// 백테스트 성과 지표 응답
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "backtest/")]
 pub struct BacktestMetricsResponse {
     /// 총 수익률 (%)
+    #[ts(type = "number")]
     pub total_return_pct: Decimal,
     /// 연율화 수익률 (%)
+    #[ts(type = "number")]
     pub annualized_return_pct: Decimal,
     /// 순수익
+    #[ts(type = "number")]
     pub net_profit: Decimal,
     /// 총 거래 수
     pub total_trades: usize,
     /// 승률 (%)
+    #[ts(type = "number")]
     pub win_rate_pct: Decimal,
     /// 프로핏 팩터
+    #[ts(type = "number")]
     pub profit_factor: Decimal,
     /// 샤프 비율
+    #[ts(type = "number")]
     pub sharpe_ratio: Decimal,
     /// 소르티노 비율
+    #[ts(type = "number")]
     pub sortino_ratio: Decimal,
     /// 최대 낙폭 (%)
+    #[ts(type = "number")]
     pub max_drawdown_pct: Decimal,
     /// 칼마 비율
+    #[ts(type = "number")]
     pub calmar_ratio: Decimal,
     /// 평균 수익 거래
+    #[ts(type = "number")]
     pub avg_win: Decimal,
     /// 평균 손실 거래
+    #[ts(type = "number")]
     pub avg_loss: Decimal,
     /// 최대 수익 거래
+    #[ts(type = "number")]
     pub largest_win: Decimal,
     /// 최대 손실 거래
+    #[ts(type = "number")]
     pub largest_loss: Decimal,
 }
 

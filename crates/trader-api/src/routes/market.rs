@@ -17,7 +17,7 @@ use axum::{
 use chrono::{Datelike, NaiveTime, Timelike, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use trader_core::Timeframe;
 use trader_data::cache::CachedHistoricalDataProvider;
@@ -27,6 +27,7 @@ use trader_exchange::connector::kis::{
 use trader_exchange::historical::HistoricalDataProvider;
 use trader_exchange::YahooFinanceProvider;
 
+use crate::repository::KlinesRepository;
 use crate::routes::credentials::EncryptedCredentials;
 use crate::routes::strategies::ApiError;
 use crate::state::AppState;
@@ -239,6 +240,28 @@ pub struct CandleData {
     pub low: f64,
     pub close: f64,
     pub volume: f64,
+}
+
+
+/// 다중 타임프레임 캔들 데이터 쿼리.
+#[derive(Debug, Deserialize)]
+pub struct MultiKlinesQuery {
+    /// 심볼 (예: BTC/USDT, 005930)
+    pub symbol: String,
+    /// 쉼표로 구분된 타임프레임 목록 (예: "5m,1h,1d")
+    pub timeframes: String,
+    /// 타임프레임별 데이터 개수 (기본: 100)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+/// 다중 타임프레임 캔들 데이터 응답.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultiKlinesResponse {
+    pub symbol: String,
+    /// 타임프레임별 캔들 데이터
+    pub data: std::collections::HashMap<String, Vec<CandleData>>,
 }
 
 // =============================================================================
@@ -550,6 +573,179 @@ pub async fn get_klines(
     }))
 }
 
+
+/// 다중 타임프레임 캔들스틱 데이터 조회.
+///
+/// GET /api/v1/market/klines/multi?symbol=BTC/USDT&timeframes=5m,1h,1d&limit=100
+///
+/// 여러 타임프레임의 캔들 데이터를 한 번에 조회합니다.
+/// 다중 타임프레임 전략에서 필요한 모든 데이터를 단일 API 호출로 가져올 수 있습니다.
+///
+/// # 지원 타임프레임
+/// - 분봉: 1m, 5m, 15m, 30m
+/// - 시간봉: 1h, 4h
+/// - 일봉 이상: 1d, 1wk, 1mo
+pub async fn get_multi_klines(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<MultiKlinesQuery>,
+) -> Result<Json<MultiKlinesResponse>, (StatusCode, Json<ApiError>)> {
+    // 타임프레임 목록 파싱
+    let timeframes: Vec<String> = query
+        .timeframes
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if timeframes.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "INVALID_TIMEFRAMES",
+                "적어도 하나의 타임프레임을 지정해야 합니다",
+            )),
+        ));
+    }
+
+    if timeframes.len() > 5 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::new(
+                "TOO_MANY_TIMEFRAMES",
+                "최대 5개의 타임프레임만 지원됩니다",
+            )),
+        ));
+    }
+
+    debug!(
+        symbol = %query.symbol,
+        timeframes = ?timeframes,
+        limit = query.limit,
+        "다중 타임프레임 캔들 데이터 조회 시작"
+    );
+
+    let mut data = std::collections::HashMap::new();
+
+    // DB 연결이 있으면 단일 쿼리로 최적화된 조회 사용
+    if let Some(pool) = &state.db_pool {
+        // 단일 쿼리로 다중 타임프레임 조회 (UNION ALL 최적화)
+        match KlinesRepository::get_latest_multi_timeframe(
+            pool,
+            &query.symbol,
+            &timeframes,
+            query.limit as i64,
+        )
+        .await
+        {
+            Ok(klines_by_tf) => {
+                for (tf_str, klines) in klines_by_tf {
+                    let candles: Vec<CandleData> = klines
+                        .into_iter()
+                        .map(|k| CandleData {
+                            time: k.open_time.format("%Y-%m-%d %H:%M:%S").to_string(),
+                            open: k.open.to_string().parse().unwrap_or(0.0),
+                            high: k.high.to_string().parse().unwrap_or(0.0),
+                            low: k.low.to_string().parse().unwrap_or(0.0),
+                            close: k.close.to_string().parse().unwrap_or(0.0),
+                            volume: k.volume.to_string().parse().unwrap_or(0.0),
+                        })
+                        .collect();
+                    data.insert(tf_str, candles);
+                }
+                // 요청된 타임프레임 중 데이터가 없는 것은 빈 배열로 채움
+                for tf_str in &timeframes {
+                    data.entry(tf_str.clone()).or_insert_with(Vec::new);
+                }
+            }
+            Err(e) => {
+                warn!(
+                    symbol = %query.symbol,
+                    timeframes = ?timeframes,
+                    error = %e,
+                    "다중 타임프레임 데이터 조회 실패, 순차 조회로 폴백"
+                );
+                // 폴백: 순차 조회
+                let cached_provider = CachedHistoricalDataProvider::new(pool.clone());
+                for tf_str in &timeframes {
+                    let timeframe = parse_timeframe(tf_str);
+                    match cached_provider.get_klines(&query.symbol, timeframe, query.limit).await {
+                        Ok(klines) => {
+                            let candles: Vec<CandleData> = klines
+                                .into_iter()
+                                .map(|k| CandleData {
+                                    time: k.open_time.format("%Y-%m-%d %H:%M:%S").to_string(),
+                                    open: k.open.to_string().parse().unwrap_or(0.0),
+                                    high: k.high.to_string().parse().unwrap_or(0.0),
+                                    low: k.low.to_string().parse().unwrap_or(0.0),
+                                    close: k.close.to_string().parse().unwrap_or(0.0),
+                                    volume: k.volume.to_string().parse().unwrap_or(0.0),
+                                })
+                                .collect();
+                            data.insert(tf_str.clone(), candles);
+                        }
+                        Err(_) => {
+                            data.insert(tf_str.clone(), vec![]);
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Fallback: DB 연결 없이 직접 Yahoo Finance 사용
+        let provider = YahooFinanceProvider::new().map_err(|e| {
+            error!("Yahoo Finance 연결 실패: {}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError::new(
+                    "YAHOO_FINANCE_ERROR",
+                    &format!("Yahoo Finance 연결 실패: {}", e),
+                )),
+            )
+        })?;
+
+        // 순차적으로 각 타임프레임 데이터 조회
+        for tf_str in &timeframes {
+            let timeframe = parse_timeframe(tf_str);
+            match provider.get_klines(&query.symbol, timeframe, query.limit).await {
+                Ok(klines) => {
+                    let candles: Vec<CandleData> = klines
+                        .into_iter()
+                        .map(|k| CandleData {
+                            time: k.open_time.format("%Y-%m-%d %H:%M:%S").to_string(),
+                            open: k.open.to_string().parse().unwrap_or(0.0),
+                            high: k.high.to_string().parse().unwrap_or(0.0),
+                            low: k.low.to_string().parse().unwrap_or(0.0),
+                            close: k.close.to_string().parse().unwrap_or(0.0),
+                            volume: k.volume.to_string().parse().unwrap_or(0.0),
+                        })
+                        .collect();
+                    data.insert(tf_str.clone(), candles);
+                }
+                Err(e) => {
+                    warn!(
+                        symbol = %query.symbol,
+                        timeframe = %tf_str,
+                        error = %e,
+                        "타임프레임 데이터 조회 실패"
+                    );
+                    data.insert(tf_str.clone(), vec![]);
+                }
+            }
+        }
+    }
+
+    info!(
+        symbol = %query.symbol,
+        timeframes = ?timeframes,
+        "다중 타임프레임 캔들 데이터 조회 성공"
+    );
+
+    Ok(Json(MultiKlinesResponse {
+        symbol: query.symbol,
+        data,
+    }))
+}
+
 /// 타임프레임 문자열을 Timeframe enum으로 변환.
 fn parse_timeframe(tf: &str) -> Timeframe {
     match tf.to_lowercase().as_str() {
@@ -798,6 +994,7 @@ pub fn market_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/breadth", get(get_market_breadth))
         .route("/klines", get(get_klines))
+        .route("/klines/multi", get(get_multi_klines))
         .route("/ticker", get(get_ticker))
         .route("/{market}/status", get(get_market_status))
 }

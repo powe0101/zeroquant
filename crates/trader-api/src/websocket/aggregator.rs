@@ -18,7 +18,7 @@ use tracing::{debug, error, info, warn};
 use trader_core::{OrderBook, Ticker};
 use trader_exchange::traits::{MarketEvent, MarketStream};
 
-use super::messages::{OrderBookData, OrderBookLevel, ServerMessage, TickerData, TradeData};
+use super::messages::{KlineData, OrderBookData, OrderBookLevel, ServerMessage, TickerData, TradeData};
 use super::subscriptions::SharedSubscriptionManager;
 
 /// 거래소 데이터를 WebSocket 클라이언트에게 전달하는 어그리게이터.
@@ -57,9 +57,8 @@ impl MarketDataAggregator {
                 MarketEvent::Trade(trade) => {
                     self.handle_trade(trade);
                 }
-                MarketEvent::Kline(_kline) => {
-                    // 캔들스틱은 현재 브로드캐스트하지 않음
-                    debug!("Kline event received (not broadcasted)");
+                MarketEvent::Kline(kline) => {
+                    self.handle_kline(kline);
                 }
                 MarketEvent::Connected => {
                     info!("거래소 연결됨");
@@ -80,7 +79,7 @@ impl MarketDataAggregator {
 
     /// Ticker 이벤트 처리.
     fn handle_ticker(&self, ticker: Ticker) {
-        let symbol = format!("{}", ticker.symbol);
+        let symbol = format!("{}", ticker.ticker);
         let timestamp = ticker.timestamp.timestamp_millis();
 
         // 24시간 변화율 계산 (이미 계산된 값 사용)
@@ -112,7 +111,7 @@ impl MarketDataAggregator {
 
     /// OrderBook 이벤트 처리.
     fn handle_orderbook(&self, orderbook: OrderBook) {
-        let symbol = format!("{}", orderbook.symbol);
+        let symbol = format!("{}", orderbook.ticker);
         let timestamp = orderbook.timestamp.timestamp_millis();
 
         let bids: Vec<OrderBookLevel> = orderbook
@@ -156,7 +155,7 @@ impl MarketDataAggregator {
 
     /// Trade 이벤트 처리.
     fn handle_trade(&self, trade: trader_core::TradeTick) {
-        let symbol = format!("{}", trade.symbol);
+        let symbol = format!("{}", trade.ticker);
         let timestamp = trade.timestamp.timestamp_millis();
 
         let trade_data = TradeData {
@@ -175,6 +174,39 @@ impl MarketDataAggregator {
             price = %trade.price,
             quantity = %trade.quantity,
             "Trade broadcast"
+        );
+
+        if let Err(e) = self.subscriptions.broadcast(message) {
+            debug!("Broadcast error: {}", e);
+        }
+    }
+
+
+    /// Kline(캔들스틱) 이벤트 처리.
+    fn handle_kline(&self, kline: trader_core::Kline) {
+        let symbol = kline.ticker.clone();
+        let timeframe = format!("{}", kline.timeframe);
+
+        let kline_data = KlineData {
+            symbol: symbol.clone(),
+            timeframe: timeframe.clone(),
+            open: kline.open,
+            high: kline.high,
+            low: kline.low,
+            close: kline.close,
+            volume: kline.volume,
+            open_time: kline.open_time.timestamp_millis(),
+            close_time: kline.close_time.timestamp_millis(),
+            is_closed: true, // 스트림에서 받는 캔들은 보통 완료된 캔들
+        };
+
+        let message = ServerMessage::Kline(kline_data);
+
+        debug!(
+            symbol = %symbol,
+            timeframe = %timeframe,
+            close = %kline.close,
+            "Kline broadcast"
         );
 
         if let Err(e) = self.subscriptions.broadcast(message) {

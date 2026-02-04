@@ -26,6 +26,9 @@ pub struct StrategyRecord {
     pub allocated_capital: Option<Decimal>,
     /// Risk profile: conservative, default, aggressive, or custom
     pub risk_profile: Option<String>,
+    /// Multi-timeframe configuration (NULL = single timeframe strategy)
+    /// Format: {"primary": "5m", "secondary": [{"timeframe": "1h", "candle_count": 24}]}
+    pub multi_timeframe_config: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_started_at: Option<DateTime<Utc>>,
@@ -49,6 +52,9 @@ pub struct CreateStrategyInput {
     pub allocated_capital: Option<Decimal>,
     /// Risk profile: conservative, default, aggressive, or custom
     pub risk_profile: Option<String>,
+    /// Multi-timeframe configuration (optional)
+    /// Format: {"primary": "5m", "secondary": [{"timeframe": "1h", "candle_count": 24}]}
+    pub multi_timeframe_config: Option<Value>,
 }
 
 /// Strategy repository for database operations.
@@ -70,8 +76,8 @@ impl StrategyRepository {
 
         let record = sqlx::query_as::<_, StrategyRecord>(
             r#"
-            INSERT INTO strategies (id, name, description, strategy_type, symbols, market, timeframe, config, risk_limits, allocated_capital, risk_profile, is_active)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false)
+            INSERT INTO strategies (id, name, description, strategy_type, symbols, market, timeframe, config, risk_limits, allocated_capital, risk_profile, multi_timeframe_config, is_active)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false)
             RETURNING *
             "#
         )
@@ -86,6 +92,7 @@ impl StrategyRepository {
         .bind(&risk_limits)
         .bind(&input.allocated_capital)
         .bind(&risk_profile)
+        .bind(&input.multi_timeframe_config)
         .fetch_one(&mut *tx)
         .await?;
 
@@ -274,6 +281,30 @@ impl StrategyRepository {
         Ok(record)
     }
 
+    /// Update strategy symbols (trading targets).
+    pub async fn update_symbols(
+        pool: &PgPool,
+        id: &str,
+        symbols: Vec<String>,
+    ) -> Result<StrategyRecord, sqlx::Error> {
+        let symbols_json = serde_json::to_value(&symbols).unwrap_or(serde_json::Value::Array(vec![]));
+
+        let record = sqlx::query_as::<_, StrategyRecord>(
+            r#"
+            UPDATE strategies
+            SET symbols = $2, updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+            "#,
+        )
+        .bind(id)
+        .bind(symbols_json)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(record)
+    }
+
     /// Load all strategies from the database and register them with the engine.
     ///
     /// This is called during server startup to restore previously saved strategies.
@@ -285,10 +316,11 @@ impl StrategyRepository {
             AllWeatherStrategy, BaaStrategy, BollingerStrategy, CandlePatternStrategy,
             DualMomentumStrategy, GridStrategy, HaaStrategy, InfinityBotStrategy,
             KosdaqFireRainStrategy, KospiBothSideStrategy, MagicSplitStrategy,
-            MarketCapTopStrategy, MarketInterestDayStrategy, PensionBotStrategy, RsiStrategy,
-            SectorMomentumStrategy, SectorVbStrategy, SimplePowerStrategy, SmaStrategy,
-            SmallCapQuantStrategy, SnowStrategy, StockGuganStrategy, StockRotationStrategy,
-            Us3xLeverageStrategy, VolatilityBreakoutStrategy, XaaStrategy,
+            MarketCapTopStrategy, MarketInterestDayStrategy, PensionBotStrategy,
+            RsiMultiTfStrategy, RsiStrategy, SectorMomentumStrategy, SectorVbStrategy,
+            SimplePowerStrategy, SmaStrategy, SmallCapQuantStrategy, SnowStrategy,
+            StockGuganStrategy, StockRotationStrategy, Us3xLeverageStrategy,
+            VolatilityBreakoutStrategy, XaaStrategy,
         };
         use trader_strategy::Strategy;
 
@@ -302,6 +334,9 @@ impl StrategyRepository {
             let strategy: Option<Box<dyn Strategy>> = match strategy_type {
                 // 기본 전략들
                 "rsi" | "rsi_mean_reversion" => Some(Box::new(RsiStrategy::new())),
+                "rsi_multi_tf" | "rsi_mtf" | "multi_rsi" => {
+                    Some(Box::new(RsiMultiTfStrategy::new()))
+                }
                 "grid" | "grid_trading" => Some(Box::new(GridStrategy::new())),
                 "bollinger" | "bollinger_bands" => Some(Box::new(BollingerStrategy::new())),
                 "volatility_breakout" | "volatility" => {

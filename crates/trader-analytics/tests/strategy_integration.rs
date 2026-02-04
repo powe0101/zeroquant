@@ -1537,7 +1537,7 @@ fn create_multi_symbol_test_klines() -> Vec<Kline> {
             let price = base_price * variation;
 
             all_klines.push(Kline {
-                symbol: symbol.clone(),
+                ticker: symbol.to_string(),
                 timeframe: Timeframe::D1,
                 open_time,
                 close_time,
@@ -1553,7 +1553,7 @@ fn create_multi_symbol_test_klines() -> Vec<Kline> {
     }
 
     // 시간순 정렬 (같은 날짜의 모든 심볼이 함께 처리되도록)
-    all_klines.sort_by_key(|k| (k.open_time, k.symbol.base.clone()));
+    all_klines.sort_by_key(|k| (k.open_time, k.ticker.clone()));
 
     all_klines
 }
@@ -1582,7 +1582,7 @@ async fn test_multi_asset_price_matching() {
         // 날짜 단위로 인덱싱 (시간 제거)
         let date_key = kline.open_time.date_naive();
         let day_timestamp = date_key.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
-        price_index.insert((day_timestamp, kline.symbol.base.clone()), kline.close);
+        price_index.insert((day_timestamp, kline.ticker.clone()), kline.close);
     }
     println!("가격 인덱스 생성: {} 항목", price_index.len());
 

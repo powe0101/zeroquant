@@ -5,7 +5,7 @@
 //! - `TradeStats` - 거래 통계
 
 use crate::domain::{OrderStatusType, Side};
-use crate::types::{Price, Quantity, Symbol};
+use crate::types::{Price, Quantity};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -22,8 +22,8 @@ pub struct Trade {
     pub exchange: String,
     /// 거래소 거래 ID
     pub exchange_trade_id: String,
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 심볼 (ticker)
+    pub ticker: String,
     /// 거래 방향
     pub side: Side,
     /// 체결 수량
@@ -49,7 +49,7 @@ impl Trade {
         order_id: Uuid,
         exchange: impl Into<String>,
         exchange_trade_id: impl Into<String>,
-        symbol: Symbol,
+        ticker: String,
         side: Side,
         quantity: Quantity,
         price: Price,
@@ -59,7 +59,7 @@ impl Trade {
             order_id,
             exchange: exchange.into(),
             exchange_trade_id: exchange_trade_id.into(),
-            symbol,
+            ticker,
             side,
             quantity,
             price,
@@ -119,7 +119,7 @@ pub struct ExecutionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_order_id: Option<String>,
     /// 거래 심볼
-    pub symbol: Symbol,
+    pub symbol: String,
     /// 종목명/자산명
     pub asset_name: String,
     /// 주문 방향
@@ -189,11 +189,11 @@ mod tests {
 
     #[test]
     fn test_trade_creation() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let trade = Trade::new(
             Uuid::new_v4(),
-            "binance",
-            "12345",
+            "binance".to_string(),
+            "12345".to_string(),
             symbol,
             Side::Buy,
             dec!(0.1),

@@ -42,7 +42,7 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType};
 
 /// 자산 타입.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +61,7 @@ pub enum AssetType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetInfo {
     /// 종목 코드
-    pub symbol: String,
+    pub ticker:  String,
     /// 자산 타입
     pub asset_type: AssetType,
     /// 설명
@@ -71,35 +71,35 @@ pub struct AssetInfo {
 impl AssetInfo {
     /// 새 자산 정보 생성.
     pub fn new(
-        symbol: impl Into<String>,
+        ticker: impl Into<String>,
         asset_type: AssetType,
         description: impl Into<String>,
     ) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             asset_type,
             description: description.into(),
         }
     }
 
     /// 카나리아 자산 생성.
-    pub fn canary(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, AssetType::Canary, description)
+    pub fn canary(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, AssetType::Canary, description)
     }
 
     /// 공격 자산 생성.
-    pub fn offensive(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, AssetType::Offensive, description)
+    pub fn offensive(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, AssetType::Offensive, description)
     }
 
     /// 방어 자산 생성.
-    pub fn defensive(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, AssetType::Defensive, description)
+    pub fn defensive(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, AssetType::Defensive, description)
     }
 
     /// 현금 대용 자산 생성.
-    pub fn cash(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, AssetType::Cash, description)
+    pub fn cash(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, AssetType::Cash, description)
     }
 }
 
@@ -124,8 +124,8 @@ pub struct HaaConfig {
     /// 방어 자산 투자 개수 (기본: 1)
     pub defensive_top_n: usize,
 
-    /// 현금 대용 심볼 (BIL)
-    pub cash_symbol: String,
+    /// 현금 대용 티커 (BIL)
+    pub cash_ticker:  String,
 
     /// 투자 비율 (총 자산 대비)
     pub invest_rate: Decimal,
@@ -179,7 +179,7 @@ impl HaaConfig {
             ],
             offensive_top_n: 4,
             defensive_top_n: 1,
-            cash_symbol: "BIL".to_string(),
+            cash_ticker: "BIL".to_string(),
             invest_rate: dec!(1.0),
             rebalance_threshold: dec!(0.03),
             min_global_score: dec!(60),
@@ -215,36 +215,36 @@ impl HaaConfig {
             ],
             offensive_top_n: 4,
             defensive_top_n: 1,
-            cash_symbol: "BIL".to_string(),
+            cash_ticker: "BIL".to_string(),
             invest_rate: dec!(1.0),
             rebalance_threshold: dec!(0.03),
             min_global_score: dec!(60),
         }
     }
 
-    /// 모든 자산 심볼 가져오기.
-    pub fn all_symbols(&self) -> Vec<String> {
-        let mut symbols: Vec<String> = Vec::new();
+    /// 모든 자산 티커 가져오기.
+    pub fn all_tickers(&self) -> Vec<String> {
+        let mut tickers: Vec<String> = Vec::new();
 
         for asset in &self.canary_assets {
-            if !symbols.contains(&asset.symbol) {
-                symbols.push(asset.symbol.clone());
+            if !tickers.contains(&asset.ticker) {
+                tickers.push(asset.ticker.clone());
             }
         }
 
         for asset in &self.offensive_assets {
-            if !symbols.contains(&asset.symbol) {
-                symbols.push(asset.symbol.clone());
+            if !tickers.contains(&asset.ticker) {
+                tickers.push(asset.ticker.clone());
             }
         }
 
         for asset in &self.defensive_assets {
-            if !symbols.contains(&asset.symbol) {
-                symbols.push(asset.symbol.clone());
+            if !tickers.contains(&asset.ticker) {
+                tickers.push(asset.ticker.clone());
             }
         }
 
-        symbols
+        tickers
     }
 }
 
@@ -252,7 +252,7 @@ impl HaaConfig {
 #[derive(Debug, Clone, Default)]
 struct AssetMomentum {
     /// 종목 코드
-    symbol: String,
+    ticker:  String,
     /// 모멘텀 스코어
     momentum_score: Decimal,
     /// 목표 비중 (%)
@@ -322,8 +322,8 @@ impl HaaStrategy {
     }
 
     /// 가격 히스토리 업데이트.
-    fn update_price_history(&mut self, symbol: &str, price: Decimal) {
-        let history = self.price_history.entry(symbol.to_string()).or_default();
+    fn update_price_history(&mut self, ticker: &str, price: Decimal) {
+        let history = self.price_history.entry(ticker.to_string()).or_default();
         history.insert(0, price);
 
         // 최대 300일 보관
@@ -335,12 +335,12 @@ impl HaaStrategy {
     /// 모멘텀 스코어 계산.
     ///
     /// 공식: (1M수익률) + (3M수익률) + (6M수익률) + (12M수익률)
-    fn calculate_momentum_score(&self, symbol: &str) -> Option<Decimal> {
-        let prices = self.price_history.get(symbol)?;
+    fn calculate_momentum_score(&self, ticker: &str) -> Option<Decimal> {
+        let prices = self.price_history.get(ticker)?;
 
         // 최소 240일(12개월) 데이터 필요
         if prices.len() < 240 {
-            debug!("[HAA] {} 데이터 부족: {}일", symbol, prices.len());
+            debug!("[HAA] {} 데이터 부족: {}일", ticker, prices.len());
             return None;
         }
 
@@ -368,7 +368,7 @@ impl HaaStrategy {
 
         debug!(
             "[HAA] {} 모멘텀 스코어: {:.4} (1M:{:.2}%, 3M:{:.2}%, 6M:{:.2}%, 12M:{:.2}%)",
-            symbol,
+            ticker,
             score,
             ret_1m * dec!(100),
             ret_3m * dec!(100),
@@ -384,17 +384,17 @@ impl HaaStrategy {
     /// 카나리아 자산의 모멘텀이 음수이면 방어 모드로 전환.
     fn check_canary_assets(&self, config: &HaaConfig) -> PortfolioMode {
         for asset in &config.canary_assets {
-            if let Some(score) = self.calculate_momentum_score(&asset.symbol) {
+            if let Some(score) = self.calculate_momentum_score(&asset.ticker) {
                 if score < Decimal::ZERO {
                     info!(
                         "[HAA] 카나리아 {} 모멘텀 음수 ({:.4}) → 방어 모드",
-                        asset.symbol, score
+                        asset.ticker, score
                     );
                     return PortfolioMode::Defensive;
                 }
             } else {
                 // 데이터 부족 시 방어적으로 처리
-                warn!("[HAA] 카나리아 {} 데이터 부족 → 방어 모드", asset.symbol);
+                warn!("[HAA] 카나리아 {} 데이터 부족 → 방어 모드", asset.ticker);
                 return PortfolioMode::Defensive;
             }
         }
@@ -408,9 +408,9 @@ impl HaaStrategy {
         let mut ranked: Vec<AssetMomentum> = Vec::new();
 
         for asset in assets {
-            if let Some(score) = self.calculate_momentum_score(&asset.symbol) {
+            if let Some(score) = self.calculate_momentum_score(&asset.ticker) {
                 ranked.push(AssetMomentum {
-                    symbol: asset.symbol.clone(),
+                    ticker: asset.ticker.clone(),
                     momentum_score: score,
                     target_weight: Decimal::ZERO,
                 });
@@ -449,11 +449,11 @@ impl HaaStrategy {
                 for (i, asset) in ranked.iter().take(top_n).enumerate() {
                     if asset.momentum_score > Decimal::ZERO {
                         // 모멘텀 양수 → 투자
-                        allocations.push(TargetAllocation::new(asset.symbol.clone(), base_weight));
+                        allocations.push(TargetAllocation::new(asset.ticker.clone(), base_weight));
                         info!(
                             "[HAA] 공격자산 #{}: {} (모멘텀: {:.4}, 비중: {:.1}%)",
                             i + 1,
-                            asset.symbol,
+                            asset.ticker,
                             asset.momentum_score,
                             base_weight * dec!(100)
                         );
@@ -463,7 +463,7 @@ impl HaaStrategy {
                         info!(
                             "[HAA] 공격자산 #{}: {} 모멘텀 음수 ({:.4}) → 비중 이전",
                             i + 1,
-                            asset.symbol,
+                            asset.ticker,
                             asset.momentum_score
                         );
                     }
@@ -493,31 +493,31 @@ impl HaaStrategy {
         let ranked = self.rank_assets(&config.defensive_assets);
 
         if let Some(top_asset) = ranked.first() {
-            if top_asset.symbol == config.cash_symbol {
+            if top_asset.ticker == config.cash_ticker {
                 // BIL이 선택되면 현금 보유 (투자 안 함)
                 info!(
                     "[HAA] 방어자산: {} (현금) → 투자 안 함, 비중 {:.1}% 현금 보유",
-                    top_asset.symbol,
+                    top_asset.ticker,
                     weight * dec!(100)
                 );
             } else {
                 // 기존 할당에 추가하거나 새로 생성
                 let existing = allocations
                     .iter_mut()
-                    .find(|a| a.symbol == top_asset.symbol);
+                    .find(|a| a.ticker == top_asset.ticker);
 
                 if let Some(existing) = existing {
                     existing.weight += weight;
                     info!(
                         "[HAA] 방어자산: {} 비중 추가 → 총 {:.1}%",
-                        top_asset.symbol,
+                        top_asset.ticker,
                         existing.weight * dec!(100)
                     );
                 } else {
-                    allocations.push(TargetAllocation::new(top_asset.symbol.clone(), weight));
+                    allocations.push(TargetAllocation::new(top_asset.ticker.clone(), weight));
                     info!(
                         "[HAA] 방어자산: {} (모멘텀: {:.4}, 비중: {:.1}%)",
-                        top_asset.symbol,
+                        top_asset.ticker,
                         top_asset.momentum_score,
                         weight * dec!(100)
                     );
@@ -604,11 +604,11 @@ impl HaaStrategy {
         // 현재 포지션을 PortfolioPosition으로 변환
         let mut portfolio_positions: Vec<PortfolioPosition> = Vec::new();
 
-        for (symbol, quantity) in &self.positions {
-            if let Some(prices) = self.price_history.get(symbol) {
+        for (ticker, quantity) in &self.positions {
+            if let Some(prices) = self.price_history.get(ticker) {
                 if let Some(current_price) = prices.first() {
                     portfolio_positions.push(PortfolioPosition::new(
-                        symbol,
+                        ticker,
                         *quantity,
                         *current_price,
                     ));
@@ -617,11 +617,11 @@ impl HaaStrategy {
         }
 
         // 현금 포지션 추가
-        let cash_symbol = match config.market {
+        let cash_ticker = match config.market {
             HaaMarketType::US => "USD",
             HaaMarketType::KR => "KRW",
         };
-        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_symbol));
+        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_ticker));
 
         // 리밸런싱 계산
         let result = self
@@ -638,9 +638,9 @@ impl HaaStrategy {
             };
 
             // BUY 신호 생성 전 can_enter() 확인
-            if side == Side::Buy && !self.can_enter(&order.symbol) {
+            if side == Side::Buy && !self.can_enter(&order.ticker) {
                 debug!(
-                    symbol = %order.symbol,
+                    ticker = %order.ticker,
                     "[HAA] RouteState/GlobalScore 조건 미충족, 매수 신호 스킵"
                 );
                 continue;
@@ -653,7 +653,7 @@ impl HaaStrategy {
 
             let signal = Signal::new(
                 self.name(),
-                Symbol::stock(&order.symbol, quote_currency),
+                format!("{}/{}", order.ticker, quote_currency),
                 side,
                 SignalType::Scale,
             )
@@ -727,7 +727,7 @@ impl Strategy for HaaStrategy {
         info!(
             "[HAA] 전략 초기화 - 시장: {:?}, 카나리아: {:?}, 공격자산: {}개, 방어자산: {}개, 초기자본: {}",
             parsed_config.market,
-            parsed_config.canary_assets.iter().map(|a| &a.symbol).collect::<Vec<_>>(),
+            parsed_config.canary_assets.iter().map(|a| &a.ticker).collect::<Vec<_>>(),
             parsed_config.offensive_assets.len(),
             parsed_config.defensive_assets.len(),
             self.cash_balance
@@ -746,10 +746,10 @@ impl Strategy for HaaStrategy {
             None => return Ok(Vec::new()),
         };
 
-        let symbol = data.symbol.base.clone();
+        let ticker = data.ticker.clone();
 
         // 관심 자산이 아니면 무시
-        if !config.all_symbols().contains(&symbol) {
+        if !config.all_tickers().contains(&ticker) {
             return Ok(Vec::new());
         }
 
@@ -763,8 +763,8 @@ impl Strategy for HaaStrategy {
 
         // 가격 업데이트
         if let Some(price) = price {
-            self.update_price_history(&symbol, price);
-            debug!("[HAA] 가격 업데이트: {} = {}", symbol, price);
+            self.update_price_history(&ticker, price);
+            debug!("[HAA] 가격 업데이트: {} = {}", ticker, price);
         }
 
         // 리밸런싱 신호 생성
@@ -779,7 +779,7 @@ impl Strategy for HaaStrategy {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
             "[HAA] 주문 체결: {:?} {} {} @ {:?}",
-            order.side, order.quantity, order.symbol, order.average_fill_price
+            order.side, order.quantity, order.ticker, order.average_fill_price
         );
         Ok(())
     }
@@ -788,11 +788,11 @@ impl Strategy for HaaStrategy {
         &mut self,
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol = position.symbol.base.clone();
-        self.positions.insert(symbol.clone(), position.quantity);
+        let ticker = position.ticker.clone();
+        self.positions.insert(ticker.clone(), position.quantity);
         info!(
             "[HAA] 포지션 업데이트: {} = {} (PnL: {})",
-            symbol, position.quantity, position.unrealized_pnl
+            ticker, position.quantity, position.unrealized_pnl
         );
         Ok(())
     }
@@ -830,12 +830,12 @@ mod tests {
         let config = HaaConfig::us_default();
         assert_eq!(config.market, HaaMarketType::US);
         assert_eq!(config.canary_assets.len(), 1);
-        assert_eq!(config.canary_assets[0].symbol, "TIP");
+        assert_eq!(config.canary_assets[0].ticker, "TIP");
         assert_eq!(config.offensive_assets.len(), 8);
         assert_eq!(config.defensive_assets.len(), 2);
         assert_eq!(config.offensive_top_n, 4);
         assert_eq!(config.defensive_top_n, 1);
-        assert_eq!(config.cash_symbol, "BIL");
+        assert_eq!(config.cash_ticker, "BIL");
     }
 
     #[test]
@@ -846,17 +846,17 @@ mod tests {
     }
 
     #[test]
-    fn test_all_symbols() {
+    fn test_all_tickers() {
         let config = HaaConfig::us_default();
-        let symbols = config.all_symbols();
+        let tickers = config.all_tickers();
 
-        assert!(symbols.contains(&"TIP".to_string()));
-        assert!(symbols.contains(&"SPY".to_string()));
-        assert!(symbols.contains(&"IEF".to_string()));
-        assert!(symbols.contains(&"BIL".to_string()));
+        assert!(tickers.contains(&"TIP".to_string()));
+        assert!(tickers.contains(&"SPY".to_string()));
+        assert!(tickers.contains(&"IEF".to_string()));
+        assert!(tickers.contains(&"BIL".to_string()));
 
         // 중복 제거 확인 (IEF는 공격/방어 모두에 있음)
-        let ief_count = symbols.iter().filter(|s| *s == "IEF").count();
+        let ief_count = tickers.iter().filter(|s| *s == "IEF").count();
         assert_eq!(ief_count, 1);
     }
 
@@ -966,9 +966,9 @@ mod tests {
         let ranked = strategy.rank_assets(&assets);
 
         assert_eq!(ranked.len(), 3);
-        assert_eq!(ranked[0].symbol, "SPY"); // 가장 높은 모멘텀
-        assert_eq!(ranked[1].symbol, "VEA");
-        assert_eq!(ranked[2].symbol, "IWM");
+        assert_eq!(ranked[0].ticker, "SPY"); // 가장 높은 모멘텀
+        assert_eq!(ranked[1].ticker, "VEA");
+        assert_eq!(ranked[2].ticker, "IWM");
     }
 
     #[test]
@@ -1022,7 +1022,7 @@ register_strategy! {
     name: "HAA",
     description: "계층적 자산배분 (Hierarchical Asset Allocation) 전략입니다.",
     timeframe: "1d",
-    symbols: ["TIP", "SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "PDBC", "VNQ", "BIL"],
+    tickers: ["TIP", "SPY", "IWM", "VEA", "VWO", "TLT", "IEF", "PDBC", "VNQ", "BIL"],
     category: Monthly,
     markets: [Stock],
     type: HaaStrategy

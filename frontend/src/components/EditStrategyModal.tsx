@@ -5,11 +5,17 @@
  * 전략 설정 로드, 편집, 업데이트 기능을 담당합니다.
  */
 import { createSignal, Show, For } from 'solid-js'
-import { X, RefreshCw, AlertCircle } from 'lucide-solid'
-import { getStrategy, updateStrategyConfig } from '../api/client'
-import type { BacktestStrategy } from '../api/client'
+import { X, RefreshCw, AlertCircle, Clock } from 'lucide-solid'
+import {
+  getStrategy,
+  updateStrategyConfig,
+  getStrategyTimeframeConfig,
+  updateStrategyTimeframeConfig,
+} from '../api/client'
+import type { BacktestStrategy, MultiTimeframeConfig, Timeframe } from '../api/client'
 import { DynamicForm } from './DynamicForm'
 import { useToast } from './Toast'
+import { MultiTimeframeSelector } from './strategy/MultiTimeframeSelector'
 
 export interface EditStrategyModalProps {
   /** 모달 열림 여부 */
@@ -37,6 +43,11 @@ export function EditStrategyModal(props: EditStrategyModalProps) {
   const [isUpdating, setIsUpdating] = createSignal(false)
   const [updateError, setUpdateError] = createSignal<string | null>(null)
   const [loadedStrategyType, setLoadedStrategyType] = createSignal<string | null>(null)
+
+  // 다중 타임프레임 설정 상태
+  const [multiTfConfig, setMultiTfConfig] = createSignal<MultiTimeframeConfig | null>(null)
+  const [enableMultiTf, setEnableMultiTf] = createSignal(false)
+  const [originalMultiTfConfig, setOriginalMultiTfConfig] = createSignal<MultiTimeframeConfig | null>(null)
 
   // 현재 전략 유형에 해당하는 템플릿 조회
   const getEditingTemplate = () => {
@@ -124,6 +135,22 @@ export function EditStrategyModal(props: EditStrategyModalProps) {
       const response = await updateStrategyConfig(strategyId, configWithName)
       console.log('Strategy updated:', response)
 
+      // 다중 타임프레임 설정 변경 여부 확인 후 업데이트
+      const currentConfig = enableMultiTf() ? multiTfConfig() : null
+      const originalConfig = originalMultiTfConfig()
+      const configChanged = JSON.stringify(currentConfig) !== JSON.stringify(originalConfig)
+
+      if (configChanged) {
+        try {
+          await updateStrategyTimeframeConfig(strategyId, currentConfig)
+          console.log('Timeframe config updated')
+        } catch (tfError) {
+          console.error('Failed to update timeframe config:', tfError)
+          // 타임프레임 설정 실패 시 경고 (기본 설정은 저장되었으므로)
+          toast.warning('타임프레임 설정 일부 실패', '전략 설정은 저장되었지만 타임프레임 설정 저장에 실패했습니다')
+        }
+      }
+
       // 모달 닫기 및 성공 알림
       handleClose()
       props.onSuccess()
@@ -145,6 +172,9 @@ export function EditStrategyModal(props: EditStrategyModalProps) {
     setEditFormErrors({})
     setUpdateError(null)
     setLoadedStrategyType(null)
+    setMultiTfConfig(null)
+    setOriginalMultiTfConfig(null)
+    setEnableMultiTf(false)
     props.onClose()
   }
 
@@ -158,10 +188,31 @@ export function EditStrategyModal(props: EditStrategyModalProps) {
     setEditFormErrors({})
 
     try {
+      // 전략 기본 정보 로드
       const detail = await getStrategy(strategyId)
       setLoadedStrategyType(detail.strategy_type)
       setEditingStrategyName(detail.name)
       setEditingParams(detail.config as Record<string, unknown>)
+
+      // 다중 타임프레임 설정 로드
+      try {
+        const tfConfig = await getStrategyTimeframeConfig(strategyId)
+        if (tfConfig.is_multi_timeframe && tfConfig.multi_timeframe_config) {
+          setMultiTfConfig(tfConfig.multi_timeframe_config)
+          setOriginalMultiTfConfig(tfConfig.multi_timeframe_config)
+          setEnableMultiTf(true)
+        } else {
+          setMultiTfConfig(null)
+          setOriginalMultiTfConfig(null)
+          setEnableMultiTf(false)
+        }
+      } catch (tfError) {
+        // 타임프레임 설정 로드 실패는 경고만 (기존 전략 호환성)
+        console.warn('Failed to load timeframe config:', tfError)
+        setMultiTfConfig(null)
+        setOriginalMultiTfConfig(null)
+        setEnableMultiTf(false)
+      }
     } catch (error) {
       console.error('Failed to load strategy:', error)
       const errorMsg = error instanceof Error ? error.message : '전략 정보를 불러오는데 실패했습니다'
@@ -275,6 +326,65 @@ export function EditStrategyModal(props: EditStrategyModalProps) {
                   class="w-full px-4 py-2.5 bg-[var(--color-surface)] border border-[var(--color-surface-light)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
                 />
               </div>
+
+              {/* 다중 타임프레임 설정 (지원 전략만) */}
+              <Show when={getEditingTemplate()?.isMultiTimeframe}>
+                <div class="p-4 bg-[var(--color-surface)] border border-[var(--color-surface-light)] rounded-lg">
+                  <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-2">
+                      <Clock class="w-5 h-5 text-[var(--color-primary)]" />
+                      <span class="font-medium text-[var(--color-text)]">다중 타임프레임 설정</span>
+                    </div>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enableMultiTf()}
+                        onChange={(e) => {
+                          const enabled = e.currentTarget.checked
+                          setEnableMultiTf(enabled)
+                          if (enabled && !multiTfConfig()) {
+                            // 기본값 설정: 현재 선택된 타임프레임을 Primary로
+                            const currentTf = (editingParams().timeframe as Timeframe) || '5m'
+                            setMultiTfConfig({
+                              primary: currentTf,
+                              secondary: [],
+                            })
+                          }
+                        }}
+                        class="w-4 h-4 text-[var(--color-primary)] rounded focus:ring-[var(--color-primary)]"
+                      />
+                      <span class="text-sm text-[var(--color-text-muted)]">활성화</span>
+                    </label>
+                  </div>
+                  <Show when={enableMultiTf()}>
+                    <MultiTimeframeSelector
+                      primaryTimeframe={multiTfConfig()?.primary || '5m'}
+                      secondaryTimeframes={(multiTfConfig()?.secondary || []).map(s => s.timeframe)}
+                      onPrimaryChange={(tf) => {
+                        setMultiTfConfig(prev => prev ? {
+                          ...prev,
+                          primary: tf,
+                          // Primary보다 작은 Secondary는 제거
+                          secondary: prev.secondary.filter(s => {
+                            const tfOrder: Timeframe[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M']
+                            return tfOrder.indexOf(s.timeframe) > tfOrder.indexOf(tf)
+                          }),
+                        } : { primary: tf, secondary: [] })
+                      }}
+                      onSecondaryChange={(tfs) => {
+                        setMultiTfConfig(prev => prev ? {
+                          ...prev,
+                          secondary: tfs.map(tf => ({ timeframe: tf, candle_count: 100 })),
+                        } : { primary: '5m', secondary: tfs.map(tf => ({ timeframe: tf, candle_count: 100 })) })
+                      }}
+                      maxSecondary={3}
+                    />
+                    <p class="mt-3 text-xs text-[var(--color-text-muted)]">
+                      Primary 타임프레임으로 전략이 실행되고, Secondary 타임프레임으로 추세를 확인합니다.
+                    </p>
+                  </Show>
+                </div>
+              </Show>
 
               {/* 동적 폼 */}
               <Show

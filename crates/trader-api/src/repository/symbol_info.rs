@@ -149,6 +149,48 @@ impl SymbolInfoRepository {
         .await
     }
 
+    /// 여러 티커의 심볼 정보 일괄 조회.
+    ///
+    /// # Arguments
+    /// * `pool` - 데이터베이스 연결 풀
+    /// * `tickers` - 조회할 티커 목록
+    ///
+    /// # Returns
+    /// 티커에 해당하는 심볼 정보 목록 (순서 보장 안됨)
+    pub async fn get_by_tickers(
+        pool: &PgPool,
+        tickers: &[String],
+    ) -> Result<Vec<SymbolSearchResult>, sqlx::Error> {
+        if tickers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 대문자로 변환
+        let tickers_upper: Vec<String> = tickers.iter().map(|t| t.to_uppercase()).collect();
+
+        let results = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+            r#"
+            SELECT ticker, name, market, yahoo_symbol
+            FROM symbol_info
+            WHERE UPPER(ticker) = ANY($1)
+              AND is_active = true
+            "#,
+        )
+        .bind(&tickers_upper)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(results
+            .into_iter()
+            .map(|(ticker, name, market, yahoo_symbol)| SymbolSearchResult {
+                ticker,
+                name,
+                market,
+                yahoo_symbol,
+            })
+            .collect())
+    }
+
     /// 심볼 정보 일괄 삽입 (upsert).
     pub async fn upsert_batch(
         pool: &PgPool,

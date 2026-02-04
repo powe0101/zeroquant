@@ -123,7 +123,6 @@ impl KisKrMarketStream {
 
     /// KrRealtimeTrade를 Ticker로 변환.
     fn trade_to_ticker(trade: &KrRealtimeTrade) -> Ticker {
-        let symbol = Self::code_to_symbol(&trade.symbol);
         let change_percent = if trade.change_rate != Decimal::ZERO {
             trade.change_rate
         } else {
@@ -131,7 +130,7 @@ impl KisKrMarketStream {
         };
 
         Ticker {
-            symbol,
+            ticker: trade.symbol.clone(),
             bid: trade.price - dec!(10), // 근사값 (실제로는 호가 데이터 필요)
             ask: trade.price + dec!(10), // 근사값
             last: trade.price,
@@ -155,7 +154,7 @@ impl KisKrMarketStream {
         };
 
         TradeTick {
-            symbol: Self::code_to_symbol(&trade.symbol),
+            ticker: trade.symbol.clone(),
             id: trade.trade_time.clone(), // 체결시간을 ID로 사용
             price: trade.price,
             quantity: Decimal::from(trade.volume),
@@ -187,7 +186,7 @@ impl KisKrMarketStream {
             .collect();
 
         OrderBook {
-            symbol: Self::code_to_symbol(&ob.symbol),
+            ticker: ob.symbol.clone(),
             bids,
             asks,
             timestamp: Utc::now(),
@@ -197,7 +196,7 @@ impl KisKrMarketStream {
 
 #[async_trait]
 impl MarketStream for KisKrMarketStream {
-    async fn subscribe_ticker(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_ticker(&mut self, symbol: &str) -> ExchangeResult<()> {
         if self.started {
             warn!("연결 후 구독 변경은 지원되지 않습니다. start() 전에 호출하세요.");
             return Err(ExchangeError::NotSupported(
@@ -205,7 +204,7 @@ impl MarketStream for KisKrMarketStream {
             ));
         }
 
-        let code = symbol.base.clone();
+        let code = symbol.to_string();
         let mut ws = self.ws.write().await;
 
         // 체결가 구독으로 Ticker 정보 수신
@@ -226,7 +225,7 @@ impl MarketStream for KisKrMarketStream {
 
     async fn subscribe_kline(
         &mut self,
-        _symbol: &Symbol,
+        _symbol: &str,
         _timeframe: Timeframe,
     ) -> ExchangeResult<()> {
         // KIS WebSocket은 실시간 캔들스틱을 지원하지 않음
@@ -237,7 +236,7 @@ impl MarketStream for KisKrMarketStream {
         ))
     }
 
-    async fn subscribe_order_book(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_order_book(&mut self, symbol: &str) -> ExchangeResult<()> {
         if self.started {
             warn!("연결 후 구독 변경은 지원되지 않습니다. start() 전에 호출하세요.");
             return Err(ExchangeError::NotSupported(
@@ -245,7 +244,7 @@ impl MarketStream for KisKrMarketStream {
             ));
         }
 
-        let code = symbol.base.clone();
+        let code = symbol.to_string();
         let mut ws = self.ws.write().await;
 
         ws.add_orderbook_subscription(&code);
@@ -263,12 +262,12 @@ impl MarketStream for KisKrMarketStream {
         Ok(())
     }
 
-    async fn subscribe_trades(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_trades(&mut self, symbol: &str) -> ExchangeResult<()> {
         // 체결 구독 = Ticker 구독과 동일
         self.subscribe_ticker(symbol).await
     }
 
-    async fn unsubscribe(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn unsubscribe(&mut self, symbol: &str) -> ExchangeResult<()> {
         if self.started {
             warn!("연결 후 구독 해제는 지원되지 않습니다");
             return Err(ExchangeError::NotSupported(
@@ -276,7 +275,7 @@ impl MarketStream for KisKrMarketStream {
             ));
         }
 
-        let code = symbol.base.clone();
+        let code = symbol.to_string();
         let mut ws = self.ws.write().await;
 
         if let Some(sub_type) = self.subscribed_symbols.remove(&code) {
@@ -386,10 +385,8 @@ impl KisUsMarketStream {
 
     /// UsRealtimeTrade를 Ticker로 변환.
     fn trade_to_ticker(trade: &UsRealtimeTrade) -> Ticker {
-        let symbol = Self::ticker_to_symbol(&trade.symbol);
-
         Ticker {
-            symbol,
+            ticker: trade.symbol.clone(),
             bid: trade.price - dec!(0.01),
             ask: trade.price + dec!(0.01),
             last: trade.price,
@@ -416,7 +413,7 @@ impl KisUsMarketStream {
         }];
 
         OrderBook {
-            symbol: Self::ticker_to_symbol(&ob.symbol),
+            ticker: ob.symbol.clone(),
             bids,
             asks,
             timestamp: Utc::now(),
@@ -426,21 +423,21 @@ impl KisUsMarketStream {
 
 #[async_trait]
 impl MarketStream for KisUsMarketStream {
-    async fn subscribe_ticker(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_ticker(&mut self, symbol: &str) -> ExchangeResult<()> {
         if self.started {
             return Err(ExchangeError::NotSupported(
                 "Dynamic subscription not supported after connection".to_string(),
             ));
         }
 
-        let ticker = symbol.base.clone();
+        let ticker = symbol.clone();
         let exchange_code = KisUsClient::get_exchange_code(&ticker).to_string();
         let mut ws = self.ws.write().await;
 
         ws.add_trade_subscription(&ticker, &exchange_code);
 
         self.subscribed_symbols
-            .entry(ticker.clone())
+            .entry(ticker.to_string())
             .and_modify(|info| {
                 if info.sub_type == SubscriptionType::Orderbook {
                     info.sub_type = SubscriptionType::Both;
@@ -457,7 +454,7 @@ impl MarketStream for KisUsMarketStream {
 
     async fn subscribe_kline(
         &mut self,
-        _symbol: &Symbol,
+        _symbol: &str,
         _timeframe: Timeframe,
     ) -> ExchangeResult<()> {
         warn!("KIS는 실시간 캔들스틱을 지원하지 않습니다");
@@ -466,21 +463,21 @@ impl MarketStream for KisUsMarketStream {
         ))
     }
 
-    async fn subscribe_order_book(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_order_book(&mut self, symbol: &str) -> ExchangeResult<()> {
         if self.started {
             return Err(ExchangeError::NotSupported(
                 "Dynamic subscription not supported after connection".to_string(),
             ));
         }
 
-        let ticker = symbol.base.clone();
+        let ticker = symbol.clone();
         let exchange_code = KisUsClient::get_exchange_code(&ticker).to_string();
         let mut ws = self.ws.write().await;
 
         ws.add_orderbook_subscription(&ticker, &exchange_code);
 
         self.subscribed_symbols
-            .entry(ticker.clone())
+            .entry(ticker.to_string())
             .and_modify(|info| {
                 if info.sub_type == SubscriptionType::Trade {
                     info.sub_type = SubscriptionType::Both;
@@ -495,21 +492,21 @@ impl MarketStream for KisUsMarketStream {
         Ok(())
     }
 
-    async fn subscribe_trades(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_trades(&mut self, symbol: &str) -> ExchangeResult<()> {
         self.subscribe_ticker(symbol).await
     }
 
-    async fn unsubscribe(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn unsubscribe(&mut self, symbol: &str) -> ExchangeResult<()> {
         if self.started {
             return Err(ExchangeError::NotSupported(
                 "Dynamic unsubscription not supported after connection".to_string(),
             ));
         }
 
-        let ticker = symbol.base.clone();
+        let ticker = symbol.to_string();
         let mut ws = self.ws.write().await;
 
-        if let Some(info) = self.subscribed_symbols.remove(&ticker) {
+        if let Some(info) = self.subscribed_symbols.remove(ticker.as_str()) {
             match info.sub_type {
                 SubscriptionType::Trade | SubscriptionType::Both => {
                     ws.remove_trade_subscription(&ticker, &info.exchange_code);
@@ -611,9 +608,9 @@ impl UnifiedMarketStream {
     }
 
     /// 심볼이 국내인지 해외인지 판단.
-    fn is_korean_symbol(symbol: &Symbol) -> bool {
+    fn is_korean_symbol(ticker: &str) -> bool {
         // 6자리 숫자 = 국내 주식
-        symbol.base.len() == 6 && symbol.base.chars().all(|c| c.is_ascii_digit())
+        ticker.len() == 6 && ticker.chars().all(|c| c.is_ascii_digit())
     }
 }
 
@@ -625,7 +622,7 @@ impl Default for UnifiedMarketStream {
 
 #[async_trait]
 impl MarketStream for UnifiedMarketStream {
-    async fn subscribe_ticker(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_ticker(&mut self, symbol: &str) -> ExchangeResult<()> {
         if Self::is_korean_symbol(symbol) {
             if let Some(ref mut kr) = self.kr_stream {
                 return kr.subscribe_ticker(symbol).await;
@@ -641,7 +638,7 @@ impl MarketStream for UnifiedMarketStream {
 
     async fn subscribe_kline(
         &mut self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
     ) -> ExchangeResult<()> {
         if Self::is_korean_symbol(symbol) {
@@ -657,7 +654,7 @@ impl MarketStream for UnifiedMarketStream {
         )))
     }
 
-    async fn subscribe_order_book(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_order_book(&mut self, symbol: &str) -> ExchangeResult<()> {
         if Self::is_korean_symbol(symbol) {
             if let Some(ref mut kr) = self.kr_stream {
                 return kr.subscribe_order_book(symbol).await;
@@ -671,7 +668,7 @@ impl MarketStream for UnifiedMarketStream {
         )))
     }
 
-    async fn subscribe_trades(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn subscribe_trades(&mut self, symbol: &str) -> ExchangeResult<()> {
         if Self::is_korean_symbol(symbol) {
             if let Some(ref mut kr) = self.kr_stream {
                 return kr.subscribe_trades(symbol).await;
@@ -685,7 +682,7 @@ impl MarketStream for UnifiedMarketStream {
         )))
     }
 
-    async fn unsubscribe(&mut self, symbol: &Symbol) -> ExchangeResult<()> {
+    async fn unsubscribe(&mut self, symbol: &str) -> ExchangeResult<()> {
         if Self::is_korean_symbol(symbol) {
             if let Some(ref mut kr) = self.kr_stream {
                 return kr.unsubscribe(symbol).await;
@@ -719,10 +716,7 @@ mod tests {
 
     #[test]
     fn test_korean_symbol_detection() {
-        let kr_symbol = Symbol::stock("005930", "KRW");
-        let us_symbol = Symbol::stock("AAPL", "USD");
-
-        assert!(UnifiedMarketStream::is_korean_symbol(&kr_symbol));
-        assert!(!UnifiedMarketStream::is_korean_symbol(&us_symbol));
+        assert!(UnifiedMarketStream::is_korean_symbol("005930/KRW"));
+        assert!(!UnifiedMarketStream::is_korean_symbol("AAPL/USD"));
     }
 }

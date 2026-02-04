@@ -1,4 +1,5 @@
-import { createSignal, onMount, For, Show, createResource, createEffect } from 'solid-js'
+import { onMount, For, Show, createResource } from 'solid-js'
+import { createStore } from 'solid-js/store'
 import {
   TrendingUp,
   TrendingDown,
@@ -16,13 +17,18 @@ import {
   Building2,
   Settings,
 } from 'lucide-solid'
+import { PageLoader, ErrorState, StatCard, StatCardGrid, Card, CardHeader, CardContent, EmptyState } from '../components/ui'
+import { RankingWidget } from '../components/ranking'
 import { createWebSocket } from '../hooks/createWebSocket'
-import { getPortfolioSummary, getHoldings, getMarketStatus, getStrategies, getActiveAccount } from '../api/client'
-import { PortfolioEquityChart } from '../components/charts'
+import { getPortfolioSummary, getHoldings, getMarketStatus, getStrategies, getActiveAccount, getMarketBreadth } from '../api/client'
+import type { MarketBreadthResponse } from '../api/client'
+import { PortfolioEquityChart, FearGreedGauge, MarketBreadthWidget, SectorMomentumBar, RegimeSummaryTable, SectorTreemap } from '../components/charts'
+import type { RegimeData, MarketRegime } from '../components/charts'
 import type { WsOrderUpdate, WsPositionUpdate, Strategy } from '../types'
 import type { HoldingInfo, ActiveAccount } from '../api/client'
 import { SymbolDisplay } from '../components/SymbolDisplay'
 
+// 통화 포맷팅 (KRW/USD 구분)
 function formatCurrency(value: number | string, currency: 'KRW' | 'USD' = 'KRW'): string {
   const numValue = typeof value === 'string' ? parseFloat(value) : value
   if (isNaN(numValue)) return '₩0'
@@ -40,11 +46,33 @@ function formatCurrency(value: number | string, currency: 'KRW' | 'USD' = 'KRW')
   }).format(numValue)
 }
 
+// 퍼센트 포맷팅
 function formatPercent(value: number | string): string {
   const numValue = typeof value === 'string' ? parseFloat(value) : value
   if (isNaN(numValue)) return '+0.00%'
   const sign = numValue >= 0 ? '+' : ''
   return `${sign}${numValue.toFixed(2)}%`
+}
+
+// Dashboard 상태 타입
+interface UIState {
+  isRefreshing: boolean
+  showNotifications: boolean
+}
+
+interface NotificationState {
+  orderUpdates: WsOrderUpdate[]
+  positionUpdates: WsPositionUpdate[]
+}
+
+const initialUIState: UIState = {
+  isRefreshing: false,
+  showNotifications: false,
+}
+
+const initialNotificationState: NotificationState = {
+  orderUpdates: [],
+  positionUpdates: [],
 }
 
 export function Dashboard() {
@@ -74,20 +102,26 @@ export function Dashboard() {
   const [krMarketStatus] = createResource(() => getMarketStatus('KR'))
   const [usMarketStatus] = createResource(() => getMarketStatus('US'))
 
-  const [isRefreshing, setIsRefreshing] = createSignal(false)
+  // 시장 온도 (Market Breadth)
+  const [marketBreadth, { refetch: refetchMarketBreadth }] = createResource(async () => {
+    try {
+      return await getMarketBreadth()
+    } catch {
+      return null
+    }
+  })
 
-  // 실시간 주문/포지션 알림
-  const [recentOrderUpdates, setRecentOrderUpdates] = createSignal<WsOrderUpdate[]>([])
-  const [recentPositionUpdates, setRecentPositionUpdates] = createSignal<WsPositionUpdate[]>([])
-  const [showNotifications, setShowNotifications] = createSignal(false)
+  // Store 기반 상태 관리
+  const [ui, setUI] = createStore<UIState>({ ...initialUIState })
+  const [notifications, setNotifications] = createStore<NotificationState>({ ...initialNotificationState })
 
   const { isConnected, subscribeChannels } = createWebSocket({
     onOrderUpdate: (order) => {
-      setRecentOrderUpdates((prev) => [order, ...prev].slice(0, 10))
+      setNotifications('orderUpdates', updates => [order, ...updates].slice(0, 10))
       refetchHoldings()
     },
     onPositionUpdate: (position) => {
-      setRecentPositionUpdates((prev) => [position, ...prev].slice(0, 10))
+      setNotifications('positionUpdates', updates => [position, ...updates].slice(0, 10))
       refetchPortfolio()
       refetchHoldings()
     },
@@ -99,11 +133,11 @@ export function Dashboard() {
 
   // 데이터 새로고침
   const handleRefresh = async () => {
-    setIsRefreshing(true)
+    setUI('isRefreshing', true)
     try {
-      await Promise.all([refetchActiveAccount(), refetchPortfolio(), refetchHoldings(), refetchStrategies()])
+      await Promise.all([refetchActiveAccount(), refetchPortfolio(), refetchHoldings(), refetchStrategies(), refetchMarketBreadth()])
     } finally {
-      setIsRefreshing(false)
+      setUI('isRefreshing', false)
     }
   }
 
@@ -194,28 +228,28 @@ export function Dashboard() {
           {/* Notifications Button */}
           <div class="relative">
             <button
-              onClick={() => setShowNotifications(!showNotifications())}
+              onClick={() => setUI('showNotifications', !ui.showNotifications)}
               class="relative flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--color-surface-light)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
             >
               <Bell class="w-4 h-4" />
-              <Show when={recentOrderUpdates().length > 0 || recentPositionUpdates().length > 0}>
+              <Show when={notifications.orderUpdates.length > 0 || notifications.positionUpdates.length > 0}>
                 <span class="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-xs text-white flex items-center justify-center">
-                  {recentOrderUpdates().length + recentPositionUpdates().length}
+                  {notifications.orderUpdates.length + notifications.positionUpdates.length}
                 </span>
               </Show>
             </button>
 
             {/* Notifications Dropdown */}
-            <Show when={showNotifications()}>
+            <Show when={ui.showNotifications}>
               <div class="absolute right-0 top-full mt-2 w-80 bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)] shadow-xl z-50 max-h-96 overflow-y-auto">
                 <div class="p-3 border-b border-[var(--color-surface-light)]">
                   <h4 class="text-sm font-semibold text-[var(--color-text)]">실시간 알림</h4>
                 </div>
 
-                <Show when={recentOrderUpdates().length > 0}>
+                <Show when={notifications.orderUpdates.length > 0}>
                   <div class="p-2">
                     <div class="text-xs text-[var(--color-text-muted)] px-2 mb-1">주문 업데이트</div>
-                    <For each={recentOrderUpdates().slice(0, 5)}>
+                    <For each={notifications.orderUpdates.slice(0, 5)}>
                       {(order) => (
                         <div class="p-2 rounded-lg hover:bg-[var(--color-surface-light)] transition-colors">
                           <div class="flex items-center justify-between">
@@ -244,10 +278,10 @@ export function Dashboard() {
                   </div>
                 </Show>
 
-                <Show when={recentPositionUpdates().length > 0}>
+                <Show when={notifications.positionUpdates.length > 0}>
                   <div class="p-2 border-t border-[var(--color-surface-light)]">
                     <div class="text-xs text-[var(--color-text-muted)] px-2 mb-1">포지션 업데이트</div>
-                    <For each={recentPositionUpdates().slice(0, 5)}>
+                    <For each={notifications.positionUpdates.slice(0, 5)}>
                       {(position) => (
                         <div class="p-2 rounded-lg hover:bg-[var(--color-surface-light)] transition-colors">
                           <div class="flex items-center justify-between">
@@ -271,7 +305,7 @@ export function Dashboard() {
                   </div>
                 </Show>
 
-                <Show when={recentOrderUpdates().length === 0 && recentPositionUpdates().length === 0}>
+                <Show when={notifications.orderUpdates.length === 0 && notifications.positionUpdates.length === 0}>
                   <div class="p-4 text-center text-[var(--color-text-muted)] text-sm">
                     새로운 알림이 없습니다.
                   </div>
@@ -283,32 +317,27 @@ export function Dashboard() {
           {/* Refresh Button */}
           <button
             onClick={handleRefresh}
-            disabled={isRefreshing()}
+            disabled={ui.isRefreshing}
             class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--color-surface-light)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
           >
-            <RefreshCw class={`w-4 h-4 ${isRefreshing() ? 'animate-spin' : ''}`} />
+            <RefreshCw class={`w-4 h-4 ${ui.isRefreshing ? 'animate-spin' : ''}`} />
             새로고침
           </button>
         </div>
       </div>
 
-      {/* Loading State */}
-      <Show when={portfolio.loading}>
-        <div class="flex items-center justify-center py-8">
-          <RefreshCw class="w-6 h-6 animate-spin text-[var(--color-primary)]" />
-          <span class="ml-2 text-[var(--color-text-muted)]">데이터 로딩 중...</span>
-        </div>
+      {/* 로딩 상태 - 공통 컴포넌트 사용 */}
+      <Show when={portfolio.loading && !portfolio()}>
+        <PageLoader message="포트폴리오 데이터를 불러오는 중..." />
       </Show>
 
-      {/* Error State */}
+      {/* 에러 상태 - 공통 컴포넌트 사용 */}
       <Show when={portfolio.error}>
-        <div class="flex items-center gap-2 p-4 bg-red-500/10 rounded-lg">
-          <AlertCircle class="w-5 h-5 text-red-500" />
-          <span class="text-red-500">포트폴리오 데이터를 불러오는데 실패했습니다.</span>
-          <button onClick={handleRefresh} class="ml-auto text-sm text-blue-500 hover:underline">
-            다시 시도
-          </button>
-        </div>
+        <ErrorState
+          title="데이터 로드 실패"
+          message="포트폴리오 데이터를 불러오는데 실패했습니다."
+          onRetry={handleRefresh}
+        />
       </Show>
 
       {/* Portfolio Summary Cards */}
@@ -342,93 +371,86 @@ export function Dashboard() {
           </div>
         </Show>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Total Value */}
-          <div class="bg-[var(--color-surface)] rounded-xl p-6 border border-[var(--color-surface-light)]">
-            <div class="flex items-center justify-between mb-4">
-              <span class="text-[var(--color-text-muted)]">총 자산</span>
-              <DollarSign class="w-5 h-5 text-[var(--color-primary)]" />
-            </div>
-            <div class="text-2xl font-bold text-[var(--color-text)]">
-              {formatCurrency(portfolio()?.totalValue || 0)}
-            </div>
-            <div class="flex items-center gap-1 mt-2">
-              <Show
-                when={(portfolio()?.totalPnlPercent || 0) >= 0}
-                fallback={<ArrowDownRight class="w-4 h-4 text-red-500" />}
-              >
-                <ArrowUpRight class="w-4 h-4 text-green-500" />
-              </Show>
-              <span
-                class={(portfolio()?.totalPnlPercent || 0) >= 0 ? 'text-green-500' : 'text-red-500'}
-              >
-                {formatPercent(portfolio()?.totalPnlPercent || 0)}
-              </span>
-            </div>
-          </div>
+        {/* 포트폴리오 요약 카드 - 공통 StatCard 사용 */}
+        <StatCardGrid columns={4}>
+          <StatCard
+            label="총 자산"
+            value={formatCurrency(portfolio()?.totalValue || 0)}
+            icon="💰"
+            trend={(portfolio()?.totalPnlPercent || 0) >= 0 ? 'up' : 'down'}
+            trendValue={formatPercent(portfolio()?.totalPnlPercent || 0)}
+          />
+          <StatCard
+            label="일일 손익"
+            value={`${(portfolio()?.dailyPnl || 0) >= 0 ? '+' : ''}${formatCurrency(portfolio()?.dailyPnl || 0)}`}
+            icon="📈"
+            valueColor={(portfolio()?.dailyPnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'}
+            trend={(portfolio()?.dailyPnlPercent || 0) >= 0 ? 'up' : 'down'}
+            trendValue={formatPercent(portfolio()?.dailyPnlPercent || 0)}
+          />
+          <StatCard
+            label="총 손익"
+            value={`${(portfolio()?.totalPnl || 0) >= 0 ? '+' : ''}${formatCurrency(portfolio()?.totalPnl || 0)}`}
+            icon="📊"
+            valueColor={(portfolio()?.totalPnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'}
+          />
+          <StatCard
+            label="현금 잔고"
+            value={formatCurrency(portfolio()?.cashBalance || 0)}
+            icon="💵"
+          />
+        </StatCardGrid>
 
-          {/* Daily P&L */}
-          <div class="bg-[var(--color-surface)] rounded-xl p-6 border border-[var(--color-surface-light)]">
-            <div class="flex items-center justify-between mb-4">
-              <span class="text-[var(--color-text-muted)]">일일 손익</span>
-              <Activity class="w-5 h-5 text-[var(--color-primary)]" />
-            </div>
-            <div
-              class={`text-2xl font-bold ${
-                (portfolio()?.dailyPnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'
-              }`}
-            >
-              {(portfolio()?.dailyPnl || 0) >= 0 ? '+' : ''}
-              {formatCurrency(portfolio()?.dailyPnl || 0)}
-            </div>
-            <div class="flex items-center gap-1 mt-2">
-              <Show
-                when={(portfolio()?.dailyPnlPercent || 0) >= 0}
-                fallback={<TrendingDown class="w-4 h-4 text-red-500" />}
-              >
-                <TrendingUp class="w-4 h-4 text-green-500" />
-              </Show>
-              <span
-                class={(portfolio()?.dailyPnlPercent || 0) >= 0 ? 'text-green-500' : 'text-red-500'}
-              >
-                {formatPercent(portfolio()?.dailyPnlPercent || 0)}
-              </span>
-            </div>
-          </div>
+        {/* 시장 심리 지표 섹션 */}
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Fear & Greed 게이지 */}
+          <Card padding="md">
+            <div class="text-sm text-[var(--color-text-muted)] mb-3">시장 심리 지수</div>
+            <FearGreedGauge size="md" showChange />
+          </Card>
 
-          {/* Total P&L */}
-          <div class="bg-[var(--color-surface)] rounded-xl p-6 border border-[var(--color-surface-light)]">
-            <div class="flex items-center justify-between mb-4">
-              <span class="text-[var(--color-text-muted)]">총 손익</span>
-              <BarChart3 class="w-5 h-5 text-[var(--color-primary)]" />
-            </div>
-            <div
-              class={`text-2xl font-bold ${
-                (portfolio()?.totalPnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'
-              }`}
-            >
-              {(portfolio()?.totalPnl || 0) >= 0 ? '+' : ''}
-              {formatCurrency(portfolio()?.totalPnl || 0)}
-            </div>
-            <div class="text-sm text-[var(--color-text-muted)] mt-2">
-              누적 수익
-            </div>
-          </div>
-
-          {/* Cash Balance */}
-          <div class="bg-[var(--color-surface)] rounded-xl p-6 border border-[var(--color-surface-light)]">
-            <div class="flex items-center justify-between mb-4">
-              <span class="text-[var(--color-text-muted)]">현금 잔고</span>
-              <DollarSign class="w-5 h-5 text-[var(--color-primary)]" />
-            </div>
-            <div class="text-2xl font-bold text-[var(--color-text)]">
-              {formatCurrency(portfolio()?.cashBalance || 0)}
-            </div>
-            <div class="text-sm text-[var(--color-text-muted)] mt-2">
-              거래 가능 금액
-            </div>
+          {/* Market Breadth 위젯 */}
+          <div class="lg:col-span-2">
+            <MarketBreadthWidget data={marketBreadth() ?? undefined} />
           </div>
         </div>
+
+        {/* 시장 레짐 분석 섹션 */}
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* 레짐 요약 테이블 */}
+          <RegimeSummaryTable
+            regimes={[
+              { regime: 'Bull', days: 45, avgReturn: 2.3, volatility: 15.2, maxDrawdown: -8.5 },
+              { regime: 'Sideways', days: 30, avgReturn: 0.5, volatility: 12.1, maxDrawdown: -5.2 },
+              { regime: 'Bear', days: 15, avgReturn: -1.8, volatility: 22.4, maxDrawdown: -15.3 },
+            ]}
+            currentRegime="Sideways"
+            title="시장 레짐 분석"
+          />
+
+          {/* 섹터 모멘텀 */}
+          <SectorMomentumBar
+            sectors={[
+              { name: '반도체', return5d: 5.2, symbolCount: 45 },
+              { name: '2차전지', return5d: 3.8, symbolCount: 32 },
+              { name: '바이오', return5d: 2.1, symbolCount: 58 },
+              { name: '금융', return5d: -0.5, symbolCount: 41 },
+              { name: '철강', return5d: -2.3, symbolCount: 23 },
+            ]}
+            title="섹터 모멘텀 (5일)"
+          />
+        </div>
+
+        {/* 섹터 트리맵 */}
+        <Card padding="md">
+          <div class="text-sm text-[var(--color-text-muted)] mb-3">섹터별 수익률 맵</div>
+          <SectorTreemap
+            market="KR"
+            metric="performance"
+            height={300}
+            showVisualMap
+          />
+        </Card>
       </Show>
 
       {/* Equity Curve - 실제 데이터 + 백테스트 데이터 지원 */}
@@ -462,9 +484,11 @@ export function Dashboard() {
           </Show>
 
           <Show when={!holdings.loading && positions().length === 0}>
-            <div class="p-8 text-center text-[var(--color-text-muted)]">
-              보유 중인 종목이 없습니다.
-            </div>
+            <EmptyState
+              icon="📭"
+              title="보유 중인 종목이 없습니다"
+              description="종목을 매수하면 여기에 표시됩니다."
+            />
           </Show>
 
           <Show when={!holdings.loading && positions().length > 0}>
@@ -554,81 +578,95 @@ export function Dashboard() {
           </Show>
         </div>
 
-        {/* Running Strategies */}
-        <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)]">
-          <div class="p-4 border-b border-[var(--color-surface-light)] flex items-center justify-between">
-            <h3 class="text-lg font-semibold text-[var(--color-text)]">
-              실행 중인 전략
-            </h3>
-            <Show when={strategies()}>
-              <span class="text-sm text-[var(--color-text-muted)]">
-                {runningStrategies().length}개 실행 중
-              </span>
+        {/* 사이드바: 전략 + TOP 10 랭킹 */}
+        <div class="space-y-6">
+          {/* Running Strategies */}
+          <div class="bg-[var(--color-surface)] rounded-xl border border-[var(--color-surface-light)]">
+            <div class="p-4 border-b border-[var(--color-surface-light)] flex items-center justify-between">
+              <h3 class="text-lg font-semibold text-[var(--color-text)]">
+                실행 중인 전략
+              </h3>
+              <Show when={strategies()}>
+                <span class="text-sm text-[var(--color-text-muted)]">
+                  {runningStrategies().length}개 실행 중
+                </span>
+              </Show>
+            </div>
+
+            <Show when={strategies.loading}>
+              <div class="flex items-center justify-center py-8">
+                <RefreshCw class="w-5 h-5 animate-spin text-[var(--color-primary)]" />
+              </div>
+            </Show>
+
+            <Show when={!strategies.loading && runningStrategies().length === 0}>
+              <EmptyState
+                icon="🤖"
+                title="실행 중인 전략이 없습니다"
+                description="전략을 시작하면 여기에 표시됩니다."
+                action={
+                  <a href="/strategies" class="text-[var(--color-primary)] hover:underline">
+                    전략 시작하기
+                  </a>
+                }
+              />
+            </Show>
+
+            <Show when={!strategies.loading && runningStrategies().length > 0}>
+              <div class="divide-y divide-[var(--color-surface-light)]">
+                <For each={runningStrategies()}>
+                  {(strategy: Strategy) => (
+                    <div class="p-4 hover:bg-[var(--color-surface-light)]/50 transition-colors">
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                          <div class="p-2 rounded-lg bg-green-500/20">
+                            <Play class="w-4 h-4 text-green-400" />
+                          </div>
+                          <div>
+                            <div class="font-medium text-[var(--color-text)]">{strategy.name}</div>
+                            <div class="text-sm text-[var(--color-text-muted)] flex flex-wrap gap-1">
+                              <Show when={strategy.symbols && strategy.symbols.length > 0} fallback={<span>심볼 없음</span>}>
+                                <For each={strategy.symbols}>
+                                  {(symbol) => (
+                                    <SymbolDisplay
+                                      ticker={symbol}
+                                      mode="inline"
+                                      size="sm"
+                                      autoFetch={true}
+                                    />
+                                  )}
+                                </For>
+                              </Show>
+                            </div>
+                          </div>
+                        </div>
+                        <Show when={strategy.metrics}>
+                          <div class="text-right">
+                            <div class={`font-medium ${(strategy.metrics?.totalPnlPercent || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                              {formatPercent(strategy.metrics?.totalPnlPercent || 0)}
+                            </div>
+                            <div class="text-xs text-[var(--color-text-muted)]">
+                              {strategy.metrics?.tradeCount || 0}회 거래
+                            </div>
+                          </div>
+                        </Show>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
             </Show>
           </div>
 
-          <Show when={strategies.loading}>
-            <div class="flex items-center justify-center py-8">
-              <RefreshCw class="w-5 h-5 animate-spin text-[var(--color-primary)]" />
-            </div>
-          </Show>
-
-          <Show when={!strategies.loading && runningStrategies().length === 0}>
-            <div class="p-8 text-center text-[var(--color-text-muted)]">
-              <Bot class="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p>실행 중인 전략이 없습니다.</p>
-              <a href="/strategies" class="mt-2 text-[var(--color-primary)] hover:underline inline-block">
-                전략 시작하기
-              </a>
-            </div>
-          </Show>
-
-          <Show when={!strategies.loading && runningStrategies().length > 0}>
-            <div class="divide-y divide-[var(--color-surface-light)]">
-              <For each={runningStrategies()}>
-                {(strategy: Strategy) => (
-                  <div class="p-4 hover:bg-[var(--color-surface-light)]/50 transition-colors">
-                    <div class="flex items-center justify-between">
-                      <div class="flex items-center gap-3">
-                        <div class="p-2 rounded-lg bg-green-500/20">
-                          <Play class="w-4 h-4 text-green-400" />
-                        </div>
-                        <div>
-                          <div class="font-medium text-[var(--color-text)]">{strategy.name}</div>
-                          <div class="text-sm text-[var(--color-text-muted)] flex flex-wrap gap-1">
-                            <Show when={strategy.symbols && strategy.symbols.length > 0} fallback={<span>심볼 없음</span>}>
-                              <For each={strategy.symbols}>
-                                {(symbol) => (
-                                  <SymbolDisplay
-                                    ticker={symbol}
-                                    mode="inline"
-                                    size="sm"
-                                    autoFetch={true}
-                                  />
-                                )}
-                              </For>
-                            </Show>
-                          </div>
-                        </div>
-                      </div>
-                      <Show when={strategy.metrics}>
-                        <div class="text-right">
-                          <div class={`font-medium ${(strategy.metrics?.totalPnlPercent || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                            {formatPercent(strategy.metrics?.totalPnlPercent || 0)}
-                          </div>
-                          <div class="text-xs text-[var(--color-text-muted)]">
-                            {strategy.metrics?.tradeCount || 0}회 거래
-                          </div>
-                        </div>
-                      </Show>
-                    </div>
-                  </div>
-                )}
-              </For>
-            </div>
-          </Show>
+          {/* TOP 10 Ranking Widget */}
+          <RankingWidget
+            limit={10}
+            onViewMore={() => window.location.href = '/global-ranking'}
+          />
         </div>
       </div>
     </div>
   )
 }
+
+export default Dashboard

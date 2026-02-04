@@ -1,7 +1,7 @@
 # ZeroQuant 개발 규칙
 
-> 최종 업데이트: 2026-02-03
-> 버전: 1.2
+> 최종 업데이트: 2026-02-04
+> 버전: 1.3
 > 이 문서는 신규 기능 추가 시 반드시 확인해야 하는 규칙과 고려사항을 정의합니다.
 
 ---
@@ -327,6 +327,61 @@ pub async fn save_result(pool: &PgPool, result: &BacktestResult) -> Result<Strin
 ---
 
 ## TypeScript 프론트엔드 규칙
+
+### 0. TypeScript 바인딩 (ts-rs) ⭐ v0.6.0
+
+> **핵심 원칙**: Rust 타입 → TypeScript 타입 자동 변환으로 API 타입 안전성 확보
+
+**적용 대상**:
+- API 요청/응답 DTO
+- Domain 모델 (Signal, Order, Position 등)
+- 전략 스키마 타입
+
+**Rust 측 어노테이션**:
+
+```rust
+use ts_rs::TS;
+
+#[derive(Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct StrategyResponse {
+    pub id: i32,
+    pub name: String,
+    pub running: bool,
+}
+```
+
+**생성 파일 위치**: `frontend/src/types/generated/`
+
+**빌드 명령**:
+```bash
+# TypeScript 바인딩 생성
+cargo test --features ts-binding
+
+# 또는 빌드 시 자동 생성
+cargo build --features generate-ts
+```
+
+**규칙**:
+- 새로운 API 응답 타입은 반드시 `#[derive(TS)]` 추가
+- `#[ts(export)]`로 자동 내보내기 활성화
+- 프론트엔드에서는 수동 타입 정의 대신 generated 타입 사용
+
+**사용 예시 (프론트엔드)**:
+
+```typescript
+// ❌ 금지 - 수동 타입 정의 (Rust와 동기화 어려움)
+interface StrategyResponse {
+  id: number;
+  name: string;
+  running: boolean;
+}
+
+// ✅ 권장 - 자동 생성된 타입 사용
+import { StrategyResponse } from '@/types/generated/StrategyResponse';
+```
+
+---
 
 ### 1. SolidJS 상태 관리
 

@@ -37,7 +37,7 @@ use tracing::{debug, info};
 
 use crate::traits::Strategy;
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 소형주 퀀트 전략 설정.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,9 +70,9 @@ pub struct SmallCapQuantConfig {
     #[serde(default = "default_min_per")]
     pub min_per: f64,
 
-    /// 기준 지수 심볼 (기본: 코스닥150 ETF)
-    #[serde(default = "default_index_symbol")]
-    pub index_symbol: String,
+    /// 기준 지수 티커 (기본: 코스닥150 ETF)
+    #[serde(default = "default_index_ticker")]
+    pub index_ticker:  String,
 
     /// 최소 글로벌 스코어 (기본값: 60)
     #[serde(default = "default_min_global_score")]
@@ -100,7 +100,7 @@ fn default_min_pbr() -> f64 {
 fn default_min_per() -> f64 {
     2.0
 }
-fn default_index_symbol() -> String {
+fn default_index_ticker() -> String {
     "229200".to_string()
 } // 코스닥150 ETF
 fn default_min_global_score() -> Decimal {
@@ -117,7 +117,7 @@ impl Default for SmallCapQuantConfig {
             min_roe: default_min_roe(),
             min_pbr: default_min_pbr(),
             min_per: default_min_per(),
-            index_symbol: default_index_symbol(),
+            index_ticker: default_index_ticker(),
             min_global_score: default_min_global_score(),
         }
     }
@@ -126,7 +126,7 @@ impl Default for SmallCapQuantConfig {
 /// 종목 재무 정보.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockFundamentals {
-    pub symbol: String,
+    pub ticker:  String,
     pub market_cap: f64,       // 시가총액 (억원)
     pub sector: String,        // 섹터
     pub operating_profit: f64, // 영업이익
@@ -182,7 +182,7 @@ impl StockFundamentals {
 /// 종목별 데이터.
 #[derive(Debug, Clone)]
 struct StockData {
-    symbol: String,
+    ticker:  String,
     current_price: Decimal,
     current_holdings: Decimal,
 }
@@ -239,7 +239,7 @@ enum MarketState {
 /// 소형주 퀀트 전략.
 pub struct SmallCapQuantStrategy {
     config: Option<SmallCapQuantConfig>,
-    symbols: Vec<Symbol>,
+    tickers: Vec<String>,
     stock_data: HashMap<String, StockData>,
     index_data: IndexData,
 
@@ -269,7 +269,7 @@ impl SmallCapQuantStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbols: Vec::new(),
+            tickers: Vec::new(),
             stock_data: HashMap::new(),
             index_data: IndexData::new(),
             holdings: Vec::new(),
@@ -327,7 +327,7 @@ impl SmallCapQuantStrategy {
     }
 
     /// RouteState와 GlobalScore 기반 진입 조건 체크
-    fn can_enter(&self, symbol: &str) -> bool {
+    fn can_enter(&self, ticker: &str) -> bool {
         let context = match &self.context {
             Some(ctx) => ctx,
             None => return true,
@@ -344,7 +344,7 @@ impl SmallCapQuantStrategy {
         };
 
         // RouteState 체크
-        if let Some(route) = ctx.get_route_state(symbol) {
+        if let Some(route) = ctx.get_route_state(ticker) {
             match route {
                 RouteState::Wait | RouteState::Overheat => {
                     debug!("[SmallCapQuant] RouteState가 {:?}이므로 진입 불가", route);
@@ -355,11 +355,11 @@ impl SmallCapQuantStrategy {
         }
 
         // GlobalScore 체크
-        if let Some(score) = ctx.get_global_score(symbol) {
+        if let Some(score) = ctx.get_global_score(ticker) {
             if score.overall_score < config.min_global_score {
                 debug!(
                     "[SmallCapQuant] {} GlobalScore {} < {} 기준 미달",
-                    symbol, score.overall_score, config.min_global_score
+                    ticker, score.overall_score, config.min_global_score
                 );
                 return false;
             }
@@ -372,11 +372,11 @@ impl SmallCapQuantStrategy {
     fn generate_sell_all_signals(&mut self) -> Vec<Signal> {
         let mut signals = Vec::new();
 
-        for symbol_str in &self.holdings {
-            if let Some(data) = self.stock_data.get(symbol_str) {
+        for ticker_str in &self.holdings {
+            if let Some(data) = self.stock_data.get(ticker_str) {
                 if data.current_holdings > Decimal::ZERO {
-                    let symbol = Symbol::stock(symbol_str, "KRW");
-                    let signal = Signal::exit("small_cap_quant", symbol, Side::Sell)
+                    let ticker = format!("{}/KRW", ticker_str);
+                    let signal = Signal::exit("small_cap_quant", ticker, Side::Sell)
                         .with_strength(1.0)
                         .with_prices(Some(data.current_price), None, None)
                         .with_metadata("reason", json!("below_ma"));
@@ -408,20 +408,20 @@ impl SmallCapQuantStrategy {
         let weight_per_stock = dec!(1.0) / Decimal::from(stock_count);
         let amount_per_stock = config.total_amount * weight_per_stock;
 
-        for symbol_str in target_stocks {
+        for ticker_str in target_stocks {
             // can_enter 체크 (RouteState, GlobalScore)
-            if !self.can_enter(symbol_str) {
+            if !self.can_enter(ticker_str) {
                 continue;
             }
 
-            if let Some(data) = self.stock_data.get(symbol_str) {
+            if let Some(data) = self.stock_data.get(ticker_str) {
                 // 이미 보유 중이면 스킵
                 if data.current_holdings > Decimal::ZERO {
                     continue;
                 }
 
-                let symbol = Symbol::stock(symbol_str, "KRW");
-                let signal = Signal::entry("small_cap_quant", symbol, Side::Buy)
+                let ticker = format!("{}/KRW", ticker_str);
+                let signal = Signal::entry("small_cap_quant", ticker, Side::Buy)
                     .with_strength(weight_per_stock.to_string().parse().unwrap_or(0.5))
                     .with_prices(Some(data.current_price), None, None)
                     .with_metadata("target_amount", json!(amount_per_stock.to_string()));
@@ -470,13 +470,13 @@ impl Strategy for SmallCapQuantStrategy {
         info!(
             target_count = scq_config.target_count,
             ma_period = scq_config.ma_period,
-            index = %scq_config.index_symbol,
+            index = %scq_config.index_ticker,
             "소형주 퀀트 전략 초기화"
         );
 
-        // 기준 지수 심볼 추가
-        let index_symbol = Symbol::stock(&scq_config.index_symbol, "KRW");
-        self.symbols.push(index_symbol);
+        // 기준 지수 티커 추가
+        let index_ticker = format!("{}/KRW", scq_config.index_ticker);
+        self.tickers.push(index_ticker);
 
         self.config = Some(scq_config);
         self.initialized = true;
@@ -497,7 +497,7 @@ impl Strategy for SmallCapQuantStrategy {
             None => return Ok(vec![]),
         };
 
-        let symbol_str = data.symbol.base.clone();
+        let ticker_str = data.ticker.clone();
 
         // Kline 데이터에서 종가 추출
         let (close, timestamp) = match &data.data {
@@ -506,12 +506,12 @@ impl Strategy for SmallCapQuantStrategy {
         };
 
         // 기준 지수 데이터 업데이트
-        if symbol_str == config.index_symbol {
+        if ticker_str == config.index_ticker {
             self.index_data.add_price(close);
             self.update_market_state();
 
             debug!(
-                index = %symbol_str,
+                index = %ticker_str,
                 price = %close,
                 state = ?self.current_market_state,
                 "지수 데이터 업데이트"
@@ -540,13 +540,13 @@ impl Strategy for SmallCapQuantStrategy {
             }
         } else {
             // 개별 종목 데이터 업데이트
-            if let Some(stock) = self.stock_data.get_mut(&symbol_str) {
+            if let Some(stock) = self.stock_data.get_mut(&ticker_str) {
                 stock.current_price = close;
             } else {
                 self.stock_data.insert(
-                    symbol_str.clone(),
+                    ticker_str.clone(),
                     StockData {
-                        symbol: symbol_str,
+                        ticker: ticker_str,
                         current_price: close,
                         current_holdings: Decimal::ZERO,
                     },
@@ -561,21 +561,21 @@ impl Strategy for SmallCapQuantStrategy {
         &mut self,
         order: &Order,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol_str = order.symbol.base.clone();
+        let ticker_str = order.ticker.clone();
 
-        if let Some(stock) = self.stock_data.get_mut(&symbol_str) {
+        if let Some(stock) = self.stock_data.get_mut(&ticker_str) {
             match order.side {
                 Side::Buy => {
                     stock.current_holdings += order.quantity;
-                    if !self.holdings.contains(&symbol_str) {
-                        self.holdings.push(symbol_str.clone());
+                    if !self.holdings.contains(&ticker_str) {
+                        self.holdings.push(ticker_str.clone());
                     }
                 }
                 Side::Sell => {
                     stock.current_holdings -= order.quantity;
                     if stock.current_holdings <= Decimal::ZERO {
                         stock.current_holdings = Decimal::ZERO;
-                        self.holdings.retain(|s| s != &symbol_str);
+                        self.holdings.retain(|s| s != &ticker_str);
                     }
                 }
             }
@@ -583,7 +583,7 @@ impl Strategy for SmallCapQuantStrategy {
         }
 
         debug!(
-            symbol = %order.symbol,
+            ticker = %order.ticker,
             side = ?order.side,
             quantity = %order.quantity,
             "주문 체결"
@@ -648,7 +648,7 @@ mod tests {
 
         // 통과하는 종목
         let good_stock = StockFundamentals {
-            symbol: "123456".to_string(),
+            ticker: "123456".to_string(),
             market_cap: 100.0,
             sector: "IT".to_string(),
             operating_profit: 100.0,
@@ -662,7 +662,7 @@ mod tests {
 
         // 금융 섹터 제외
         let finance_stock = StockFundamentals {
-            symbol: "234567".to_string(),
+            ticker: "234567".to_string(),
             market_cap: 100.0,
             sector: "금융업".to_string(),
             operating_profit: 100.0,
@@ -676,7 +676,7 @@ mod tests {
 
         // 시총 미달
         let small_stock = StockFundamentals {
-            symbol: "345678".to_string(),
+            ticker: "345678".to_string(),
             market_cap: 30.0, // 50억 미만
             sector: "IT".to_string(),
             operating_profit: 100.0,
@@ -715,7 +715,7 @@ register_strategy! {
     name: "소형주 퀀트",
     description: "소형주 대상 퀀트 전략입니다.",
     timeframe: "1d",
-    symbols: [],
+    tickers: [],
     category: Daily,
     markets: [Stock],
     type: SmallCapQuantStrategy

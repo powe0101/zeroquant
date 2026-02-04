@@ -6,7 +6,7 @@
 //! - `SignalValidation` - 신호 검증 결과
 
 use crate::domain::{RouteState, Side};
-use crate::types::Symbol;
+
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -51,8 +51,8 @@ pub struct Signal {
     pub id: Uuid,
     /// 이 신호를 생성한 전략
     pub strategy_id: String,
-    /// 거래 심볼
-    pub symbol: Symbol,
+    /// 거래 ticker
+    pub ticker: String,
     /// 신호 방향 (매수/매도)
     pub side: Side,
     /// 신호 유형
@@ -79,14 +79,14 @@ impl Signal {
     /// 새 신호를 생성합니다.
     pub fn new(
         strategy_id: impl Into<String>,
-        symbol: Symbol,
+        ticker: String,
         side: Side,
         signal_type: SignalType,
     ) -> Self {
         Self {
             id: Uuid::new_v4(),
             strategy_id: strategy_id.into(),
-            symbol,
+            ticker,
             side,
             signal_type,
             strength: 1.0,
@@ -99,13 +99,13 @@ impl Signal {
     }
 
     /// 진입 신호를 생성합니다.
-    pub fn entry(strategy_id: impl Into<String>, symbol: Symbol, side: Side) -> Self {
-        Self::new(strategy_id, symbol, side, SignalType::Entry)
+    pub fn entry(strategy_id: impl Into<String>, ticker: String, side: Side) -> Self {
+        Self::new(strategy_id, ticker, side, SignalType::Entry)
     }
 
     /// 청산 신호를 생성합니다.
-    pub fn exit(strategy_id: impl Into<String>, symbol: Symbol, side: Side) -> Self {
-        Self::new(strategy_id, symbol, side, SignalType::Exit)
+    pub fn exit(strategy_id: impl Into<String>, ticker: String, side: Side) -> Self {
+        Self::new(strategy_id, ticker, side, SignalType::Exit)
     }
 
     /// 신호 강도를 설정합니다.
@@ -203,7 +203,7 @@ pub struct SignalMarker {
     /// 고유 ID
     pub id: Uuid,
     /// 거래 심볼
-    pub symbol: Symbol,
+    pub ticker: String,
     /// 신호 발생 시각
     pub timestamp: DateTime<Utc>,
     /// 신호 유형 (Entry, Exit, Alert 등)
@@ -237,7 +237,7 @@ pub struct SignalMarker {
 impl SignalMarker {
     /// 새 신호 마커 생성.
     pub fn new(
-        symbol: Symbol,
+        ticker: String,
         timestamp: DateTime<Utc>,
         signal_type: SignalType,
         price: Decimal,
@@ -246,7 +246,7 @@ impl SignalMarker {
     ) -> Self {
         Self {
             id: Uuid::new_v4(),
-            symbol,
+            ticker,
             timestamp,
             signal_type,
             side: None,
@@ -270,7 +270,7 @@ impl SignalMarker {
     ) -> Self {
         Self {
             id: Uuid::new_v4(),
-            symbol: signal.symbol.clone(),
+            ticker: signal.ticker.clone(),
             timestamp,
             signal_type: signal.signal_type,
             side: Some(signal.side),
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_signal_creation() {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let signal = Signal::entry("grid_trading", symbol, Side::Buy)
             .with_strength(0.85)
             .with_metadata("reason", serde_json::json!("grid_level_hit"));
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_signal_strength_clamping() {
-        let symbol = Symbol::crypto("ETH", "USDT");
+        let symbol = "ETH/USDT".to_string();
         let signal = Signal::exit("rsi_strategy", symbol, Side::Sell).with_strength(1.5);
 
         assert_eq!(signal.strength, 1.0);
@@ -460,7 +460,7 @@ mod tests {
     fn test_signal_marker_creation() {
         use rust_decimal_macros::dec;
 
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let symbol = "BTC/USDT".to_string();
         let marker = SignalMarker::new(
             symbol,
             Utc::now(),

@@ -58,70 +58,69 @@ impl KrxSymbolProvider {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl Default for KrxSymbolProvider {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl SymbolInfoProvider for KrxSymbolProvider {
-    fn name(&self) -> &str {
-        "KRX"
+    /// KRX Open API 인증키 (환경변수에서 로드)
+    pub fn get_api_key() -> Option<String> {
+        std::env::var("KRX_API_KEY").ok()
     }
 
-    fn supported_markets(&self) -> Vec<&str> {
-        vec!["KR"]
-    }
-
-    async fn fetch_all(
+    /// ETF 전종목 조회 (data.krx.co.kr).
+    async fn fetch_etf(
         &self,
+        client: &reqwest::Client,
     ) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
-        // KRX Open API에서 전체 종목 정보 조회
-        // http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd
+        #[derive(Deserialize)]
+        struct KrxEtfResponse {
+            #[serde(rename = "OutBlock_1")]
+            out_block: Option<Vec<KrxEtf>>,
+        }
 
-        let client = reqwest::Client::new();
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct KrxEtf {
+            #[serde(rename = "ISU_SRT_CD")]
+            ticker: String,
+            #[serde(rename = "ISU_NM")]
+            name: String,
+            #[serde(rename = "IDX_IND_NM", default)]
+            index_name: Option<String>,
+        }
 
-        // KOSPI 종목
-        let kospi = self.fetch_market(&client, "STK").await?;
+        let params = [
+            ("bld", "dbms/MDC/STAT/standard/MDCSTAT04601"),
+            ("share", "1"),
+            ("csvxls_isNo", "false"),
+        ];
 
-        // KOSDAQ 종목
-        let kosdaq = self.fetch_market(&client, "KSQ").await?;
+        let response = client
+            .post("http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd")
+            .form(&params)
+            .header("User-Agent", "Mozilla/5.0")
+            .send()
+            .await?;
 
-        let mut all = kospi;
-        all.extend(kosdaq);
+        let data: KrxEtfResponse = response.json().await?;
 
-        Ok(all)
-    }
-
-    async fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
-        let all = self.fetch_all().await?;
-        let query_upper = query.to_uppercase();
-
-        let results: Vec<SymbolMetadata> = all
+        let symbols: Vec<SymbolMetadata> = data
+            .out_block
+            .unwrap_or_default()
             .into_iter()
-            .filter(|s| {
-                s.ticker.to_uppercase().contains(&query_upper)
-                    || s.name.to_uppercase().contains(&query_upper)
-                    || s.name_en
-                        .as_ref()
-                        .map(|n| n.to_uppercase().contains(&query_upper))
-                        .unwrap_or(false)
+            .map(|s| SymbolMetadata {
+                ticker: s.ticker.clone(),
+                name: s.name,
+                name_en: None,
+                market: "KR".to_string(),
+                exchange: Some("KRX".to_string()),
+                sector: Some("ETF".to_string()),
+                yahoo_symbol: Some(format!("{}.KS", s.ticker)),
             })
-            .take(limit)
             .collect();
 
-        Ok(results)
+        tracing::info!("KRX ETF 종목 수집: {}개", symbols.len());
+        Ok(symbols)
     }
-}
 
-impl KrxSymbolProvider {
+    /// 시장별 종목 조회 (data.krx.co.kr).
     async fn fetch_market(
         &self,
         client: &reqwest::Client,
@@ -134,7 +133,7 @@ impl KrxSymbolProvider {
         }
 
         #[derive(Deserialize)]
-        #[allow(dead_code)] // API 응답 전체 필드 매핑 (일부만 사용)
+        #[allow(dead_code)]
         struct KrxStock {
             #[serde(rename = "ISU_SRT_CD")]
             ticker: String,
@@ -164,11 +163,7 @@ impl KrxSymbolProvider {
 
         let data: KrxResponse = response.json().await?;
 
-        let exchange = if market_code == "STK" {
-            "KRX"
-        } else {
-            "KOSDAQ"
-        };
+        let exchange = if market_code == "STK" { "KRX" } else { "KOSDAQ" };
         let suffix = if market_code == "STK" { ".KS" } else { ".KQ" };
 
         let symbols: Vec<SymbolMetadata> = data
@@ -187,6 +182,81 @@ impl KrxSymbolProvider {
             .collect();
 
         Ok(symbols)
+    }
+}
+
+impl Default for KrxSymbolProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl SymbolInfoProvider for KrxSymbolProvider {
+    fn name(&self) -> &str {
+        "KRX"
+    }
+
+    fn supported_markets(&self) -> Vec<&str> {
+        vec!["KR"]
+    }
+
+    async fn fetch_all(
+        &self,
+    ) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
+        let client = reqwest::Client::new();
+
+        // KOSPI 종목
+        let kospi = self.fetch_market(&client, "STK").await?;
+        let kospi_count = kospi.len();
+
+        // KOSDAQ 종목
+        let kosdaq = self.fetch_market(&client, "KSQ").await?;
+        let kosdaq_count = kosdaq.len();
+
+        // ETF 종목
+        let etf = self.fetch_etf(&client).await.unwrap_or_else(|e| {
+            tracing::warn!("ETF 종목 수집 실패: {}", e);
+            Vec::new()
+        });
+        let etf_count = etf.len();
+
+        let mut all = kospi;
+        all.extend(kosdaq);
+        all.extend(etf);
+
+        tracing::info!(
+            "KRX 종목 수집 완료: KOSPI {}개, KOSDAQ {}개, ETF {}개",
+            kospi_count,
+            kosdaq_count,
+            etf_count
+        );
+
+        Ok(all)
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SymbolMetadata>, Box<dyn std::error::Error + Send + Sync>> {
+        let all = self.fetch_all().await?;
+        let query_upper = query.to_uppercase();
+
+        let results: Vec<SymbolMetadata> = all
+            .into_iter()
+            .filter(|s| {
+                s.ticker.to_uppercase().contains(&query_upper)
+                    || s.name.to_uppercase().contains(&query_upper)
+                    || s.name_en
+                        .as_ref()
+                        .map(|n| n.to_uppercase().contains(&query_upper))
+                        .unwrap_or(false)
+            })
+            .take(limit)
+            .collect();
+
+        Ok(results)
     }
 }
 
@@ -862,12 +932,12 @@ impl SymbolResolver {
             r#"
             SELECT ticker, name, name_en, market, exchange, sector, yahoo_symbol
             FROM symbol_info
-            WHERE (UPPER(ticker) = UPPER($1) OR yahoo_symbol = $2) AND is_active = true
+            WHERE (UPPER(ticker) = UPPER($1) OR UPPER(ticker) = UPPER($2) OR yahoo_symbol = $2) AND is_active = true
             LIMIT 1
             "#,
         )
         .bind(&canonical)
-        .bind(symbol) // 원본 심볼로도 검색 (yahoo_symbol 매칭용)
+        .bind(symbol) // 원본 심볼로도 ticker 및 yahoo_symbol 검색
         .fetch_optional(&self.pool)
         .await?;
 

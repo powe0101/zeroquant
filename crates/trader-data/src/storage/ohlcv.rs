@@ -25,7 +25,7 @@ use rust_decimal::Decimal;
 use sqlx::postgres::PgPool;
 use sqlx::FromRow;
 use tracing::{debug, info, instrument};
-use trader_core::{Kline, Symbol, Timeframe};
+use trader_core::{Kline, Timeframe};
 
 /// OHLCV 캔들 데이터베이스 레코드.
 #[derive(Debug, Clone, FromRow)]
@@ -53,13 +53,9 @@ impl OhlcvRecord {
             .close_time
             .unwrap_or_else(|| self.open_time + timeframe_to_duration(timeframe));
 
-        // DB에 저장된 심볼을 그대로 사용 (exchange_symbol에 원본 저장)
-        // Symbol 생성자를 통해 country 필드 자동 추론
-        let symbol = Symbol::new(&self.symbol, "", trader_core::MarketType::Stock)
-            .with_exchange_symbol(&self.symbol);
-
+        // ticker 문자열만 저장
         Kline {
-            symbol,
+            ticker: self.symbol.clone(),
             timeframe,
             open_time: self.open_time,
             open: self.open,
@@ -92,12 +88,9 @@ impl OhlcvRecord {
             .close_time
             .unwrap_or_else(|| self.open_time + timeframe_to_duration(timeframe));
 
-        // Symbol 생성자를 통해 country 필드 자동 추론
-        let symbol = Symbol::new(canonical, quote, market_type)
-            .with_exchange_symbol(&self.symbol);
-
+        // ticker 문자열 사용 (canonical)
         Kline {
-            symbol,
+            ticker: canonical.to_string(),
             timeframe,
             open_time: self.open_time,
             open: self.open,

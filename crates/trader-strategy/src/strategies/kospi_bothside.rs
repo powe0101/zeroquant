@@ -31,7 +31,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
 
 /// 코스피 양방향 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -261,8 +261,8 @@ impl TechnicalIndicators {
 /// 코스피 양방향 전략.
 pub struct KospiBothSideStrategy {
     config: Option<KospiBothSideConfig>,
-    leverage_symbol: Option<Symbol>,
-    inverse_symbol: Option<Symbol>,
+    leverage_ticker: Option<String>,
+    inverse_ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
 
     /// 레버리지 포지션
@@ -295,8 +295,8 @@ impl KospiBothSideStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            leverage_symbol: None,
-            inverse_symbol: None,
+            leverage_ticker: None,
+            inverse_ticker: None,
             context: None,
             leverage_position: None,
             inverse_position: None,
@@ -336,9 +336,9 @@ impl KospiBothSideStrategy {
             Err(_) => return true,
         };
 
-        // RouteState 체크 (레버리지 심볼 기준)
-        if let Some(symbol) = &self.leverage_symbol {
-            if let Some(route) = ctx.get_route_state(&symbol.base) {
+        // RouteState 체크 (레버리지 티커 기준)
+        if let Some(ticker) = &self.leverage_ticker {
+            if let Some(route) = ctx.get_route_state(&ticker) {
                 match route {
                     RouteState::Wait | RouteState::Overheat => {
                         debug!("[KospiBothSide] RouteState가 {:?}이므로 진입 불가", route);
@@ -349,9 +349,9 @@ impl KospiBothSideStrategy {
             }
         }
 
-        // GlobalScore 체크 (레버리지 심볼 기준)
-        if let Some(symbol) = &self.leverage_symbol {
-            if let Some(score) = ctx.get_global_score(&symbol.base) {
+        // GlobalScore 체크 (레버리지 티커 기준)
+        if let Some(ticker) = &self.leverage_ticker {
+            if let Some(score) = ctx.get_global_score(&ticker) {
                 if score.overall_score < config.min_global_score {
                     debug!(
                         "[KospiBothSide] GlobalScore {} < {} 기준 미달",
@@ -582,7 +582,7 @@ impl KospiBothSideStrategy {
         let mut signals = Vec::new();
 
         // 레버리지 신호
-        if let Some(sym) = &self.leverage_symbol {
+        if let Some(sym) = &self.leverage_ticker {
             let price = self
                 .leverage_indicators
                 .prices
@@ -620,7 +620,7 @@ impl KospiBothSideStrategy {
         }
 
         // 인버스 신호
-        if let Some(sym) = &self.inverse_symbol {
+        if let Some(sym) = &self.inverse_ticker {
             let price = self
                 .inverse_indicators
                 .prices
@@ -696,8 +696,8 @@ impl Strategy for KospiBothSideStrategy {
             "코스피 양방향 전략 초기화"
         );
 
-        self.leverage_symbol = Some(Symbol::stock(&kb_config.leverage_ticker, "KRW"));
-        self.inverse_symbol = Some(Symbol::stock(&kb_config.inverse_ticker, "KRW"));
+        self.leverage_ticker = Some(format!("{}/KRW", kb_config.leverage_ticker));
+        self.inverse_ticker = Some(format!("{}/KRW", kb_config.inverse_ticker));
         self.config = Some(kb_config);
         self.initialized = true;
 
@@ -717,10 +717,10 @@ impl Strategy for KospiBothSideStrategy {
             None => return Ok(vec![]),
         };
 
-        // base 심볼만 추출 (122630/KRW -> 122630)
-        let symbol_str = data.symbol.base.clone();
-        let is_leverage = symbol_str == config.leverage_ticker;
-        let is_inverse = symbol_str == config.inverse_ticker;
+        // base 티커만 추출 (122630/KRW -> 122630)
+        let ticker_str = data.ticker.clone();
+        let is_leverage = ticker_str == config.leverage_ticker;
+        let is_inverse = ticker_str == config.inverse_ticker;
 
         if !is_leverage && !is_inverse {
             return Ok(vec![]);
@@ -772,8 +772,8 @@ impl Strategy for KospiBothSideStrategy {
             None => return Ok(()),
         };
 
-        // Symbol.base와 ticker 비교 (Symbol.to_string()은 "base/quote" 형식이므로 base만 비교)
-        let ticker = order.symbol.base.clone();
+        // String.base와 ticker 비교 (String.to_string()은 "base/quote" 형식이므로 base만 비교)
+        let ticker = order.ticker.clone();
         let price = order.price.unwrap_or(Decimal::ZERO);
 
         if ticker == config.leverage_ticker {
@@ -841,8 +841,8 @@ impl Strategy for KospiBothSideStrategy {
             None => return Ok(()),
         };
 
-        // Symbol.base와 ticker 비교 (Symbol.to_string()은 "base/quote" 형식이므로 base만 비교)
-        let ticker = position.symbol.base.clone();
+        // String.base와 ticker 비교 (String.to_string()은 "base/quote" 형식이므로 base만 비교)
+        let ticker = position.ticker.clone();
 
         if ticker == config.leverage_ticker {
             if position.quantity > Decimal::ZERO {
@@ -932,8 +932,8 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
         assert!(strategy.initialized);
-        assert!(strategy.leverage_symbol.is_some());
-        assert!(strategy.inverse_symbol.is_some());
+        assert!(strategy.leverage_ticker.is_some());
+        assert!(strategy.inverse_ticker.is_some());
     }
 
     #[test]
@@ -965,7 +965,7 @@ register_strategy! {
     name: "코스피 양방향",
     description: "코스피 지수 양방향 매매 전략입니다.",
     timeframe: "15m",
-    symbols: ["122630", "252670"],
+    tickers: ["122630", "252670"],
     category: Intraday,
     markets: [Stock],
     type: KospiBothSideStrategy

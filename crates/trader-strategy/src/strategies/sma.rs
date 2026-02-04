@@ -13,7 +13,7 @@
 //! - 골든 크로스 (단기 SMA > 장기 SMA): 매수 신호
 //! - 데드 크로스 (단기 SMA < 장기 SMA): 매도 신호
 
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -26,15 +26,15 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::domain::{RouteState, StrategyContext};
 use trader_core::{
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// SMA 크로스오버 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SmaConfig {
-    /// 거래할 심볼
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 거래할 티커
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 단기 이동평균 기간
     #[serde(default = "default_short_period")]
@@ -72,7 +72,7 @@ fn default_min_score() -> Decimal {
 impl Default for SmaConfig {
     fn default() -> Self {
         Self {
-            symbol: "BTC/USDT".to_string(),
+            ticker: "BTC/USDT".to_string(),
             short_period: 10,
             long_period: 20,
             amount: Decimal::from(100000),
@@ -85,8 +85,8 @@ impl Default for SmaConfig {
 pub struct SmaStrategy {
     /// 설정
     config: Option<SmaConfig>,
-    /// 심볼
-    symbol: Option<Symbol>,
+    /// 티커
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
     /// 가격 히스토리
     prices: VecDeque<Decimal>,
@@ -105,7 +105,7 @@ impl SmaStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             prices: VecDeque::new(),
             position_open: false,
@@ -130,7 +130,7 @@ impl SmaStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let Some(ctx) = self.context.as_ref() else {
             // Context 없으면 진입 허용 (하위 호환성)
@@ -202,13 +202,13 @@ impl Strategy for SmaStrategy {
         let sma_config: SmaConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %sma_config.symbol,
+            ticker = %sma_config.ticker,
             short_period = sma_config.short_period,
             long_period = sma_config.long_period,
             "Initializing SMA Crossover strategy"
         );
 
-        self.symbol = Symbol::from_string(&sma_config.symbol, MarketType::Stock);
+        self.ticker = Some(sma_config.ticker.clone());
         self.config = Some(sma_config);
         self.prices.clear();
         self.position_open = false;
@@ -232,8 +232,8 @@ impl Strategy for SmaStrategy {
             None => return Ok(vec![]),
         };
 
-        // 심볼 확인
-        if data.symbol.to_string() != config.symbol {
+        // 티커 확인
+        if data.ticker.to_string() != config.ticker {
             return Ok(vec![]);
         }
 
@@ -283,7 +283,7 @@ impl Strategy for SmaStrategy {
                 signals.push(
                     Signal::new(
                         "sma_crossover",
-                        data.symbol.clone(),
+                        data.ticker.clone(),
                         Side::Buy,
                         SignalType::Entry,
                     )
@@ -304,7 +304,7 @@ impl Strategy for SmaStrategy {
                 signals.push(
                     Signal::new(
                         "sma_crossover",
-                        data.symbol.clone(),
+                        data.ticker.clone(),
                         Side::Sell,
                         SignalType::Exit,
                     )
@@ -354,7 +354,7 @@ impl Strategy for SmaStrategy {
     fn get_state(&self) -> Value {
         json!({
             "initialized": self.initialized,
-            "symbol": self.config.as_ref().map(|c| &c.symbol),
+            "ticker": self.config.as_ref().map(|c| &c.ticker),
             "prices_count": self.prices.len(),
             "position_open": self.position_open,
             "current_short_sma": self.prev_short_sma.map(|s| s.to_string()),
@@ -375,11 +375,11 @@ mod tests {
     use rust_decimal_macros::dec;
     use trader_core::Timeframe;
 
-    fn create_kline(symbol: &Symbol, close: Decimal) -> MarketData {
+    fn create_kline(ticker: &String, close: Decimal) -> MarketData {
         use trader_core::Kline;
 
         let kline = Kline::new(
-            symbol.clone(),
+            ticker.clone(),
             Timeframe::D1,
             Utc::now(),
             close,
@@ -398,7 +398,7 @@ mod tests {
         let mut strategy = SmaStrategy::new();
 
         let config = json!({
-            "symbol": "005930",
+            "ticker": "005930",
             "short_period": 5,
             "long_period": 10,
             "amount": "100000"
@@ -413,7 +413,7 @@ mod tests {
         let mut strategy = SmaStrategy::new();
 
         let config = json!({
-            "symbol": "005930",
+            "ticker": "005930",
             "short_period": 3,
             "long_period": 5,
             "amount": "100000"
@@ -421,17 +421,17 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::stock("005930", "KRW");
+        let ticker = "005930/KRW".to_string();
 
         // 하락 추세 데이터 (장기 > 단기)
         for price in [100, 98, 96, 94, 92] {
-            let data = create_kline(&symbol, Decimal::from(price));
+            let data = create_kline(&ticker, Decimal::from(price));
             let _ = strategy.on_market_data(&data).await.unwrap();
         }
 
         // 상승 추세로 전환 (골든 크로스 발생)
         for price in [95, 100, 105, 110] {
-            let data = create_kline(&symbol, Decimal::from(price));
+            let data = create_kline(&ticker, Decimal::from(price));
             let signals = strategy.on_market_data(&data).await.unwrap();
 
             // 골든 크로스에서 매수 신호 발생
@@ -452,7 +452,7 @@ register_strategy! {
     name: "이동평균 크로스오버",
     description: "단기/장기 이동평균선 교차로 매매 신호를 생성합니다.",
     timeframe: "15m",
-    symbols: [],
+    tickers: [],
     category: Intraday,
     markets: [Crypto, Stock, Stock],
     type: SmaStrategy

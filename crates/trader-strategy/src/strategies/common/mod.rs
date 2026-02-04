@@ -37,7 +37,7 @@ pub use rebalance::{
     RebalanceResult, TargetAllocation,
 };
 
-pub use serde_helpers::{deserialize_symbol, deserialize_symbol_opt, deserialize_symbols};
+pub use serde_helpers::{deserialize_ticker, deserialize_ticker_opt, deserialize_tickers};
 
 pub use defaults::{
     AllocationDefaults, GridDefaults, IndicatorDefaults, MomentumDefaults, RiskDefaults,
@@ -55,12 +55,12 @@ pub use position_sizing::{
 
 pub use global_score_utils::{
     calculate_risk_adjustment, calculate_score_weight, calculate_weighted_average, get_score,
-    select_top_symbols, ScoreFilterOptions,
+    select_top_tickers, ScoreFilterOptions,
 };
 
 pub use screening_integration::{
-    get_symbols_by_global_score, get_symbols_by_route_state, get_symbols_by_state_and_score,
-    get_top_symbols_per_sector, ScreeningAware,
+    get_tickers_by_global_score, get_tickers_by_route_state, get_tickers_by_state_and_score,
+    get_top_tickers_per_sector, ScreeningAware,
 };
 
 pub use risk_checks::{DefaultRiskChecker, RiskCheckError, RiskChecker, RiskManager, RiskParams};

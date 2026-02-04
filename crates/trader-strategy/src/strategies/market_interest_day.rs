@@ -23,7 +23,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use trader_core::domain::StrategyContext;
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -34,7 +34,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use tracing::{debug, info};
 use trader_core::{
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// 캔들 데이터
@@ -52,9 +52,9 @@ struct CandleData {
 /// Market Interest Day 설정
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketInterestDayConfig {
-    /// 대상 심볼
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 대상 티커
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 거래 금액
     #[serde(default = "default_trade_amount")]
@@ -145,7 +145,7 @@ fn default_rsi_period() -> usize {
 impl Default for MarketInterestDayConfig {
     fn default() -> Self {
         Self {
-            symbol: "005930".to_string(),
+            ticker: "005930".to_string(),
             trade_amount: default_trade_amount(),
             volume_multiplier: default_volume_multiplier(),
             volume_period: default_volume_period(),
@@ -198,7 +198,7 @@ impl Default for MarketInterestDayState {
 /// Market Interest Day 전략
 pub struct MarketInterestDayStrategy {
     config: Option<MarketInterestDayConfig>,
-    symbol: Option<Symbol>,
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
     state: MarketInterestDayState,
     /// 캔들 히스토리
@@ -216,7 +216,7 @@ impl MarketInterestDayStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             state: MarketInterestDayState::default(),
             candles: VecDeque::new(),
@@ -438,7 +438,7 @@ impl MarketInterestDayStrategy {
             Some(c) => c,
             None => return Vec::new(),
         };
-        let symbol = match &self.symbol {
+        let ticker = match &self.ticker {
             Some(s) => s,
             None => return Vec::new(),
         };
@@ -467,7 +467,7 @@ impl MarketInterestDayStrategy {
 
             let signal = Signal::new(
                 "market_interest_day",
-                symbol.clone(),
+                ticker.clone(),
                 Side::Sell,
                 SignalType::Exit,
             )
@@ -496,7 +496,7 @@ impl MarketInterestDayStrategy {
 
             let signal = Signal::new(
                 "market_interest_day",
-                symbol.clone(),
+                ticker.clone(),
                 Side::Buy,
                 SignalType::Entry,
             )
@@ -544,13 +544,13 @@ impl Strategy for MarketInterestDayStrategy {
         let mid_config: MarketInterestDayConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %mid_config.symbol,
+            ticker = %mid_config.ticker,
             volume_multiplier = %mid_config.volume_multiplier,
             consecutive_up = %mid_config.consecutive_up_candles,
             "Initializing Market Interest Day strategy"
         );
 
-        self.symbol = Symbol::from_string(&mid_config.symbol, MarketType::Stock);
+        self.ticker = Some(mid_config.ticker.clone());
         self.config = Some(mid_config);
         self.state = MarketInterestDayState::default();
         self.candles.clear();
@@ -575,8 +575,8 @@ impl Strategy for MarketInterestDayStrategy {
             None => return Ok(vec![]),
         };
 
-        // 심볼 확인
-        if data.symbol.to_string() != config.symbol {
+        // 티커 확인
+        if data.ticker.to_string() != config.ticker {
             return Ok(vec![]);
         }
 
@@ -691,7 +691,7 @@ mod tests {
         let mut strategy = MarketInterestDayStrategy::new();
 
         let config = json!({
-            "symbol": "005930",
+            "ticker": "005930",
             "volume_multiplier": "3.0"
         });
 
@@ -722,7 +722,7 @@ register_strategy! {
     name: "단타 시장관심",
     description: "시장 관심 종목을 대상으로 단기 매매를 수행합니다.",
     timeframe: "1d",
-    symbols: [],
+    tickers: [],
     category: Daily,
     markets: [Stock],
     type: MarketInterestDayStrategy

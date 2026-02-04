@@ -79,7 +79,7 @@ impl SignalAlertFilter {
 
         // 심볼 필터 확인
         if let Some(ref symbols) = self.symbols {
-            let symbol_str = marker.symbol.to_string();
+            let symbol_str = marker.ticker.to_string();
             if !symbols.iter().any(|s| symbol_str.contains(s)) {
                 return false;
             }
@@ -145,7 +145,7 @@ impl SignalAlertService {
         self.notification_manager
             .notify_signal_alert(
                 &marker.signal_type.to_string(),
-                &marker.symbol.to_string(),
+                &marker.ticker.to_string(),
                 side_str.as_deref(),
                 marker.price,
                 marker.strength,
@@ -183,14 +183,14 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use rust_decimal_macros::dec;
-    use trader_core::{SignalIndicators, SignalType, Side, Symbol};
+    use trader_core::{SignalIndicators, SignalType, Side};
 
     #[test]
     fn test_filter_min_strength() {
         let filter = SignalAlertFilter::new().with_min_strength(0.8);
 
         let marker_strong = SignalMarker::new(
-            Symbol::crypto("BTC", "USDT"),
+            "BTC/USDT".to_string(),
             Utc::now(),
             SignalType::Entry,
             dec!(50000),
@@ -200,7 +200,7 @@ mod tests {
         .with_strength(0.9);
 
         let marker_weak = SignalMarker::new(
-            Symbol::crypto("ETH", "USDT"),
+            "ETH/USDT".to_string(),
             Utc::now(),
             SignalType::Entry,
             dec!(3000),
@@ -218,7 +218,7 @@ mod tests {
         let filter = SignalAlertFilter::new().entry_only();
 
         let entry_marker = SignalMarker::new(
-            Symbol::crypto("BTC", "USDT"),
+            "BTC/USDT".to_string(),
             Utc::now(),
             SignalType::Entry,
             dec!(50000),
@@ -227,7 +227,7 @@ mod tests {
         );
 
         let exit_marker = SignalMarker::new(
-            Symbol::crypto("BTC", "USDT"),
+            "BTC/USDT".to_string(),
             Utc::now(),
             SignalType::Exit,
             dec!(51000),
@@ -245,7 +245,7 @@ mod tests {
             .with_strategies(vec!["rsi_strategy".to_string()]);
 
         let matching_marker = SignalMarker::new(
-            Symbol::crypto("BTC", "USDT"),
+            "BTC/USDT".to_string(),
             Utc::now(),
             SignalType::Entry,
             dec!(50000),
@@ -254,7 +254,7 @@ mod tests {
         );
 
         let non_matching_marker = SignalMarker::new(
-            Symbol::crypto("ETH", "USDT"),
+            "ETH/USDT".to_string(),
             Utc::now(),
             SignalType::Entry,
             dec!(3000),

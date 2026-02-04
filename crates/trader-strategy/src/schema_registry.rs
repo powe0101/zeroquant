@@ -114,7 +114,7 @@ impl FragmentRegistry {
         self.register(create_rebalance_fragment());
 
         // Asset 카테고리
-        self.register(create_single_symbol_fragment());
+        self.register(create_single_ticker_fragment());
         self.register(create_universe_fragment());
     }
 }
@@ -611,12 +611,12 @@ fn create_rebalance_fragment() -> SchemaFragment {
 // Asset Fragments
 // ============================================================================
 
-fn create_single_symbol_fragment() -> SchemaFragment {
+fn create_single_ticker_fragment() -> SchemaFragment {
     SchemaFragment::new("asset.single", "단일 심볼", FragmentCategory::Asset)
         .with_description("단일 종목 거래")
         .with_fields(vec![FieldSchema {
-            name: "symbol".to_string(),
-            field_type: FieldType::Symbol,
+            name: "ticker".to_string(),
+            field_type: FieldType::String,
             label: "종목 심볼".to_string(),
             required: true,
             ..Default::default()
@@ -628,8 +628,8 @@ fn create_universe_fragment() -> SchemaFragment {
         .with_description("다중 종목 포트폴리오")
         .with_fields(vec![
             FieldSchema {
-                name: "symbols".to_string(),
-                field_type: FieldType::Symbols,
+                name: "tickers".to_string(),
+                field_type: FieldType::String,
                 label: "종목 목록".to_string(),
                 required: true,
                 ..Default::default()

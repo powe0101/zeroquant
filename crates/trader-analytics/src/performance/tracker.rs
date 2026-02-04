@@ -617,11 +617,11 @@ impl PerformanceTracker {
 
     /// 진입 거래를 미체결 포지션에 추가
     fn add_open_position(&mut self, trade: &Trade, strategy_id: Option<String>) {
-        let key = Self::position_key(&trade.symbol.to_string(), trade.side);
+        let key = Self::position_key(&trade.ticker.clone(), trade.side);
 
         let position = OpenPosition {
             trade_id: trade.id,
-            symbol: trade.symbol.to_string(),
+            symbol: trade.ticker.clone(),
             side: trade.side,
             entry_price: trade.price,
             quantity: trade.quantity,
@@ -644,14 +644,14 @@ impl PerformanceTracker {
             Side::Sell => Side::Buy, // 매도로 청산 = 롱 포지션 종료
         };
 
-        let key = Self::position_key(&exit_trade.symbol.to_string(), entry_side);
+        let key = Self::position_key(&exit_trade.ticker.clone(), entry_side);
 
         let open_position = self
             .open_positions
             .get_mut(&key)
             .and_then(|positions| positions.pop_front())
             .ok_or_else(|| TrackerError::NoMatchingEntry {
-                symbol: exit_trade.symbol.to_string(),
+                symbol: exit_trade.ticker.clone(),
                 side: entry_side,
             })?;
 
@@ -828,14 +828,13 @@ impl PerformanceTracker {
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
-    use trader_core::Symbol;
 
     fn create_test_trade(side: Side, price: Decimal, quantity: Decimal, fee: Decimal) -> Trade {
         Trade::new(
             Uuid::new_v4(),
             "binance",
             Uuid::new_v4().to_string(),
-            Symbol::crypto("BTC", "USDT"),
+            "BTC/USDT".to_string(),
             side,
             quantity,
             price,

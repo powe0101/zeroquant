@@ -29,6 +29,7 @@ use trader_core::types::{MarketType, Symbol};
 // ==================== 각 모듈에서 스키마 Import ====================
 
 use crate::error::ApiErrorResponse;
+use crate::repository::{RankedSymbol, SevenFactorData, SevenFactorResponse};
 use crate::routes::{
     // Strategies 모듈
     strategies::{ApiError, StrategyListItem},
@@ -47,6 +48,8 @@ use crate::routes::{
     StrategiesListResponse,
     // Signals 모듈
     signals::{SignalMarkerDto, SignalSearchRequest, SignalSearchResponse, SymbolSignalsQuery, StrategySignalsQuery},
+    // Ranking 모듈
+    ranking::{CalculateResponse, FilterInfo, RankingQuery, RankingResponse, SevenFactorBatchRequest, SevenFactorBatchResponse, SevenFactorQuery},
 };
 
 // ==================== OpenAPI 문서 정의 ====================
@@ -111,7 +114,8 @@ use crate::routes::{
         (name = "screening", description = "스크리닝 - 종목 필터링"),
         (name = "simulation", description = "시뮬레이션 - 모의 거래"),
         (name = "monitoring", description = "모니터링 - 에러 추적 및 시스템 상태"),
-        (name = "signals", description = "신호 마커 - 백테스트/실거래 신호 조회 및 검색")
+        (name = "signals", description = "신호 마커 - 백테스트/실거래 신호 조회 및 검색"),
+        (name = "ranking", description = "랭킹 - GlobalScore 기반 종목 랭킹 및 7Factor 분석")
     ),
     // ==================== 스키마 등록 ====================
     components(
@@ -154,6 +158,18 @@ use crate::routes::{
             Symbol,
             MarketType,
             SignalIndicators,
+
+            // ===== Ranking =====
+            CalculateResponse,
+            RankingQuery,
+            RankingResponse,
+            FilterInfo,
+            RankedSymbol,
+            SevenFactorQuery,
+            SevenFactorBatchRequest,
+            SevenFactorBatchResponse,
+            SevenFactorResponse,
+            SevenFactorData,
         )
     ),
     // ==================== 경로 등록 ====================
@@ -184,6 +200,12 @@ use crate::routes::{
         crate::routes::signals::search_signals,
         crate::routes::signals::get_signals_by_symbol,
         crate::routes::signals::get_signals_by_strategy,
+
+        // ===== Ranking =====
+        crate::routes::ranking::calculate_global,
+        crate::routes::ranking::get_top_ranked,
+        crate::routes::ranking::get_seven_factor,
+        crate::routes::ranking::get_seven_factor_batch,
     )
 )]
 pub struct ApiDoc;

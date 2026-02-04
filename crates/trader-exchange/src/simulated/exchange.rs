@@ -78,7 +78,7 @@ struct AccountState {
     /// 현재 잔고
     balances: HashMap<String, Balance>,
     /// 오픈 포지션 (선물 모드용)
-    positions: HashMap<Symbol, Position>,
+    positions: HashMap<String, Position>,
     /// 체결된 주문 이력
     order_history: Vec<OrderMatch>,
 }
@@ -150,7 +150,7 @@ impl OrderState {
         OrderStatus {
             order_id: self.order_id.clone(),
             client_order_id: self.request.client_order_id.clone(),
-            symbol: Some(self.request.symbol.clone()),
+            ticker: Some(self.request.ticker.clone()),
             side: Some(self.request.side),
             quantity: Some(self.request.quantity),
             price: self.request.price, // 이미 Option<Price>
@@ -183,6 +183,25 @@ pub struct SimulatedExchange {
 }
 
 impl SimulatedExchange {
+    /// ticker String에서 quote 통화를 추출합니다 (예: "BTC/USDT" -> "USDT").
+    fn parse_quote(ticker: &str) -> String {
+        ticker
+            .split('/')
+            .nth(1)
+            .unwrap_or("USDT")
+            .to_string()
+    }
+
+    /// ticker String을 Symbol로 변환합니다 (시뮬레이션용).
+    fn ticker_to_symbol(ticker: &str) -> Symbol {
+        let parts: Vec<&str> = ticker.split('/').collect();
+        if parts.len() == 2 {
+            Symbol::crypto(parts[0], parts[1])
+        } else {
+            Symbol::crypto(ticker, "USDT")
+        }
+    }
+
     /// 새로운 시뮬레이션 거래소를 생성합니다.
     pub fn new(config: SimulatedConfig) -> Self {
         let account = AccountState::new(&config.initial_balances);
@@ -202,7 +221,7 @@ impl SimulatedExchange {
     }
 
     /// 심볼의 과거 Kline 데이터를 로드합니다.
-    pub async fn load_klines(&self, symbol: Symbol, timeframe: Timeframe, klines: Vec<Kline>) {
+    pub async fn load_klines(&self, symbol: String, timeframe: Timeframe, klines: Vec<Kline>) {
         let mut feed = self.data_feed.write().await;
         feed.load_klines(symbol, timeframe, klines);
     }
@@ -210,7 +229,7 @@ impl SimulatedExchange {
     /// CSV 파일에서 Kline 데이터를 로드합니다.
     pub async fn load_from_csv(
         &self,
-        symbol: Symbol,
+        symbol: String,
         timeframe: Timeframe,
         path: impl AsRef<std::path::Path>,
     ) -> ExchangeResult<usize> {
@@ -232,7 +251,7 @@ impl SimulatedExchange {
 
     /// 시뮬레이션을 한 단계 진행합니다.
     /// 처리된 Kline을 반환합니다.
-    pub async fn step(&self, symbol: &Symbol, timeframe: Timeframe) -> Option<Kline> {
+    pub async fn step(&self, symbol: &str, timeframe: Timeframe) -> Option<Kline> {
         let kline = {
             let mut feed = self.data_feed.write().await;
             feed.next_kline(symbol, timeframe)?
@@ -241,7 +260,7 @@ impl SimulatedExchange {
         // 대기 중인 주문 처리
         let matches = {
             let mut engine = self.matching_engine.write().await;
-            engine.process_kline(symbol, &kline)
+            engine.process_kline(&symbol.to_string(), &kline)
         };
 
         // 주문 매칭 결과를 계정에 적용
@@ -265,11 +284,11 @@ impl SimulatedExchange {
 
     /// 데이터가 소진될 때까지 시뮬레이션을 실행합니다.
     /// 각 단계마다 콜백을 호출합니다.
-    pub async fn run_simulation<F>(&self, symbol: &Symbol, timeframe: Timeframe, mut on_kline: F)
+    pub async fn run_simulation<F>(&self, symbol: String, timeframe: Timeframe, mut on_kline: F)
     where
         F: FnMut(&Kline),
     {
-        while let Some(kline) = self.step(symbol, timeframe).await {
+        while let Some(kline) = self.step(&symbol, timeframe).await {
             on_kline(&kline);
         }
     }
@@ -351,22 +370,31 @@ impl SimulatedExchange {
 
         if let Some(order_state) = order_state {
             let request = &order_state.request;
-            let symbol = &request.symbol;
+            let ticker = &request.ticker;
+
+            // ticker String을 Symbol로 변환 (예: "BTC/USDT" -> Symbol)
+            // TODO: SymbolResolver를 통해 Symbol을 가져와야 함
+            let parts: Vec<&str> = ticker.split('/').collect();
+            let (base, quote) = if parts.len() == 2 {
+                (parts[0], parts[1])
+            } else {
+                (ticker.as_str(), "USDT") // 기본값
+            };
 
             match request.side {
                 Side::Buy => {
                     // 견적 통화 차감, 기준 통화 추가
                     let total_cost = order_match.filled_quantity * order_match.fill_price
                         + order_match.commission;
-                    account.update_balance(&symbol.quote, -total_cost, dec!(0));
-                    account.update_balance(&symbol.base, order_match.filled_quantity, dec!(0));
+                    account.update_balance(quote, -total_cost, dec!(0));
+                    account.update_balance(base, order_match.filled_quantity, dec!(0));
                 }
                 Side::Sell => {
                     // 기준 통화 차감, 견적 통화 추가
                     let total_received = order_match.filled_quantity * order_match.fill_price
                         - order_match.commission;
-                    account.update_balance(&symbol.base, -order_match.filled_quantity, dec!(0));
-                    account.update_balance(&symbol.quote, total_received, dec!(0));
+                    account.update_balance(base, -order_match.filled_quantity, dec!(0));
+                    account.update_balance(quote, total_received, dec!(0));
                 }
             }
 
@@ -389,7 +417,7 @@ impl SimulatedExchange {
             let updated_status = OrderStatus {
                 order_id: order_match.order_id.clone(),
                 client_order_id: request.client_order_id.clone(),
-                symbol: Some(request.symbol.clone()),
+                ticker: Some(request.ticker.clone()),
                 side: Some(request.side),
                 quantity: Some(request.quantity),
                 price: request.price, // 이미 Option<Price>
@@ -407,7 +435,7 @@ impl SimulatedExchange {
                 .await;
 
             // 잔고 업데이트 브로드캐스트
-            let quote_balance = account.get_balance(&symbol.quote);
+            let quote_balance = account.get_balance(quote);
             self.user_broadcaster
                 .broadcast(UserEvent::BalanceUpdate(quote_balance))
                 .await;
@@ -427,7 +455,7 @@ impl SimulatedExchange {
         };
 
         Ticker {
-            symbol: kline.symbol.clone(),
+            ticker: kline.ticker.clone(),
             last: kline.close,
             bid: kline.close * dec!(0.9999),
             ask: kline.close * dec!(1.0001),
@@ -518,7 +546,7 @@ impl Exchange for SimulatedExchange {
         Ok(account.get_balance(asset))
     }
 
-    async fn get_ticker(&self, symbol: &Symbol) -> ExchangeResult<Ticker> {
+    async fn get_ticker(&self, symbol: &str) -> ExchangeResult<Ticker> {
         let feed = self.data_feed.read().await;
         feed.get_ticker(symbol)
             .ok_or_else(|| ExchangeError::SymbolNotFound(symbol.to_string()))
@@ -526,7 +554,7 @@ impl Exchange for SimulatedExchange {
 
     async fn get_order_book(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         _limit: Option<u32>,
     ) -> ExchangeResult<OrderBook> {
         // 현재 가격에서 시뮬레이션된 호가창 생성
@@ -554,7 +582,7 @@ impl Exchange for SimulatedExchange {
         }
 
         Ok(OrderBook {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             bids,
             asks,
             timestamp: Utc::now(),
@@ -563,7 +591,7 @@ impl Exchange for SimulatedExchange {
 
     async fn get_recent_trades(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         limit: Option<u32>,
     ) -> ExchangeResult<Vec<TradeTick>> {
         // Kline 데이터에서 시뮬레이션된 거래 생성
@@ -583,7 +611,7 @@ impl Exchange for SimulatedExchange {
                 };
 
                 TradeTick {
-                    symbol: symbol.clone(),
+                    ticker: symbol.to_string(),
                     id: format!("{}_{}", kline.open_time.timestamp_millis(), idx),
                     price: kline.close,
                     quantity: trade_qty,
@@ -602,7 +630,7 @@ impl Exchange for SimulatedExchange {
 
     async fn get_klines(
         &self,
-        symbol: &Symbol,
+        symbol: &str,
         timeframe: Timeframe,
         limit: Option<u32>,
     ) -> ExchangeResult<Vec<Kline>> {
@@ -614,8 +642,8 @@ impl Exchange for SimulatedExchange {
         // 현재 가격 가져오기
         let current_price = {
             let feed = self.data_feed.read().await;
-            feed.get_current_price(&request.symbol)
-                .ok_or_else(|| ExchangeError::SymbolNotFound(request.symbol.to_string()))?
+            feed.get_current_price(&request.ticker)
+                .ok_or_else(|| ExchangeError::SymbolNotFound(request.ticker.to_string()))?
         };
 
         // 주문 검증
@@ -627,20 +655,20 @@ impl Exchange for SimulatedExchange {
             match request.side {
                 Side::Buy => {
                     let required = request.quantity * request.price.unwrap_or(current_price);
-                    let balance = account.get_balance(&request.symbol.quote);
+                    let balance = account.get_balance(&Self::parse_quote(&request.ticker));
                     if balance.free < required {
                         return Err(ExchangeError::InsufficientBalance(format!(
                             "Need {} {}, have {}",
-                            required, request.symbol.quote, balance.free
+                            required, Self::parse_quote(&request.ticker), balance.free
                         )));
                     }
                 }
                 Side::Sell => {
-                    let balance = account.get_balance(&request.symbol.base);
+                    let balance = account.get_balance(&request.ticker);
                     if balance.free < request.quantity {
                         return Err(ExchangeError::InsufficientBalance(format!(
                             "Need {} {}, have {}",
-                            request.quantity, request.symbol.base, balance.free
+                            request.quantity, request.ticker, balance.free
                         )));
                     }
                 }
@@ -653,11 +681,11 @@ impl Exchange for SimulatedExchange {
             match request.side {
                 Side::Buy => {
                     let required = request.quantity * request.price.unwrap_or(current_price);
-                    account.update_balance(&request.symbol.quote, -required, required);
+                    account.update_balance(&Self::parse_quote(&request.ticker), -required, required);
                 }
                 Side::Sell => {
                     account.update_balance(
-                        &request.symbol.base,
+                        &request.ticker,
                         -request.quantity,
                         request.quantity,
                     );
@@ -713,11 +741,11 @@ impl Exchange for SimulatedExchange {
                 match request.side {
                     Side::Buy => {
                         let required = request.quantity * request.price.unwrap_or(current_price);
-                        account.update_balance(&request.symbol.quote, required, -required);
+                        account.update_balance(&Self::parse_quote(&request.ticker), required, -required);
                     }
                     Side::Sell => {
                         account.update_balance(
-                            &request.symbol.base,
+                            &request.ticker,
                             request.quantity,
                             -request.quantity,
                         );
@@ -731,11 +759,11 @@ impl Exchange for SimulatedExchange {
         Ok(order_id)
     }
 
-    async fn cancel_order(&self, symbol: &Symbol, order_id: &str) -> ExchangeResult<()> {
+    async fn cancel_order(&self, symbol: &str, order_id: &str) -> ExchangeResult<()> {
         // 매칭 엔진에서 제거
         let cancelled = {
             let mut engine = self.matching_engine.write().await;
-            engine.cancel_order(symbol, order_id)
+            engine.cancel_order(&symbol.to_string(), order_id)
         };
 
         if !cancelled {
@@ -755,11 +783,11 @@ impl Exchange for SimulatedExchange {
                 match request.side {
                     Side::Buy => {
                         let locked = request.quantity * request.price.unwrap_or(dec!(0));
-                        account.update_balance(&request.symbol.quote, locked, -locked);
+                        account.update_balance(&Self::parse_quote(&request.ticker), locked, -locked);
                     }
                     Side::Sell => {
                         account.update_balance(
-                            &request.symbol.base,
+                            &request.ticker,
                             request.quantity,
                             -request.quantity,
                         );
@@ -771,7 +799,7 @@ impl Exchange for SimulatedExchange {
         Ok(())
     }
 
-    async fn get_order(&self, _symbol: &Symbol, order_id: &str) -> ExchangeResult<OrderStatus> {
+    async fn get_order(&self, _symbol: &str, order_id: &str) -> ExchangeResult<OrderStatus> {
         let orders = self.orders.read().await;
         orders
             .get(order_id)
@@ -779,7 +807,7 @@ impl Exchange for SimulatedExchange {
             .ok_or_else(|| ExchangeError::OrderNotFound(order_id.to_string()))
     }
 
-    async fn get_open_orders(&self, symbol: Option<&Symbol>) -> ExchangeResult<Vec<OrderStatus>> {
+    async fn get_open_orders(&self, symbol: Option<&str>) -> ExchangeResult<Vec<OrderStatus>> {
         let orders = self.orders.read().await;
         let open_orders: Vec<OrderStatus> = orders
             .values()
@@ -787,7 +815,7 @@ impl Exchange for SimulatedExchange {
                 state.status_type == OrderStatusType::Open
                     || state.status_type == OrderStatusType::PartiallyFilled
             })
-            .filter(|state| symbol.map_or(true, |s| &state.request.symbol == s))
+            .filter(|state| symbol.map_or(true, |s| &state.request.ticker == s))
             .map(|state| state.to_order_status())
             .collect();
 
@@ -837,17 +865,19 @@ mod tests {
         let config = SimulatedConfig::default();
         let exchange = SimulatedExchange::new(config);
         let symbol = create_test_symbol();
+        let ticker = symbol.to_string();
 
         // 샘플 데이터 로드
         let klines =
-            generate_sample_klines(symbol.clone(), Timeframe::M1, 100, dec!(50000), dec!(0.02));
+            generate_sample_klines(symbol.to_string(), Timeframe::M1, 100, dec!(50000), dec!(0.02));
         exchange
-            .load_klines(symbol.clone(), Timeframe::M1, klines)
+            .load_klines(symbol.to_string(), Timeframe::M1, klines)
             .await;
 
         // 데이터 순차 처리
+        let ticker = symbol.to_string();
         let mut count = 0;
-        while exchange.step(&symbol, Timeframe::M1).await.is_some() {
+        while exchange.step(&ticker, Timeframe::M1).await.is_some() {
             count += 1;
         }
 
@@ -860,20 +890,21 @@ mod tests {
 
         let exchange = SimulatedExchange::new(config);
         let symbol = create_test_symbol();
+        let ticker = symbol.to_string();
 
         // 데이터 로드
         let klines =
-            generate_sample_klines(symbol.clone(), Timeframe::M1, 10, dec!(50000), dec!(0.02));
+            generate_sample_klines(symbol.to_string(), Timeframe::M1, 10, dec!(50000), dec!(0.02));
         exchange
-            .load_klines(symbol.clone(), Timeframe::M1, klines)
+            .load_klines(symbol.to_string(), Timeframe::M1, klines)
             .await;
 
         // 첫 번째 Kline으로 진행
-        exchange.step(&symbol, Timeframe::M1).await;
+        exchange.step(&ticker, Timeframe::M1).await;
 
         // 시장가 매수 주문
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Market,
             quantity: dec!(0.1),
@@ -885,7 +916,7 @@ mod tests {
         };
 
         let order_id = exchange.place_order(&request).await.unwrap();
-        let status = exchange.get_order(&symbol, &order_id).await.unwrap();
+        let status = exchange.get_order(&ticker, &order_id).await.unwrap();
 
         assert_eq!(status.status, OrderStatusType::Filled);
 
@@ -900,20 +931,21 @@ mod tests {
 
         let exchange = SimulatedExchange::new(config);
         let symbol = create_test_symbol();
+        let ticker = symbol.to_string();
 
         // 가격이 약 50000인 데이터 로드
         let klines =
-            generate_sample_klines(symbol.clone(), Timeframe::M1, 10, dec!(50000), dec!(0.01));
+            generate_sample_klines(symbol.to_string(), Timeframe::M1, 10, dec!(50000), dec!(0.01));
         exchange
-            .load_klines(symbol.clone(), Timeframe::M1, klines)
+            .load_klines(symbol.to_string(), Timeframe::M1, klines)
             .await;
 
         // 첫 번째 Kline으로 진행
-        exchange.step(&symbol, Timeframe::M1).await;
+        exchange.step(&ticker, Timeframe::M1).await;
 
         // 현재 가격보다 훨씬 낮은 지정가 매수 주문
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Limit,
             quantity: dec!(0.1),
@@ -925,13 +957,13 @@ mod tests {
         };
 
         let order_id = exchange.place_order(&request).await.unwrap();
-        let status = exchange.get_order(&symbol, &order_id).await.unwrap();
+        let status = exchange.get_order(&ticker, &order_id).await.unwrap();
 
         // 대기 중이어야 함 (즉시 체결되지 않음)
         assert_eq!(status.status, OrderStatusType::Open);
 
         // 미체결 주문 확인
-        let open_orders = exchange.get_open_orders(Some(&symbol)).await.unwrap();
+        let open_orders = exchange.get_open_orders(Some(&ticker)).await.unwrap();
         assert_eq!(open_orders.len(), 1);
     }
 
@@ -941,17 +973,18 @@ mod tests {
 
         let exchange = SimulatedExchange::new(config);
         let symbol = create_test_symbol();
+        let ticker = symbol.to_string();
 
         let klines =
-            generate_sample_klines(symbol.clone(), Timeframe::M1, 10, dec!(50000), dec!(0.01));
+            generate_sample_klines(symbol.to_string(), Timeframe::M1, 10, dec!(50000), dec!(0.01));
         exchange
-            .load_klines(symbol.clone(), Timeframe::M1, klines)
+            .load_klines(symbol.to_string(), Timeframe::M1, klines)
             .await;
-        exchange.step(&symbol, Timeframe::M1).await;
+        exchange.step(&ticker, Timeframe::M1).await;
 
         // 지정가 주문 생성 및 취소
         let request = OrderRequest {
-            symbol: symbol.clone(),
+            ticker: symbol.to_string(),
             side: Side::Buy,
             order_type: OrderType::Limit,
             quantity: dec!(0.1),
@@ -963,9 +996,9 @@ mod tests {
         };
 
         let order_id = exchange.place_order(&request).await.unwrap();
-        exchange.cancel_order(&symbol, &order_id).await.unwrap();
+        exchange.cancel_order(&ticker, &order_id).await.unwrap();
 
-        let status = exchange.get_order(&symbol, &order_id).await.unwrap();
+        let status = exchange.get_order(&ticker, &order_id).await.unwrap();
         assert_eq!(status.status, OrderStatusType::Cancelled);
 
         // 잔고가 복원되어야 함

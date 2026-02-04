@@ -39,7 +39,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
-use trader_core::{unrealized_pnl, Kline, MarketData, Side, Signal, SignalMarker, SignalType, Symbol, Trade};
+use trader_core::{unrealized_pnl, Kline, MarketData, Side, Signal, SignalMarker, SignalType, Trade};
 use uuid::Uuid;
 
 use crate::backtest::slippage::SlippageModel;
@@ -266,7 +266,7 @@ impl BacktestConfig {
 #[derive(Debug, Clone)]
 struct SimulatedPosition {
     /// 심볼
-    symbol: Symbol,
+    symbol: String,
     /// 방향
     side: Side,
     /// 수량
@@ -481,7 +481,7 @@ impl BacktestEngine {
             // 캔들 완성 시점으로 현재 시간 설정 (데이터 누수 방지)
             self.current_time = kline.close_time;
             self.current_prices
-                .insert(kline.symbol.to_string(), kline.close);
+                .insert(kline.ticker.to_string(), kline.close);
 
             // 시장 데이터 생성 (완성된 캔들 정보 사용)
             let market_data = MarketData::from_kline(&self.config.exchange_name, kline.clone());
@@ -553,7 +553,7 @@ impl BacktestEngine {
             }
             SignalType::Scale => {
                 // 스케일 신호는 현재 포지션에 따라 처리
-                let key = signal.symbol.to_string();
+                let key = signal.ticker.clone();
                 if self.positions.contains_key(&key) {
                     self.close_position(signal, kline).await?;
                 } else {
@@ -570,7 +570,7 @@ impl BacktestEngine {
 
     /// 포지션을 오픈합니다.
     async fn open_position(&mut self, signal: &Signal, kline: &Kline) -> BacktestResult<()> {
-        let key = signal.symbol.to_string();
+        let key = signal.ticker.clone();
 
         // 최대 포지션 수 확인
         if self.positions.len() >= self.config.max_positions {
@@ -620,7 +620,7 @@ impl BacktestEngine {
 
         // 포지션 생성 (체결 시점을 close_time으로 통일)
         let position = SimulatedPosition {
-            symbol: signal.symbol.clone(),
+            symbol: signal.ticker.clone(),
             side: signal.side,
             quantity,
             entry_price: execution_price,
@@ -642,7 +642,7 @@ impl BacktestEngine {
 
     /// 포지션을 청산합니다.
     async fn close_position(&mut self, signal: &Signal, kline: &Kline) -> BacktestResult<()> {
-        let key = signal.symbol.to_string();
+        let key = signal.ticker.clone();
 
         let position = match self.positions.remove(&key) {
             Some(p) => p,
@@ -690,7 +690,7 @@ impl BacktestEngine {
             Uuid::new_v4(),
             &self.config.exchange_name,
             Uuid::new_v4().to_string(),
-            signal.symbol.clone(),
+            signal.ticker.clone(),
             exit_side,
             position.quantity,
             execution_price,
@@ -733,7 +733,7 @@ impl BacktestEngine {
         for position in self.positions.values() {
             let current_price = self
                 .current_prices
-                .get(&position.symbol.to_string())
+                .get(&position.symbol)
                 .copied()
                 .unwrap_or(kline.close);
 
@@ -771,7 +771,7 @@ impl BacktestEngine {
             Uuid::new_v4(),
             &self.config.exchange_name,
             Uuid::new_v4().to_string(),
-            signal.symbol.clone(),
+            signal.ticker.clone(),
             signal.side,
             quantity,
             price,
@@ -812,6 +812,141 @@ impl BacktestEngine {
     /// 열린 포지션 수를 반환합니다.
     pub fn open_positions_count(&self) -> usize {
         self.positions.len()
+    }
+
+
+    /// 다중 타임프레임 백테스트를 실행합니다.
+    ///
+    /// Primary 타임프레임 캔들과 Secondary 타임프레임 캔들을 함께 사용하여
+    /// 전략의 `on_multi_timeframe_data()` 메서드를 호출합니다.
+    ///
+    /// # 매개변수
+    ///
+    /// * `strategy` - 테스트할 전략 (Strategy trait 구현체)
+    /// * `primary_klines` - Primary 타임프레임 캔들 데이터 (시간순 정렬 필수)
+    /// * `secondary_klines` - Secondary 타임프레임별 캔들 데이터
+    ///
+    /// # Look-Ahead Bias 방지
+    ///
+    /// Secondary 데이터는 `TimeframeAligner`를 통해 각 Primary 캔들의 `close_time`
+    /// 기준으로 완료된 캔들만 전략에 전달됩니다.
+    ///
+    /// # 예시
+    ///
+    /// ```rust,ignore
+    /// use std::collections::HashMap;
+    /// use trader_core::Timeframe;
+    ///
+    /// let primary_klines = /* 5분봉 데이터 */;
+    /// let mut secondary_klines = HashMap::new();
+    /// secondary_klines.insert(Timeframe::H1, /* 1시간봉 데이터 */);
+    /// secondary_klines.insert(Timeframe::D1, /* 일봉 데이터 */);
+    ///
+    /// let report = engine.run_multi_timeframe(
+    ///     &mut strategy,
+    ///     &primary_klines,
+    ///     &secondary_klines,
+    /// ).await?;
+    /// ```
+    pub async fn run_multi_timeframe<S>(
+        &mut self,
+        strategy: &mut S,
+        primary_klines: &[Kline],
+        secondary_klines: &HashMap<trader_core::Timeframe, Vec<Kline>>,
+    ) -> BacktestResult<BacktestReport>
+    where
+        S: trader_strategy::Strategy,
+    {
+        use crate::timeframe_alignment::TimeframeAligner;
+
+        // 설정 검증
+        self.config.validate()?;
+
+        if primary_klines.is_empty() {
+            return Err(BacktestError::DataError(
+                "Primary 캔들 데이터가 비어있습니다".to_string(),
+            ));
+        }
+
+        // 시간순 정렬 확인
+        for window in primary_klines.windows(2) {
+            if window[0].open_time > window[1].open_time {
+                return Err(BacktestError::DataError(
+                    "Primary 캔들 데이터가 시간순으로 정렬되어 있지 않습니다".to_string(),
+                ));
+            }
+        }
+
+        let start_time = primary_klines.first().unwrap().open_time;
+        let end_time = primary_klines.last().unwrap().close_time;
+        let data_points = primary_klines.len();
+
+        // 백테스트 시작 시간으로 equity curve 초기 timestamp 설정
+        self.tracker.set_initial_timestamp(start_time);
+
+        // 전략이 다중 타임프레임을 지원하는지 확인
+        let is_multi_tf_strategy = strategy.multi_timeframe_config().is_some();
+
+        // 각 Primary 캔들에 대해 시뮬레이션
+        for kline in primary_klines {
+            // 캔들 완성 시점으로 현재 시간 설정 (데이터 누수 방지)
+            self.current_time = kline.close_time;
+            self.current_prices
+                .insert(kline.ticker.to_string(), kline.close);
+
+            // 시장 데이터 생성
+            let market_data = MarketData::from_kline(&self.config.exchange_name, kline.clone());
+
+            // 전략에 데이터 전달
+            let signals = if is_multi_tf_strategy {
+                // 다중 타임프레임 전략: TimeframeAligner로 유효한 Secondary 데이터만 전달
+                let aligned_secondary =
+                    TimeframeAligner::align_multi_timeframe(secondary_klines, kline.close_time);
+
+                strategy
+                    .on_multi_timeframe_data(&market_data, &aligned_secondary)
+                    .await
+                    .map_err(|e| BacktestError::StrategyError(e.to_string()))?
+            } else {
+                // 단일 타임프레임 전략: 기존 메서드 호출
+                strategy
+                    .on_market_data(&market_data)
+                    .await
+                    .map_err(|e| BacktestError::StrategyError(e.to_string()))?
+            };
+
+            // 신호 처리
+            for signal in signals {
+                self.process_signal(&signal, kline).await?;
+            }
+
+            // 미실현 손익 반영하여 자산 업데이트
+            let equity = self.calculate_equity(kline);
+            self.tracker.update_equity(kline.close_time, equity);
+        }
+
+        // 미청산 포지션 강제 청산
+        self.close_all_positions(primary_klines.last().unwrap())
+            .await?;
+
+        // 심볼별 성과 계산
+        let performance_by_symbol = self.calculate_performance_by_symbol();
+
+        // 결과 생성
+        Ok(BacktestReport {
+            config: self.config.clone(),
+            metrics: self.tracker.get_metrics(),
+            trades: self.tracker.get_round_trips().to_vec(),
+            equity_curve: self.tracker.get_equity_curve().to_vec(),
+            total_orders: self.total_orders,
+            total_commission: self.total_commission,
+            total_slippage: self.total_slippage,
+            start_time,
+            end_time,
+            data_points,
+            performance_by_symbol,
+            signal_markers: self.signal_markers.clone(),
+        })
     }
 }
 
@@ -899,12 +1034,12 @@ pub mod test_strategies {
 
             // 골든 크로스 (단기 > 장기)
             if short_sma > long_sma && !self.position_open {
-                signals.push(Signal::entry("SimpleSMA", data.symbol.clone(), Side::Buy));
+                signals.push(Signal::entry("SimpleSMA", data.ticker.clone(), Side::Buy));
                 self.position_open = true;
             }
             // 데드 크로스 (단기 < 장기)
             else if short_sma < long_sma && self.position_open {
-                signals.push(Signal::exit("SimpleSMA", data.symbol.clone(), Side::Sell));
+                signals.push(Signal::exit("SimpleSMA", data.ticker.clone(), Side::Sell));
                 self.position_open = false;
             }
 
@@ -978,7 +1113,7 @@ pub mod test_strategies {
                 self.bought = true;
                 Ok(vec![Signal::entry(
                     "AlwaysBuy",
-                    data.symbol.clone(),
+                    data.ticker.clone(),
                     Side::Buy,
                 )])
             } else {
@@ -1015,10 +1150,10 @@ mod tests {
     use super::*;
     use chrono::Duration;
     use rust_decimal_macros::dec;
-    use trader_core::{Symbol, Timeframe};
-
+    use trader_core::Timeframe;
+    
     fn create_test_klines(count: usize, start_price: Decimal, trend: Decimal) -> Vec<Kline> {
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
         let base_time = Utc::now() - Duration::days(count as i64);
 
         (0..count)
@@ -1030,7 +1165,7 @@ mod tests {
                 let close_time = open_time + Duration::hours(1);
 
                 Kline::new(
-                    symbol.clone(),
+                    ticker.clone(),
                     Timeframe::H1,
                     open_time,
                     price,

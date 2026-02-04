@@ -14,7 +14,7 @@
 //! - 동적 그리드: ATR 기반 간격 조정
 //! - 추세 필터 그리드: 추세 방향에 따라 활성화
 
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -27,15 +27,15 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::{
     domain::{RouteState, StrategyContext},
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// 그리드 트레이딩 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GridConfig {
-    /// 거래할 심볼 (예: "BTC/USDT")
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 거래할 티커 (예: "BTC/USDT")
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 그리드 기준 가격 (None이면 현재 가격 사용)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,7 +118,7 @@ fn default_min_score() -> Decimal {
 impl Default for GridConfig {
     fn default() -> Self {
         Self {
-            symbol: "BTC/USDT".to_string(),
+            ticker: "BTC/USDT".to_string(),
             center_price: None,
             grid_spacing_pct: dec!(1),
             grid_levels: 10,
@@ -174,8 +174,8 @@ pub struct GridStrategy {
     /// 기준 가격 (그리드 기준점)
     center_price: Option<Decimal>,
 
-    /// 거래 중인 심볼
-    symbol: Option<Symbol>,
+    /// 거래 중인 티커
+    ticker: Option<String>,
 
     /// 전략 실행 컨텍스트
     context: Option<Arc<RwLock<StrategyContext>>>,
@@ -212,7 +212,7 @@ impl GridStrategy {
             grid_levels: Vec::new(),
             current_price: None,
             center_price: None,
-            symbol: None,
+            ticker: None,
             context: None,
             high_history: VecDeque::new(),
             low_history: VecDeque::new(),
@@ -233,7 +233,7 @@ impl GridStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let Some(ctx) = self.context.as_ref() else {
             // Context 없으면 진입 허용 (하위 호환성)
@@ -424,11 +424,11 @@ impl GridStrategy {
     ///
     /// StrategyContext의 RouteState와 GlobalScore를 활용하여 진입을 필터링합니다.
     fn generate_grid_signals(&mut self, current_price: Decimal) -> Vec<Signal> {
-        let (Some(config), Some(symbol)) = (self.config.as_ref(), self.symbol.as_ref()) else {
-            debug!("Cannot generate signals: config or symbol not set");
+        let (Some(config), Some(ticker)) = (self.config.as_ref(), self.ticker.as_ref()) else {
+            debug!("Cannot generate signals: config or ticker not set");
             return Vec::new();
         };
-        let symbol = symbol.clone();
+        let ticker = ticker.clone();
         let amount_per_level = config.amount_per_level;
         let max_position = config.max_position_size;
         let trend_filter = config.trend_filter;
@@ -485,7 +485,7 @@ impl GridStrategy {
                     Side::Sell => SignalType::Exit,
                 };
 
-                let signal = Signal::new("grid_trading", symbol.clone(), level.side, signal_type)
+                let signal = Signal::new("grid_trading", ticker.clone(), level.side, signal_type)
                     .with_strength(1.0)
                     .with_metadata("grid_level", json!(level.index))
                     .with_metadata("grid_price", json!(level.price.to_string()))
@@ -643,7 +643,7 @@ impl Strategy for GridStrategy {
         let grid_config: GridConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %grid_config.symbol,
+            ticker = %grid_config.ticker,
             levels = grid_config.grid_levels,
             spacing = %grid_config.grid_spacing_pct,
             dynamic = grid_config.dynamic_spacing,
@@ -651,7 +651,7 @@ impl Strategy for GridStrategy {
             "Initializing Grid Trading strategy"
         );
 
-        self.symbol = Symbol::from_string(&grid_config.symbol, MarketType::Crypto);
+        self.ticker = Some(grid_config.ticker.clone());
         self.config = Some(grid_config);
         self.initialized = true;
 
@@ -669,15 +669,15 @@ impl Strategy for GridStrategy {
         }
 
         // self를 가변 참조하기 전에 필요한 설정값 복사
-        let (symbol_str, center_price_opt) = {
+        let (ticker_str, center_price_opt) = {
             let Some(config) = self.config.as_ref() else {
                 return Ok(vec![]);
             };
-            (config.symbol.clone(), config.center_price)
+            (config.ticker.clone(), config.center_price)
         };
 
-        // 해당 심볼인지 확인
-        if data.symbol.to_string() != symbol_str {
+        // 해당 티커인지 확인
+        if data.ticker.to_string() != ticker_str {
             return Ok(vec![]);
         }
 
@@ -795,7 +795,7 @@ impl Strategy for GridStrategy {
 
         json!({
             "initialized": self.initialized,
-            "symbol": self.config.as_ref().map(|c| &c.symbol),
+            "ticker": self.config.as_ref().map(|c| &c.ticker),
             "stats": stats,
             "trades_count": self.trades_count,
             "position_size": self.position_size.to_string(),
@@ -859,11 +859,11 @@ mod tests {
     use rust_decimal_macros::dec;
     use trader_core::Timeframe;
 
-    fn create_kline(symbol: &Symbol, close: Decimal) -> MarketData {
+    fn create_kline(ticker: &String, close: Decimal) -> MarketData {
         use trader_core::Kline;
 
         let kline = Kline::new(
-            symbol.clone(),
+            ticker.clone(),
             Timeframe::M1,
             Utc::now(),
             close,
@@ -882,7 +882,7 @@ mod tests {
         let mut strategy = GridStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "center_price": "50000",
             "grid_spacing_pct": 1.0,
             "grid_levels": 5,
@@ -892,8 +892,8 @@ mod tests {
         strategy.initialize(config).await.unwrap();
 
         // Send initial price to trigger grid creation
-        let symbol = Symbol::crypto("BTC", "USDT");
-        let data = create_kline(&symbol, dec!(50000));
+        let ticker = "BTC/USDT".to_string();
+        let data = create_kline(&ticker, dec!(50000));
 
         let signals = strategy.on_market_data(&data).await.unwrap();
 
@@ -909,7 +909,7 @@ mod tests {
         let mut strategy = GridStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "center_price": "50000",
             "grid_spacing_pct": 1.0,
             "grid_levels": 5,
@@ -918,10 +918,10 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
 
         // Initialize with center price
-        let data = create_kline(&symbol, dec!(50000));
+        let data = create_kline(&ticker, dec!(50000));
         let _init_signals = strategy.on_market_data(&data).await.unwrap();
 
         // Verify grid is initialized
@@ -932,7 +932,7 @@ mod tests {
         assert!(has_buy_levels);
 
         // Price drops well below first buy level to trigger
-        let data = create_kline(&symbol, dec!(49000));
+        let data = create_kline(&ticker, dec!(49000));
         let signals = strategy.on_market_data(&data).await.unwrap();
 
         // Check if any buy level was executed
@@ -951,7 +951,7 @@ mod tests {
         let mut strategy = GridStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "center_price": "50000",
             "grid_spacing_pct": 1.0,
             "grid_levels": 5,
@@ -960,10 +960,10 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
 
         // Initialize with center price
-        let data = create_kline(&symbol, dec!(50000));
+        let data = create_kline(&ticker, dec!(50000));
         strategy.on_market_data(&data).await.unwrap();
 
         // Verify grid is initialized
@@ -974,7 +974,7 @@ mod tests {
         assert!(has_sell_levels);
 
         // Price rises well above first sell level
-        let data = create_kline(&symbol, dec!(51000));
+        let data = create_kline(&ticker, dec!(51000));
         let signals = strategy.on_market_data(&data).await.unwrap();
 
         // Check if any sell level was executed
@@ -993,7 +993,7 @@ mod tests {
         let mut strategy = GridStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "center_price": "50000",
             "grid_spacing_pct": 1.0,
             "grid_levels": 5,
@@ -1004,8 +1004,8 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::crypto("BTC", "USDT");
-        let data = create_kline(&symbol, dec!(50000));
+        let ticker = "BTC/USDT".to_string();
+        let data = create_kline(&ticker, dec!(50000));
         strategy.on_market_data(&data).await.unwrap();
 
         // Grid levels should be limited
@@ -1037,7 +1037,7 @@ register_strategy! {
     name: "그리드 트레이딩",
     description: "가격 구간을 나눠 자동 매수/매도 주문을 배치하는 시장 중립 전략입니다.",
     timeframe: "1m",
-    symbols: [],
+    tickers: [],
     category: Realtime,
     markets: [Crypto, Stock, Stock],
     type: GridStrategy

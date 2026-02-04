@@ -20,7 +20,7 @@
 //!
 //! 3. **물타기**: MA 변곡점에서 추가 매수
 
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -33,7 +33,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::{
     domain::{RouteState, StrategyContext},
-    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType, Symbol,
+    MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, SignalType,
 };
 
 /// 라운드 상태
@@ -48,9 +48,9 @@ pub struct RoundInfo {
 /// Infinity Bot 설정
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InfinityBotConfig {
-    /// 대상 심볼
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 대상 티커
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
@@ -134,7 +134,7 @@ fn default_min_global_score() -> Decimal {
 impl Default for InfinityBotConfig {
     fn default() -> Self {
         Self {
-            symbol: "005930".to_string(),
+            ticker: "005930".to_string(),
             total_amount: default_total_amount(),
             max_rounds: default_max_rounds(),
             round_amount_pct: default_round_amount_pct(),
@@ -189,7 +189,7 @@ impl Default for InfinityBotState {
 /// Infinity Bot 전략
 pub struct InfinityBotStrategy {
     config: Option<InfinityBotConfig>,
-    symbol: Option<Symbol>,
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
     state: InfinityBotState,
     /// 가격 히스토리
@@ -209,7 +209,7 @@ impl InfinityBotStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             state: InfinityBotState::default(),
             prices: VecDeque::new(),
@@ -276,7 +276,7 @@ impl InfinityBotStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let Some(ctx) = self.context.as_ref() else {
             warn!("StrategyContext not available - entry blocked");
@@ -461,7 +461,7 @@ impl InfinityBotStrategy {
         open_price: Decimal,
         timestamp: i64,
     ) -> Vec<Signal> {
-        let symbol = match &self.symbol {
+        let ticker = match &self.ticker {
             Some(s) => s.clone(),
             None => return Vec::new(),
         };
@@ -479,7 +479,7 @@ impl InfinityBotStrategy {
             self.state.completed_cycles += 1;
             self.reset_cycle();
 
-            let signal = Signal::new("infinity_bot", symbol.clone(), Side::Sell, SignalType::Exit)
+            let signal = Signal::new("infinity_bot", ticker.clone(), Side::Sell, SignalType::Exit)
                 .with_strength(1.0)
                 .with_metadata("reason", json!("take_profit"))
                 .with_metadata("completed_cycles", json!(self.state.completed_cycles))
@@ -509,7 +509,7 @@ impl InfinityBotStrategy {
 
             let signal = Signal::new(
                 "infinity_bot",
-                symbol.clone(),
+                ticker.clone(),
                 Side::Sell,
                 SignalType::ReducePosition,
             )
@@ -558,7 +558,7 @@ impl InfinityBotStrategy {
                 });
 
                 let signal =
-                    Signal::new("infinity_bot", symbol.clone(), Side::Buy, SignalType::Entry)
+                    Signal::new("infinity_bot", ticker.clone(), Side::Buy, SignalType::Entry)
                         .with_strength(1.0)
                         .with_metadata("round", json!(next_round))
                         .with_metadata("avg_price", json!(self.state.avg_price.to_string()))
@@ -610,13 +610,13 @@ impl Strategy for InfinityBotStrategy {
         let ib_config: InfinityBotConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %ib_config.symbol,
+            ticker = %ib_config.ticker,
             max_rounds = %ib_config.max_rounds,
             take_profit_pct = %ib_config.take_profit_pct,
             "Initializing Infinity Bot strategy"
         );
 
-        self.symbol = Symbol::from_string(&ib_config.symbol, MarketType::Stock);
+        self.ticker = Some(ib_config.ticker.clone());
         self.config = Some(ib_config);
         self.state = InfinityBotState::default();
         self.prices.clear();
@@ -643,8 +643,8 @@ impl Strategy for InfinityBotStrategy {
             None => return Ok(vec![]),
         };
 
-        // 심볼 확인
-        if data.symbol.to_string() != config.symbol {
+        // 티커 확인
+        if data.ticker.to_string() != config.ticker {
             return Ok(vec![]);
         }
 
@@ -745,7 +745,7 @@ mod tests {
         let mut strategy = InfinityBotStrategy::new();
 
         let config = json!({
-            "symbol": "005930",
+            "ticker": "005930",
             "max_rounds": 30,
             "take_profit_pct": "5"
         });
@@ -789,7 +789,7 @@ register_strategy! {
     name: "무한매수",
     description: "가격 하락 시 자동으로 분할 매수하는 물타기 전략입니다.",
     timeframe: "1m",
-    symbols: [],
+    tickers: [],
     category: Realtime,
     markets: [Crypto],
     type: InfinityBotStrategy

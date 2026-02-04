@@ -29,6 +29,10 @@ import type {
 } from 'lightweight-charts'
 import type { CandlestickDataPoint, LineDataPoint, IndicatorOverlay, TradeMarker, TradeMarkerType } from './PriceChart'
 import type { SeparateIndicatorData, IndicatorSeriesData } from './SubPriceChart'
+import type { ChartSyncState } from './EquityCurve'
+
+// ChartSyncState re-export (다른 컴포넌트에서 import 편의)
+export type { ChartSyncState } from './EquityCurve'
 
 /** 데이터 정렬 및 중복 타임스탬프 제거 */
 function deduplicateAndSort<T extends { time: string | number }>(data: T[]): T[] {
@@ -96,6 +100,13 @@ interface SyncedChartPanelProps {
     downColor?: string
     lineColor?: string
   }
+  // ==================== 외부 차트 동기화 props ====================
+  /** 차트 고유 ID (동기화 무한 루프 방지용) */
+  chartId?: string
+  /** 외부 동기화 상태 (다른 차트에서 변경된 범위) */
+  syncState?: () => ChartSyncState | null
+  /** 범위 변경 시 부모에게 알림 */
+  onVisibleRangeChange?: (state: ChartSyncState) => void
 }
 
 export function SyncedChartPanel(props: SyncedChartPanelProps) {
@@ -115,6 +126,10 @@ export function SyncedChartPanel(props: SyncedChartPanelProps) {
 
   // 동기화 플래그 (무한 루프 방지)
   let isSyncing = false
+  // 외부 업데이트 플래그 (외부 차트 동기화 무한 루프 방지)
+  let isExternalUpdate = false
+  // 고유 차트 ID
+  const chartId = props.chartId || 'synced-' + Math.random().toString(36).substr(2, 9)
 
   const defaultColors = {
     background: 'transparent',
@@ -130,17 +145,25 @@ export function SyncedChartPanel(props: SyncedChartPanelProps) {
     ...props.colors,
   })
 
-  // 시간 축 동기화 함수
+  // 시간 축 동기화 함수 (내부 + 외부 동기화)
   const syncTimeScale = (sourceChart: IChartApi, logicalRange: LogicalRange | null) => {
-    if (isSyncing || !logicalRange) return
+    // 외부 업데이트 중이거나 범위가 없으면 무시
+    if (isSyncing || isExternalUpdate || !logicalRange) return
     isSyncing = true
 
+    // 내부 차트들 동기화 (메인 + 서브 차트)
     const allCharts = [mainChart, ...subCharts].filter(Boolean) as IChartApi[]
     for (const chart of allCharts) {
       if (chart !== sourceChart) {
         chart.timeScale().setVisibleLogicalRange(logicalRange)
       }
     }
+
+    // 외부 차트 동기화를 위해 부모에게 범위 변경 알림
+    props.onVisibleRangeChange?.({
+      range: logicalRange,
+      sourceId: chartId,
+    })
 
     isSyncing = false
   }
@@ -402,6 +425,28 @@ export function SyncedChartPanel(props: SyncedChartPanelProps) {
     })
   })
 
+  // ==================== 외부 차트 동기화 ====================
+  // 다른 차트(EquityCurve, DrawdownChart 등)에서 범위가 변경되면 이 차트도 동기화
+  createEffect(
+    on(
+      () => props.syncState?.(),
+      (syncState) => {
+        if (!mainChart || !syncState?.range) return
+        // 자신이 소스면 무시 (무한 루프 방지)
+        if (syncState.sourceId === chartId) return
+
+        isExternalUpdate = true
+        // 메인 차트와 모든 서브 차트에 범위 적용
+        mainChart.timeScale().setVisibleLogicalRange(syncState.range)
+        subCharts.forEach(chart => {
+          chart?.timeScale().setVisibleLogicalRange(syncState.range!)
+        })
+        // 다음 틱에서 플래그 해제
+        setTimeout(() => { isExternalUpdate = false }, 0)
+      }
+    )
+  )
+
   // 메인 데이터 변경 시 업데이트
   createEffect(
     on(
@@ -519,6 +564,33 @@ export function SyncedChartPanel(props: SyncedChartPanelProps) {
             }
           })
         }
+      }
+    )
+  )
+
+  // 외부 차트와의 동기화 (다른 차트에서 범위 변경 시)
+  createEffect(
+    on(
+      () => props.syncState?.(),
+      (syncState) => {
+        // 차트가 아직 생성되지 않았거나 동기화 상태가 없으면 무시
+        if (!mainChart || !syncState?.range) return
+        // 자기 자신이 소스인 경우 무시 (무한 루프 방지)
+        if (syncState.sourceId === chartId) return
+
+        // 외부 업데이트 플래그 설정 (내부 syncTimeScale이 재호출되지 않도록)
+        isExternalUpdate = true
+
+        // 메인 차트와 모든 서브 차트에 범위 적용
+        mainChart.timeScale().setVisibleLogicalRange(syncState.range)
+        subCharts.forEach(chart => {
+          chart?.timeScale().setVisibleLogicalRange(syncState.range!)
+        })
+
+        // 플래그 해제 (다음 프레임에서)
+        setTimeout(() => {
+          isExternalUpdate = false
+        }, 0)
       }
     )
   )

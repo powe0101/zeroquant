@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use trader_core::domain::StrategyContext;
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -28,14 +28,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use tracing::{debug, info};
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal};
 
 /// 구간분할 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StockGuganConfig {
-    /// 거래 심볼 (예: "TSLA", "005930")
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 거래 티커 (예: "TSLA", "005930")
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 구간 분할 수 (기본값: 15)
     #[serde(default = "default_div_num")]
@@ -88,7 +88,7 @@ fn default_initial_buy_ratio() -> f64 {
 impl Default for StockGuganConfig {
     fn default() -> Self {
         Self {
-            symbol: "TSLA".to_string(),
+            ticker: "TSLA".to_string(),
             div_num: 15,
             target_period: 20,
             use_ma_filter: true,
@@ -112,7 +112,7 @@ struct DailyData {
 /// 구간분할 전략.
 pub struct StockGuganStrategy {
     config: Option<StockGuganConfig>,
-    symbol: Option<Symbol>,
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
 
     /// 과거 일봉 데이터
@@ -150,7 +150,7 @@ impl StockGuganStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             daily_history: VecDeque::new(),
             current_day: None,
@@ -281,7 +281,7 @@ impl StockGuganStrategy {
             Some(c) => c.clone(),
             None => return Vec::new(),
         };
-        let symbol = match self.symbol.as_ref() {
+        let ticker = match self.ticker.as_ref() {
             Some(s) => s.clone(),
             None => return Vec::new(),
         };
@@ -308,7 +308,7 @@ impl StockGuganStrategy {
             // 첫 매수 신호
             let strength = config.initial_buy_ratio / config.div_num as f64;
             signals.push(
-                Signal::entry("stock_gugan", symbol.clone(), Side::Buy)
+                Signal::entry("stock_gugan", ticker.clone(), Side::Buy)
                     .with_strength(strength)
                     .with_prices(Some(current_price), None, None)
                     .with_metadata("zone", json!(current_zone))
@@ -354,7 +354,7 @@ impl StockGuganStrategy {
             if ma_condition {
                 let strength = (zone_change.abs() as f64) / config.div_num as f64;
                 signals.push(
-                    Signal::entry("stock_gugan", symbol.clone(), Side::Buy)
+                    Signal::entry("stock_gugan", ticker.clone(), Side::Buy)
                         .with_strength(strength)
                         .with_prices(Some(current_price), None, None)
                         .with_metadata("zone", json!(current_zone))
@@ -392,7 +392,7 @@ impl StockGuganStrategy {
             if ma_condition && self.holdings > Decimal::ZERO {
                 let strength = (zone_change.abs() as f64) / config.div_num as f64;
                 signals.push(
-                    Signal::exit("stock_gugan", symbol.clone(), Side::Sell)
+                    Signal::exit("stock_gugan", ticker.clone(), Side::Sell)
                         .with_strength(strength)
                         .with_prices(Some(current_price), None, None)
                         .with_metadata("zone", json!(current_zone))
@@ -449,7 +449,7 @@ impl Strategy for StockGuganStrategy {
         let gugan_config: StockGuganConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %gugan_config.symbol,
+            ticker = %gugan_config.ticker,
             div_num = gugan_config.div_num,
             target_period = gugan_config.target_period,
             "구간분할 전략 초기화"
@@ -457,7 +457,7 @@ impl Strategy for StockGuganStrategy {
 
         // 시장 타입 결정 (숫자로 시작하면 한국, 아니면 미국)
         let market_type = if gugan_config
-            .symbol
+            .ticker
             .chars()
             .next()
             .map(|c| c.is_numeric())
@@ -473,7 +473,7 @@ impl Strategy for StockGuganStrategy {
         } else {
             "USD"
         };
-        self.symbol = Some(Symbol::stock(&gugan_config.symbol, quote));
+        self.ticker = Some(format!("{}/{}", gugan_config.ticker, quote));
         self.config = Some(gugan_config);
         self.initialized = true;
 
@@ -488,12 +488,12 @@ impl Strategy for StockGuganStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = match self.config.as_ref() {
-            Some(c) => c.symbol.clone(),
+        let ticker_str = match self.config.as_ref() {
+            Some(c) => c.ticker.clone(),
             None => return Ok(vec![]),
         };
 
-        if data.symbol.to_string() != symbol_str {
+        if data.ticker.to_string() != ticker_str {
             return Ok(vec![]);
         }
 
@@ -604,7 +604,7 @@ mod tests {
     use trader_core::{Kline, Timeframe};
 
     fn create_daily_kline(
-        symbol: &Symbol,
+        ticker: &String,
         high: Decimal,
         low: Decimal,
         close: Decimal,
@@ -612,7 +612,7 @@ mod tests {
     ) -> MarketData {
         let timestamp = Utc.with_ymd_and_hms(2024, 1, day, 9, 0, 0).unwrap();
         let kline = Kline::new(
-            symbol.clone(),
+            ticker.clone(),
             Timeframe::D1,
             timestamp,
             close,
@@ -630,7 +630,7 @@ mod tests {
         let mut strategy = StockGuganStrategy::new();
 
         let config = json!({
-            "symbol": "TSLA/USD",
+            "ticker": "TSLA/USD",
             "div_num": 15,
             "target_period": 20
         });
@@ -645,7 +645,7 @@ mod tests {
         let mut strategy = StockGuganStrategy::new();
 
         let config = json!({
-            "symbol": "TSLA/USD",
+            "ticker": "TSLA/USD",
             "div_num": 10,
             "target_period": 5,
             "use_ma_filter": false
@@ -653,7 +653,7 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::stock("TSLA", "USD");
+        let ticker = "TSLA/USD".to_string();
 
         // 6일치 데이터 추가 (마지막 일봉이 history에 저장되려면 다음 날 데이터 필요)
         // target_period=5 이므로 5일치가 history에 쌓여야 zone 계산됨
@@ -661,7 +661,7 @@ mod tests {
             let high = dec!(100) + Decimal::from(day * 2);
             let low = dec!(100) - Decimal::from(day * 2);
             let close = dec!(100);
-            let data = create_daily_kline(&symbol, high, low, close, day);
+            let data = create_daily_kline(&ticker, high, low, close, day);
             strategy.on_market_data(&data).await.unwrap();
         }
 
@@ -702,7 +702,7 @@ register_strategy! {
     name: "주식 구간 매매",
     description: "가격 구간별 매매 전략입니다.",
     timeframe: "1m",
-    symbols: [],
+    tickers: [],
     category: Realtime,
     markets: [Stock, Stock],
     type: StockGuganStrategy

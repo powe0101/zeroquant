@@ -1,3 +1,9 @@
+// SDUI 타입 (Server-Driven UI)
+export * from './sdui';
+
+// 자동 생성된 타입 re-export (ts-rs)
+export * from './generated';
+
 // Market data types
 export interface Ticker {
   symbol: string;
@@ -36,7 +42,9 @@ export interface Order {
   createdAt: string;
 }
 
-export interface Strategy {
+// Strategy 타입은 types/generated/strategies/StrategyListItem에서 re-export됨
+// 아래는 API 응답과 다른 포맷을 사용하는 레거시 컴포넌트용 타입
+export interface LegacyStrategy {
   id: string;
   strategyType: string;  // 전략 타입 (예: "rsi", "grid_trading", "sma")
   name: string;
@@ -211,4 +219,61 @@ export interface TelegramSettings {
   created_at?: string;
   updated_at?: string;
   last_tested_at?: string;
+}
+
+// ==================== Global Ranking 타입 ====================
+// 기본 타입은 types/generated/ranking에서 re-export됨
+// 아래는 UI 편의를 위한 리터럴 타입 (자동 생성 타입의 string을 더 구체화)
+
+/** GlobalScore 등급 (UI 표시용) */
+export type GlobalScoreGrade = 'EXCELLENT' | 'BUY' | 'WATCH' | 'HOLD' | 'CAUTION' | 'AVOID';
+
+/** 신뢰도 레벨 (UI 표시용) */
+export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+
+// ==================== RouteState 타입 ====================
+
+/** RouteState 상태 */
+export type RouteStateType = 'ATTACK' | 'ARMED' | 'NEUTRAL' | 'WAIT' | 'OVERHEAT';
+
+/** RouteState 정보 */
+export interface RouteStateInfo {
+  state: RouteStateType;
+  strength: number;
+  updated_at: string;
+}
+
+// ==================== Signal Marker 타입 ====================
+
+/** 신호 지표 정보 */
+export interface SignalIndicators {
+  rsi?: number;
+  macd?: number;
+  macd_signal?: number;
+  macd_histogram?: number;
+  sma_20?: number;
+  sma_50?: number;
+  sma_200?: number;
+  bb_upper?: number;
+  bb_middle?: number;
+  bb_lower?: number;
+  volume_ratio?: number;
+  atr?: number;
+  [key: string]: number | undefined;
+}
+
+/** 신호 마커 */
+export interface SignalMarker {
+  id: string;
+  symbol: string;
+  timestamp: string;
+  signal_type: string;
+  side?: 'Buy' | 'Sell';
+  price: number;
+  strength: number;
+  indicators: SignalIndicators;
+  reason: string;
+  strategy_id: string;
+  strategy_name: string;
+  executed: boolean;
 }

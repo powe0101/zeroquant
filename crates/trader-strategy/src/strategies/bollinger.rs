@@ -15,7 +15,7 @@
 //! - **매도 신호**: 가격이 상단 밴드에 닿거나 상향 돌파 + RSI > 70
 //! - **청산**: 가격이 중간 밴드(SMA)로 복귀
 
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -28,15 +28,15 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::domain::{RouteState, StrategyContext};
 use trader_core::{
-    MarketData, MarketDataType, MarketType, Order, OrderStatusType, Position, Side, Signal, Symbol,
+    MarketData, MarketDataType, MarketType, Order, OrderStatusType, Position, Side, Signal,
 };
 
 /// 볼린저 밴드 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BollingerConfig {
     /// 거래할 심볼 (예: "BTC/USDT")
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 중간 밴드용 SMA 기간 (기본값: 20)
     #[serde(default = "default_period")]
@@ -120,7 +120,7 @@ fn default_max_positions() -> usize {
 impl Default for BollingerConfig {
     fn default() -> Self {
         Self {
-            symbol: "BTC/USDT".to_string(),
+            ticker: "BTC/USDT".to_string(),
             period: 20,
             std_multiplier: dec!(2),
             rsi_oversold: dec!(30),
@@ -151,7 +151,7 @@ struct PositionState {
 /// 볼린저 밴드는 실시간 캔들 기반으로 계산합니다.
 pub struct BollingerStrategy {
     config: Option<BollingerConfig>,
-    symbol: Option<Symbol>,
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
 
     /// 볼린저 밴드 계산을 위한 가격 히스토리
@@ -177,7 +177,7 @@ impl BollingerStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             prices: VecDeque::new(),
             upper_band: None,
@@ -259,7 +259,7 @@ impl BollingerStrategy {
     /// StrategyContext에서 현재 RSI 조회.
     fn get_current_rsi(&self) -> Option<Decimal> {
         let config = self.config.as_ref()?;
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let ctx = self.context.as_ref()?;
         let ctx_lock = ctx.try_read().ok()?;
@@ -289,7 +289,7 @@ impl BollingerStrategy {
 
     /// 현재 상태를 기반으로 진입/청산 신호 생성.
     fn generate_signals(&mut self, current_price: Decimal) -> Vec<Signal> {
-        let (Some(config), Some(symbol)) = (self.config.as_ref(), self.symbol.clone()) else {
+        let (Some(config), Some(ticker)) = (self.config.as_ref(), self.ticker.clone()) else {
             return Vec::new();
         };
         let mut signals = Vec::new();
@@ -347,7 +347,7 @@ impl BollingerStrategy {
                 };
 
                 signals.push(
-                    Signal::exit("bollinger_bands", symbol.clone(), exit_side)
+                    Signal::exit("bollinger_bands", ticker.clone(), exit_side)
                         .with_strength(1.0)
                         .with_prices(Some(current_price), None, None)
                         .with_metadata("exit_reason", json!(reason)),
@@ -379,7 +379,7 @@ impl BollingerStrategy {
 
         // StrategyContext 기반 필터링
         // 참고: HashMap 키는 ticker 문자열 (historical.rs의 패턴 참조)
-        let ticker = &symbol.base;
+        let ticker = &ticker;
         if let Some(ctx) = self.context.as_ref() {
             if let Ok(ctx_lock) = ctx.try_read() {
                 // 1️⃣ StructuralFeatures로 스퀴즈 확인
@@ -423,7 +423,7 @@ impl BollingerStrategy {
 
             let current_rsi = self.get_current_rsi();
             signals.push(
-                Signal::entry("bollinger_bands", symbol.clone(), Side::Buy)
+                Signal::entry("bollinger_bands", ticker.clone(), Side::Buy)
                     .with_strength(0.5)
                     .with_prices(Some(current_price), Some(stop_loss), Some(take_profit))
                     .with_metadata("rsi", json!(current_rsi.map(|r| r.to_string())))
@@ -456,7 +456,7 @@ impl BollingerStrategy {
 
             let current_rsi = self.get_current_rsi();
             signals.push(
-                Signal::entry("bollinger_bands", symbol.clone(), Side::Sell)
+                Signal::entry("bollinger_bands", ticker.clone(), Side::Sell)
                     .with_strength(0.5)
                     .with_prices(Some(current_price), Some(stop_loss), Some(take_profit))
                     .with_metadata("rsi", json!(current_rsi.map(|r| r.to_string())))
@@ -510,14 +510,14 @@ impl Strategy for BollingerStrategy {
         let bb_config: BollingerConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %bb_config.symbol,
+            ticker = %bb_config.ticker,
             period = bb_config.period,
             std_multiplier = %bb_config.std_multiplier,
             use_rsi = bb_config.use_rsi_confirmation,
             "Initializing Bollinger Bands strategy v2.0"
         );
 
-        self.symbol = Symbol::from_string(&bb_config.symbol, MarketType::Crypto);
+        self.ticker = Some(bb_config.ticker.clone());
         self.config = Some(bb_config);
         self.initialized = true;
 
@@ -536,7 +536,7 @@ impl Strategy for BollingerStrategy {
             return Ok(vec![]);
         };
 
-        if data.symbol.to_string() != config.symbol {
+        if data.ticker.to_string() != config.ticker {
             return Ok(vec![]);
         }
 
@@ -579,8 +579,8 @@ impl Strategy for BollingerStrategy {
         }
 
         // 대상 심볼 확인
-        if let Some(ref symbol) = self.symbol {
-            if order.symbol != *symbol {
+        if let Some(ref ticker) = self.ticker {
+            if order.ticker != *ticker {
                 return Ok(());
             }
         }
@@ -714,8 +714,8 @@ impl Strategy for BollingerStrategy {
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // 대상 심볼 확인
-        if let Some(ref symbol) = self.symbol {
-            if position.symbol != *symbol {
+        if let Some(ref ticker) = self.ticker {
+            if position.ticker != *ticker {
                 return Ok(());
             }
         }
@@ -725,7 +725,7 @@ impl Strategy for BollingerStrategy {
             // 외부에서 포지션 없음 → 내부도 초기화
             if self.position.is_some() {
                 warn!(
-                    symbol = %position.symbol,
+                    ticker = %position.ticker,
                     "외부 포지션 없음, 내부 상태 초기화"
                 );
                 self.position = None;
@@ -744,7 +744,7 @@ impl Strategy for BollingerStrategy {
             } else {
                 // 내부에 포지션 없는데 외부에 있음 → 생성
                 warn!(
-                    symbol = %position.symbol,
+                    ticker = %position.ticker,
                     quantity = %position.quantity,
                     "예상치 못한 외부 포지션 발견, 내부 상태 생성"
                 );
@@ -823,9 +823,9 @@ mod tests {
     use chrono::Utc;
     use trader_core::{Kline, Timeframe};
 
-    fn create_kline(symbol: &Symbol, close: Decimal) -> MarketData {
+    fn create_kline(ticker: &String, close: Decimal) -> MarketData {
         let kline = Kline::new(
-            symbol.clone(),
+            ticker.clone(),
             Timeframe::M1,
             Utc::now(),
             close,
@@ -843,7 +843,7 @@ mod tests {
         let mut strategy = BollingerStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "period": 20,
             "std_multiplier": 2.0,
             "use_rsi_confirmation": true
@@ -858,7 +858,7 @@ mod tests {
         let mut strategy = BollingerStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "period": 5,
             "std_multiplier": 2.0,
             "use_rsi_confirmation": false
@@ -866,12 +866,12 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
 
         // Feed 5 prices to calculate bands
         let prices = [dec!(100), dec!(102), dec!(98), dec!(101), dec!(99)];
         for price in prices {
-            let data = create_kline(&symbol, price);
+            let data = create_kline(&ticker, price);
             strategy.on_market_data(&data).await.unwrap();
         }
 
@@ -890,7 +890,7 @@ mod tests {
         let mut strategy = BollingerStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "period": 5,
             "std_multiplier": 2.0,
             "use_rsi_confirmation": false,
@@ -899,13 +899,13 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
 
         // Feed prices with variation to establish proper bands
         // 가격 변동이 있어야 표준편차가 0이 아니게 됨
         let prices = [dec!(98), dec!(102), dec!(97), dec!(103), dec!(100)];
         for price in prices {
-            let data = create_kline(&symbol, price);
+            let data = create_kline(&ticker, price);
             strategy.on_market_data(&data).await.unwrap();
         }
 
@@ -920,7 +920,7 @@ mod tests {
         assert!(lower < middle, "Lower band should be below middle band");
 
         // Price drops significantly below lower band
-        let data = create_kline(&symbol, dec!(90));
+        let data = create_kline(&ticker, dec!(90));
         let _signals = strategy.on_market_data(&data).await.unwrap();
 
         // 전략이 신호를 생성했거나 포지션을 열었다면 성공
@@ -938,7 +938,7 @@ register_strategy! {
     name: "볼린저 밴드",
     description: "볼린저 밴드 이탈 시 평균회귀를 노리는 전략입니다.",
     timeframe: "15m",
-    symbols: [],
+    tickers: [],
     category: Intraday,
     markets: [Crypto, Stock, Stock],
     type: BollingerStrategy

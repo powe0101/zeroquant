@@ -106,7 +106,7 @@ impl ExchangeProvider for KisUsProvider {
 
             // 포지션 생성 (현물은 매수만 가능)
             let mut position =
-                StrategyPositionInfo::new(symbol, Side::Buy, holding.quantity, holding.avg_price);
+                StrategyPositionInfo::new(symbol.to_string(), Side::Buy, holding.quantity, holding.avg_price);
 
             // 현재가 및 손익 업데이트
             position.update_price(holding.current_price);
@@ -135,9 +135,6 @@ impl ExchangeProvider for KisUsProvider {
                 _ => continue, // 알 수 없는 side는 스킵
             };
 
-            // 심볼 생성
-            let symbol = Symbol::new(&order.symbol, "USD", MarketType::Stock);
-
             // 주문 상태 결정
             let status = if order.filled_qty > Decimal::ZERO {
                 trader_core::OrderStatusType::PartiallyFilled
@@ -151,7 +148,7 @@ impl ExchangeProvider for KisUsProvider {
 
             let pending = PendingOrder {
                 order_id: order.order_no,
-                symbol,
+                ticker: order.symbol.clone(),
                 side,
                 price: order.order_price,
                 quantity: order.order_qty,

@@ -458,4 +458,83 @@ impl SymbolFundamentalRepository {
 
         Ok(result.rows_affected() > 0)
     }
+
+    /// 분석 지표 업데이트 (RouteState, MarketRegime, TTM Squeeze).
+    ///
+    /// symbol_fundamental 레코드가 없으면 새로 생성합니다.
+    pub async fn update_indicators(
+        pool: &PgPool,
+        update: &IndicatorUpdate,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO symbol_fundamental (symbol_info_id, route_state, regime, ttm_squeeze, ttm_squeeze_cnt, fetched_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            ON CONFLICT (symbol_info_id) DO UPDATE SET
+                route_state = COALESCE(EXCLUDED.route_state, symbol_fundamental.route_state),
+                regime = COALESCE(EXCLUDED.regime, symbol_fundamental.regime),
+                ttm_squeeze = COALESCE(EXCLUDED.ttm_squeeze, symbol_fundamental.ttm_squeeze),
+                ttm_squeeze_cnt = COALESCE(EXCLUDED.ttm_squeeze_cnt, symbol_fundamental.ttm_squeeze_cnt),
+                updated_at = NOW()
+            "#,
+        )
+        .bind(update.symbol_info_id)
+        .bind(&update.route_state)
+        .bind(&update.regime)
+        .bind(update.ttm_squeeze)
+        .bind(update.ttm_squeeze_cnt)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// 분석 지표가 오래된 심볼 목록 조회.
+    ///
+    /// route_state 또는 regime이 없거나 updated_at이 오래된 경우.
+    /// CRYPTO 심볼 제외.
+    ///
+    /// 반환 값: (symbol_info_id, ticker, market, yahoo_symbol)
+    pub async fn get_stale_indicator_symbols(
+        pool: &PgPool,
+        older_than: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<(Uuid, String, String, Option<String>)>, sqlx::Error> {
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
+            r#"
+            SELECT si.id, si.ticker, si.market, si.yahoo_symbol
+            FROM symbol_info si
+            LEFT JOIN symbol_fundamental sf ON si.id = sf.symbol_info_id
+            WHERE si.is_active = true
+              AND si.market != 'CRYPTO'
+              AND (
+                  sf.route_state IS NULL
+                  OR sf.regime IS NULL
+                  OR sf.updated_at IS NULL
+                  OR sf.updated_at < $1
+              )
+            ORDER BY sf.updated_at NULLS FIRST
+            LIMIT $2
+            "#,
+        )
+        .bind(older_than)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+    }
+}
+
+/// 분석 지표 업데이트 요청.
+#[derive(Debug, Clone, Default)]
+pub struct IndicatorUpdate {
+    /// 심볼 ID
+    pub symbol_info_id: Uuid,
+    /// RouteState (Overheat, Attack, Armed, Wait, Neutral)
+    pub route_state: Option<String>,
+    /// MarketRegime (StrongUptrend, Correction, Sideways, BottomBounce, Downtrend)
+    pub regime: Option<String>,
+    /// TTM Squeeze 상태 (true = squeeze 진행 중)
+    pub ttm_squeeze: Option<bool>,
+    /// TTM Squeeze 연속 기간 (일)
+    pub ttm_squeeze_cnt: Option<i32>,
 }

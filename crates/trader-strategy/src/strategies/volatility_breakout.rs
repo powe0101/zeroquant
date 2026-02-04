@@ -21,7 +21,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use trader_core::domain::{RouteState, StrategyContext};
-use crate::strategies::common::deserialize_symbol;
+use crate::strategies::common::deserialize_ticker;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Timelike, Utc};
@@ -32,14 +32,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use tracing::{debug, info};
-use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal, Symbol};
+use trader_core::{MarketData, MarketDataType, MarketType, Order, Position, Side, Signal};
 
 /// 변동성 돌파 전략 설정.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VolatilityBreakoutConfig {
-    /// 거래 심볼 (예: "BTC/USDT")
-    #[serde(deserialize_with = "deserialize_symbol")]
-    pub symbol: String,
+    /// 거래 티커 (예: "BTC/USDT")
+    #[serde(deserialize_with = "deserialize_ticker")]
+    pub ticker:  String,
 
     /// 돌파 K 계수 (기본값: 0.5)
     /// K가 높을수록 신호는 적지만 더 강한 신호
@@ -132,7 +132,7 @@ fn default_min_global_score() -> Decimal {
 impl Default for VolatilityBreakoutConfig {
     fn default() -> Self {
         Self {
-            symbol: "BTC/USDT".to_string(),
+            ticker: "BTC/USDT".to_string(),
             k_factor: 0.5,
             lookback_period: 1,
             use_atr: false,
@@ -175,7 +175,7 @@ struct PositionState {
 /// 변동성 돌파 전략.
 pub struct VolatilityBreakoutStrategy {
     config: Option<VolatilityBreakoutConfig>,
-    symbol: Option<Symbol>,
+    ticker: Option<String>,
     context: Option<Arc<RwLock<StrategyContext>>>,
 
     /// 과거 기간 데이터
@@ -220,7 +220,7 @@ impl VolatilityBreakoutStrategy {
     pub fn new() -> Self {
         Self {
             config: None,
-            symbol: None,
+            ticker: None,
             context: None,
             period_history: VecDeque::new(),
             current_period: None,
@@ -360,7 +360,7 @@ impl VolatilityBreakoutStrategy {
         let Some(config) = self.config.as_ref() else {
             return false;
         };
-        let ticker = &config.symbol;
+        let ticker = &config.ticker;
 
         let Some(ctx) = self.context.as_ref() else {
             return true;
@@ -447,7 +447,7 @@ impl VolatilityBreakoutStrategy {
             Some(c) => c,
             None => return Vec::new(), // 초기화되지 않은 경우
         };
-        let symbol = match self.symbol.as_ref() {
+        let ticker = match self.ticker.as_ref() {
             Some(s) => s.clone(),
             None => return Vec::new(), // 초기화되지 않은 경우
         };
@@ -476,7 +476,7 @@ impl VolatilityBreakoutStrategy {
                 let reason = if hit_stop { "stop_loss" } else { "take_profit" };
 
                 signals.push(
-                    Signal::exit("volatility_breakout", symbol.clone(), exit_side)
+                    Signal::exit("volatility_breakout", ticker.clone(), exit_side)
                         .with_strength(1.0)
                         .with_prices(Some(current_price), None, None)
                         .with_metadata("exit_reason", json!(reason)),
@@ -564,7 +564,7 @@ impl VolatilityBreakoutStrategy {
             let take_profit = current_price + range * tp_mult;
 
             signals.push(
-                Signal::entry("volatility_breakout", symbol.clone(), Side::Buy)
+                Signal::entry("volatility_breakout", ticker.clone(), Side::Buy)
                     .with_strength(0.5)
                     .with_prices(Some(current_price), Some(stop_loss), Some(take_profit))
                     .with_metadata("breakout_level", json!(upper_breakout.to_string()))
@@ -604,7 +604,7 @@ impl VolatilityBreakoutStrategy {
             let take_profit = current_price - range * tp_mult;
 
             signals.push(
-                Signal::entry("volatility_breakout", symbol.clone(), Side::Sell)
+                Signal::entry("volatility_breakout", ticker.clone(), Side::Sell)
                     .with_strength(0.5)
                     .with_prices(Some(current_price), Some(stop_loss), Some(take_profit))
                     .with_metadata("breakout_level", json!(lower_breakout.to_string()))
@@ -661,13 +661,13 @@ impl Strategy for VolatilityBreakoutStrategy {
         let vb_config: VolatilityBreakoutConfig = serde_json::from_value(config)?;
 
         info!(
-            symbol = %vb_config.symbol,
+            ticker = %vb_config.ticker,
             k_factor = vb_config.k_factor,
             use_atr = vb_config.use_atr,
             "변동성 돌파 전략 초기화"
         );
 
-        self.symbol = Symbol::from_string(&vb_config.symbol, MarketType::Crypto);
+        self.ticker = Some(vb_config.ticker.clone());
         self.config = Some(vb_config);
         self.initialized = true;
 
@@ -682,12 +682,12 @@ impl Strategy for VolatilityBreakoutStrategy {
             return Ok(vec![]);
         }
 
-        let symbol_str = match self.config.as_ref() {
-            Some(c) => c.symbol.clone(),
+        let ticker_str = match self.config.as_ref() {
+            Some(c) => c.ticker.clone(),
             None => return Ok(vec![]), // 초기화되지 않은 경우
         };
 
-        if data.symbol.to_string() != symbol_str {
+        if data.ticker.to_string() != ticker_str {
             return Ok(vec![]);
         }
 
@@ -802,7 +802,7 @@ mod tests {
     use trader_core::{Kline, Timeframe};
 
     fn create_kline_at_time(
-        symbol: &Symbol,
+        ticker: &String,
         open: Decimal,
         high: Decimal,
         low: Decimal,
@@ -811,7 +811,7 @@ mod tests {
     ) -> MarketData {
         let timestamp = Utc.with_ymd_and_hms(2024, 1, 1, hour, 0, 0).unwrap();
         let kline = Kline::new(
-            symbol.clone(),
+            ticker.clone(),
             Timeframe::H1,
             timestamp,
             open,
@@ -829,7 +829,7 @@ mod tests {
         let mut strategy = VolatilityBreakoutStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "k_factor": 0.5,
             "use_atr": false
         });
@@ -843,7 +843,7 @@ mod tests {
         let mut strategy = VolatilityBreakoutStrategy::new();
 
         let config = json!({
-            "symbol": "BTC/USDT",
+            "ticker": "BTC/USDT",
             "k_factor": 0.5,
             "min_range_pct": 0.1,
             "max_range_pct": 20.0
@@ -851,11 +851,11 @@ mod tests {
 
         strategy.initialize(config).await.unwrap();
 
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
 
         // First period: establish range (high-low = 1000)
         let data1 = create_kline_at_time(
-            &symbol,
+            &ticker,
             dec!(50000),
             dec!(50500),
             dec!(49500),
@@ -866,7 +866,7 @@ mod tests {
 
         // New period starts
         let data2 = create_kline_at_time(
-            &symbol,
+            &ticker,
             dec!(50200),
             dec!(50200),
             dec!(50200),
@@ -880,7 +880,7 @@ mod tests {
 
         // 가격이 상방 돌파
         let data3 = create_kline_at_time(
-            &symbol,
+            &ticker,
             dec!(50200),
             dec!(51000),
             dec!(50200),
@@ -921,7 +921,7 @@ register_strategy! {
     name: "변동성 돌파",
     description: "전일 변동폭을 돌파할 때 진입하는 전략입니다.",
     timeframe: "1d",
-    symbols: [],
+    tickers: [],
     category: Daily,
     markets: [Crypto, Stock, Stock],
     type: VolatilityBreakoutStrategy

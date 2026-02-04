@@ -16,6 +16,7 @@ import type {
   WeeklyPnLItem,
   MonthlyPnLItem,
   YearlyPnLItem,
+  TradingInsightsResponse,
 } from '../../api/client'
 
 // 기간 선택 타입
@@ -27,6 +28,8 @@ interface PnLAnalysisPanelProps {
   weeklyData: WeeklyPnLItem[]
   monthlyData: MonthlyPnLItem[]
   yearlyData: YearlyPnLItem[]
+  /** 투자 인사이트 (상세 통계용) */
+  insights?: TradingInsightsResponse | null
 }
 
 export function PnLAnalysisPanel(props: PnLAnalysisPanelProps) {
@@ -209,6 +212,110 @@ export function PnLAnalysisPanel(props: PnLAnalysisPanelProps) {
           />
         </Show>
       </div>
+
+      {/* 상세 통계 테이블 */}
+      <Show when={props.insights}>
+        <div class="bg-gray-700/30 rounded-lg p-4">
+          <h4 class="text-lg font-semibold text-white mb-4">📊 상세 통계</h4>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* 거래 통계 */}
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">총 거래 수</div>
+              <div class="text-xl font-bold text-white">{props.insights!.total_trades}</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">승/패</div>
+              <div class="text-xl font-bold">
+                <span class="text-green-400">{props.insights!.winning_trades}</span>
+                <span class="text-gray-500"> / </span>
+                <span class="text-red-400">{props.insights!.losing_trades}</span>
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">승률</div>
+              <div class="text-xl font-bold text-white">{props.insights!.win_rate_pct}%</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">Profit Factor</div>
+              <div class={`text-xl font-bold ${getPnLColor(parseFloat(props.insights!.profit_factor || '0') - 1)}`}>
+                {props.insights!.profit_factor || '-'}
+              </div>
+            </div>
+
+            {/* 평균 손익 */}
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">평균 수익</div>
+              <div class="text-lg font-bold text-green-400">
+                {formatCurrency(props.insights!.avg_win)}
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">평균 손실</div>
+              <div class="text-lg font-bold text-red-400">
+                {formatCurrency(props.insights!.avg_loss)}
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">최대 수익</div>
+              <div class="text-lg font-bold text-green-400">
+                {formatCurrency(props.insights!.largest_win)}
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">최대 손실</div>
+              <div class="text-lg font-bold text-red-400">
+                {formatCurrency(props.insights!.largest_loss)}
+              </div>
+            </div>
+
+            {/* 기간 및 활동 통계 */}
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">거래 기간</div>
+              <div class="text-lg font-bold text-white">{props.insights!.trading_period_days}일</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">활동 거래일</div>
+              <div class="text-lg font-bold text-white">{props.insights!.active_trading_days}일</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">거래 종목 수</div>
+              <div class="text-lg font-bold text-white">{props.insights!.unique_symbols}</div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">총 수수료</div>
+              <div class="text-lg font-bold text-orange-400">
+                {formatCurrency(props.insights!.total_fees)}
+              </div>
+            </div>
+
+            {/* 고급 통계 (연속 승/패, Max Drawdown) */}
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">최대 연속 승</div>
+              <div class="text-lg font-bold text-green-400">
+                {props.insights!.max_consecutive_wins ?? '-'}연승
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">최대 연속 패</div>
+              <div class="text-lg font-bold text-red-400">
+                {props.insights!.max_consecutive_losses ?? '-'}연패
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">Max Drawdown</div>
+              <div class="text-lg font-bold text-red-400">
+                {props.insights!.max_drawdown ? formatCurrency(props.insights!.max_drawdown) : '-'}
+              </div>
+            </div>
+            <div class="bg-gray-800/50 rounded-lg p-3">
+              <div class="text-gray-400 text-xs mb-1">MDD %</div>
+              <div class="text-lg font-bold text-red-400">
+                {props.insights!.max_drawdown_pct ? `${props.insights!.max_drawdown_pct}%` : '-'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
   )
 }

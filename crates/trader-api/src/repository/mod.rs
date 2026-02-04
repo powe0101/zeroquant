@@ -5,6 +5,7 @@
 
 pub mod backtest_results;
 pub mod cost_basis;
+pub mod credentials;
 pub mod equity_history;
 pub mod execution_cache;
 pub mod journal;
@@ -20,10 +21,18 @@ pub mod strategies;
 pub mod symbol_fundamental;
 pub mod symbol_info;
 pub mod global_score;
+pub mod kis_token;
+pub mod watchlist;
 
 pub use backtest_results::{
     BacktestResultDto, BacktestResultInput, BacktestResultRecord, BacktestResultsRepository,
     ListResultsFilter, ListResultsResponse as BacktestListResponse,
+};
+pub use credentials::{
+    create_exchange_providers_from_credential,
+    create_kis_kr_client_from_credential,
+    get_active_credential_id,
+    ExchangeProviderPair,
 };
 pub use equity_history::{
     EquityHistoryRepository, EquityPoint, ExecutionForSync, MonthlyReturn, PortfolioSnapshot,
@@ -40,8 +49,8 @@ pub use positions::{
     SyncResult as PositionSyncResult,
 };
 pub use screening::{
-    MomentumScreenResult, ScreeningFilter, ScreeningPreset, ScreeningRepository, ScreeningResult,
-    SectorRsResult,
+    CreatePresetRequest, MomentumScreenResult, ScreeningFilter, ScreeningPreset,
+    ScreeningPresetRecord, ScreeningRepository, ScreeningResult, SectorRsResult,
 };
 pub use reality_check::{
     CalculationResult, DailyStats, PriceSnapshot, RankStats, RealityCheckRecord,
@@ -49,7 +58,8 @@ pub use reality_check::{
 };
 pub use strategies::StrategyRepository;
 pub use symbol_fundamental::{
-    NewSymbolFundamental, SymbolFundamental, SymbolFundamentalRepository, SymbolWithFundamental,
+    IndicatorUpdate, NewSymbolFundamental, SymbolFundamental, SymbolFundamentalRepository,
+    SymbolWithFundamental,
 };
 pub use symbol_info::{
     DeactivatedStats, ExternalFetchError, FailedSymbolInfo, FetchFailureResult, NewSymbolInfo,
@@ -58,9 +68,12 @@ pub use symbol_info::{
 
 pub use global_score::{
     GlobalScoreRecord, GlobalScoreRepository, RankedSymbol, RankingFilter,
+    SevenFactorData, SevenFactorResponse,
 };
 
 pub use journal::{
+    // 고급 거래 통계
+    AdvancedTradingStats,
     CumulativePnL,
     CurrentPosition,
     DailySummary,
@@ -70,6 +83,8 @@ pub use journal::{
     PnLSummary,
     PositionSnapshotInput,
     PositionSnapshotRecord,
+    // 손익 재계산
+    RecalculateResult,
     StrategyPerformance,
     SymbolPnL,
     SyncResult as JournalSyncResult,
@@ -91,3 +106,10 @@ pub use signal_alert_rule::{
     CreateAlertRuleRequest, SignalAlertRule, SignalAlertRuleRepository, UpdateAlertRuleRequest,
 };
 pub use signal_marker::SignalMarkerRepository;
+
+pub use watchlist::{
+    NewWatchlist, NewWatchlistItem, UpdateWatchlistItem, WatchlistItemRecord, WatchlistRecord,
+    WatchlistRepository, WatchlistWithCount,
+};
+
+pub use kis_token::KisTokenRepository;

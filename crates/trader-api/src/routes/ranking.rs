@@ -1,14 +1,16 @@
 //! Ranking API 라우트
 //!
-//! GlobalScore 기반 종목 랭킹 API를 제공합니다.
+//! GlobalScore 기반 종목 랭킹 및 7Factor 분석 API를 제공합니다.
 //!
 //! # 엔드포인트
 //!
 //! - `POST /api/v1/ranking/global` - 모든 심볼 GlobalScore 계산
 //! - `GET /api/v1/ranking/top` - 상위 랭킹 조회
+//! - `GET /api/v1/ranking/7factor/{ticker}` - 7Factor 데이터 조회
+//! - `POST /api/v1/ranking/7factor/batch` - 7Factor 일괄 조회
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -17,9 +19,10 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info};
-use utoipa::ToSchema;
+use ts_rs::TS;
+use utoipa::{IntoParams, ToSchema};
 
-use crate::repository::{GlobalScoreRepository, RankedSymbol, RankingFilter};
+use crate::repository::{GlobalScoreRepository, RankedSymbol, RankingFilter, SevenFactorResponse};
 use crate::state::AppState;
 
 // ================================================================================================
@@ -27,7 +30,8 @@ use crate::state::AppState;
 // ================================================================================================
 
 /// GlobalScore 계산 응답
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "ranking/")]
 pub struct CalculateResponse {
     /// 처리된 종목 수
     pub processed: i32,
@@ -38,7 +42,8 @@ pub struct CalculateResponse {
 }
 
 /// 랭킹 조회 쿼리
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, IntoParams, TS)]
+#[ts(export, export_to = "ranking/")]
 pub struct RankingQuery {
     /// 시장 필터 (KR, US 등)
     #[serde(default)]
@@ -55,10 +60,15 @@ pub struct RankingQuery {
     /// 반환 개수 (기본 50, 최대 500)
     #[serde(default)]
     pub limit: Option<i64>,
+
+    /// RouteState 필터 (ATTACK, ARMED, WATCH, REST)
+    #[serde(default)]
+    pub route_state: Option<String>,
 }
 
 /// 랭킹 조회 응답
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "ranking/")]
 pub struct RankingResponse {
     /// 종목 목록
     pub symbols: Vec<RankedSymbol>,
@@ -69,12 +79,48 @@ pub struct RankingResponse {
 }
 
 /// 필터 정보
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "ranking/")]
 pub struct FilterInfo {
     pub market: Option<String>,
     pub grade: Option<String>,
     pub min_score: Option<String>,
     pub limit: i64,
+    pub route_state: Option<String>,
+}
+
+/// 7Factor 조회 쿼리
+#[derive(Debug, Deserialize, ToSchema, IntoParams, TS)]
+#[ts(export, export_to = "ranking/")]
+pub struct SevenFactorQuery {
+    /// 시장 (기본: KR)
+    #[serde(default = "default_market")]
+    pub market: String,
+}
+
+fn default_market() -> String {
+    "KR".to_string()
+}
+
+/// 7Factor 일괄 조회 요청
+#[derive(Debug, Deserialize, ToSchema, TS)]
+#[ts(export, export_to = "ranking/")]
+pub struct SevenFactorBatchRequest {
+    /// 티커 목록
+    pub tickers: Vec<String>,
+    /// 시장 (기본: KR)
+    #[serde(default = "default_market")]
+    pub market: String,
+}
+
+/// 7Factor 일괄 조회 응답
+#[derive(Debug, Serialize, ToSchema, TS)]
+#[ts(export, export_to = "ranking/")]
+pub struct SevenFactorBatchResponse {
+    /// 7Factor 데이터 목록
+    pub factors: Vec<SevenFactorResponse>,
+    /// 총 개수
+    pub total: usize,
 }
 
 // ================================================================================================
@@ -82,7 +128,16 @@ pub struct FilterInfo {
 // ================================================================================================
 
 /// POST /api/v1/ranking/global - 모든 심볼 GlobalScore 계산
-async fn calculate_global(
+#[utoipa::path(
+    post,
+    path = "/api/v1/ranking/global",
+    tag = "ranking",
+    responses(
+        (status = 200, description = "계산 완료", body = CalculateResponse),
+        (status = 500, description = "서버 에러")
+    )
+)]
+pub async fn calculate_global(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CalculateResponse>, (StatusCode, String)> {
     let started_at = chrono::Utc::now();
@@ -116,7 +171,17 @@ async fn calculate_global(
 }
 
 /// GET /api/v1/ranking/top - 상위 랭킹 조회
-async fn get_top_ranked(
+#[utoipa::path(
+    get,
+    path = "/api/v1/ranking/top",
+    tag = "ranking",
+    params(RankingQuery),
+    responses(
+        (status = 200, description = "랭킹 목록", body = RankingResponse),
+        (status = 500, description = "서버 에러")
+    )
+)]
+pub async fn get_top_ranked(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RankingQuery>,
 ) -> Result<Json<RankingResponse>, (StatusCode, String)> {
@@ -139,6 +204,7 @@ async fn get_top_ranked(
         grade: query.grade.clone(),
         min_score,
         limit: query.limit,
+        route_state: query.route_state.clone(),
     };
 
     let symbols = GlobalScoreRepository::get_top_ranked(db_pool, filter)
@@ -160,8 +226,85 @@ async fn get_top_ranked(
             grade: query.grade,
             min_score: query.min_score,
             limit: query.limit.unwrap_or(50),
+            route_state: query.route_state,
         },
     }))
+}
+
+/// GET /api/v1/ranking/7factor/{ticker} - 특정 종목의 7Factor 데이터 조회
+#[utoipa::path(
+    get,
+    path = "/api/v1/ranking/7factor/{ticker}",
+    tag = "ranking",
+    params(
+        ("ticker" = String, Path, description = "종목 티커"),
+        SevenFactorQuery
+    ),
+    responses(
+        (status = 200, description = "7Factor 데이터", body = SevenFactorResponse),
+        (status = 404, description = "종목 없음"),
+        (status = 500, description = "서버 에러")
+    )
+)]
+pub async fn get_seven_factor(
+    State(state): State<Arc<AppState>>,
+    Path(ticker): Path<String>,
+    Query(query): Query<SevenFactorQuery>,
+) -> Result<Json<SevenFactorResponse>, (StatusCode, String)> {
+    debug!("7Factor 조회: {} ({})", ticker, query.market);
+
+    let db_pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Database not available".to_string()))?;
+
+    let result = GlobalScoreRepository::get_seven_factor(db_pool, &ticker, &query.market)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("7Factor 조회 실패: {}", e),
+            )
+        })?;
+
+    result.ok_or_else(|| (StatusCode::NOT_FOUND, format!("종목을 찾을 수 없습니다: {}", ticker)))
+        .map(Json)
+}
+
+/// POST /api/v1/ranking/7factor/batch - 7Factor 일괄 조회
+#[utoipa::path(
+    post,
+    path = "/api/v1/ranking/7factor/batch",
+    tag = "ranking",
+    request_body = SevenFactorBatchRequest,
+    responses(
+        (status = 200, description = "7Factor 일괄 데이터", body = SevenFactorBatchResponse),
+        (status = 500, description = "서버 에러")
+    )
+)]
+pub async fn get_seven_factor_batch(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SevenFactorBatchRequest>,
+) -> Result<Json<SevenFactorBatchResponse>, (StatusCode, String)> {
+    debug!("7Factor 일괄 조회: {:?} ({})", request.tickers, request.market);
+
+    let db_pool = state
+        .db_pool
+        .as_ref()
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Database not available".to_string()))?;
+
+    let factors = GlobalScoreRepository::get_seven_factor_batch(db_pool, &request.tickers, &request.market)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("7Factor 일괄 조회 실패: {}", e),
+            )
+        })?;
+
+    let total = factors.len();
+
+    Ok(Json(SevenFactorBatchResponse { factors, total }))
 }
 
 // ================================================================================================
@@ -173,4 +316,6 @@ pub fn ranking_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/global", post(calculate_global))
         .route("/top", get(get_top_ranked))
+        .route("/7factor/{ticker}", get(get_seven_factor))
+        .route("/7factor/batch", post(get_seven_factor_batch))
 }

@@ -8,6 +8,8 @@ use std::time::Duration;
 pub struct CollectorConfig {
     /// 데이터베이스 URL
     pub database_url: String,
+    /// 데이터 프로바이더 설정
+    pub providers: DataProviderConfig,
     /// 심볼 동기화 설정
     pub symbol_sync: SymbolSyncConfig,
     /// OHLCV 수집 설정
@@ -16,6 +18,20 @@ pub struct CollectorConfig {
     pub fundamental_collect: FundamentalCollectConfig,
     /// 데몬 모드 설정
     pub daemon: DaemonConfig,
+}
+
+/// 데이터 프로바이더 설정
+///
+/// 각 프로바이더의 활성화 여부를 제어합니다.
+/// KRX API는 사용 권한 신청 후 활성화하세요.
+#[derive(Debug, Clone)]
+pub struct DataProviderConfig {
+    /// KRX API 활성화 (OHLCV, Fundamental)
+    /// 기본값: false (승인 전까지 비활성화)
+    pub krx_api_enabled: bool,
+    /// Yahoo Finance 활성화 (OHLCV)
+    /// 기본값: true
+    pub yahoo_enabled: bool,
 }
 
 /// 심볼 동기화 설정
@@ -48,12 +64,12 @@ pub struct OhlcvCollectConfig {
     pub end_date: Option<String>,
 }
 
-/// Fundamental 수집 설정
+/// Fundamental 및 지표 수집 설정
 #[derive(Debug, Clone)]
 pub struct FundamentalCollectConfig {
     /// 배치당 심볼 수
     pub batch_size: i64,
-    /// 갱신 기준 일수 (기본: 7일)
+    /// 갱신 기준 일수 (기본: 1일 - 지표는 매일 갱신 필요)
     pub stale_days: i64,
     /// API 요청 간 딜레이 (밀리초)
     pub request_delay_ms: u64,
@@ -81,6 +97,12 @@ impl CollectorConfig {
 
         Ok(Self {
             database_url,
+            providers: DataProviderConfig {
+                // KRX API: 기본 비활성화 (승인 후 true로 변경)
+                krx_api_enabled: env_var_bool("PROVIDER_KRX_API_ENABLED", false),
+                // Yahoo Finance: 기본 활성화
+                yahoo_enabled: env_var_bool("PROVIDER_YAHOO_ENABLED", true),
+            },
             symbol_sync: SymbolSyncConfig {
                 min_symbol_count: env_var_parse("SYMBOL_SYNC_MIN_COUNT", 100),
                 enable_krx: env_var_bool("SYMBOL_SYNC_KRX", true),
@@ -96,9 +118,9 @@ impl CollectorConfig {
                 end_date: std::env::var("OHLCV_END_DATE").ok(),
             },
             fundamental_collect: FundamentalCollectConfig {
-                batch_size: env_var_parse("FUNDAMENTAL_BATCH_SIZE", 50),
-                stale_days: env_var_parse("FUNDAMENTAL_STALE_DAYS", 7),
-                request_delay_ms: env_var_parse("FUNDAMENTAL_REQUEST_DELAY_MS", 2000),
+                batch_size: env_var_parse("INDICATOR_BATCH_SIZE", 100),
+                stale_days: env_var_parse("INDICATOR_STALE_DAYS", 1),
+                request_delay_ms: env_var_parse("INDICATOR_REQUEST_DELAY_MS", 50),
                 include_ohlcv: env_var_bool("FUNDAMENTAL_INCLUDE_OHLCV", true),
             },
             daemon: DaemonConfig {

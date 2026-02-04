@@ -191,7 +191,7 @@ impl OrderManager {
         }
 
         let order_id = order.id;
-        let symbol = order.symbol.to_string();
+        let symbol = order.ticker.to_string();
         let strategy = order.strategy_id.clone();
 
         // 메인 저장소에 추가
@@ -654,7 +654,7 @@ impl OrderManager {
         for order_id in orders_to_remove {
             if let Some(order) = self.orders.remove(&order_id) {
                 // 심볼 인덱스에서 제거
-                if let Some(ids) = self.orders_by_symbol.get_mut(&order.symbol.to_string()) {
+                if let Some(ids) = self.orders_by_symbol.get_mut(&order.ticker.to_string()) {
                     ids.retain(|id| *id != order_id);
                 }
 
@@ -703,10 +703,9 @@ mod tests {
     }
 
     fn create_test_order(side: Side) -> Order {
-        let symbol = Symbol::crypto("BTC", "USDT");
         let request = match side {
-            Side::Buy => OrderRequest::market_buy(symbol, dec!(0.1)),
-            Side::Sell => OrderRequest::market_sell(symbol, dec!(0.1)),
+            Side::Buy => OrderRequest::market_buy("BTC/USDT".to_string(), dec!(0.1)),
+            Side::Sell => OrderRequest::market_sell("BTC/USDT".to_string(), dec!(0.1)),
         };
         Order::from_request(request.with_strategy("test"), "binance")
     }
@@ -714,8 +713,7 @@ mod tests {
     #[test]
     fn test_create_order() {
         let mut manager = OrderManager::new();
-        let symbol = Symbol::crypto("BTC", "USDT");
-        let request = OrderRequest::market_buy(symbol, dec!(0.1)).with_strategy("grid");
+        let request = OrderRequest::market_buy("BTC/USDT".to_string(), dec!(0.1)).with_strategy("grid");
 
         let order = manager.create_order(request, "binance").unwrap();
 
@@ -749,7 +747,7 @@ mod tests {
         let status = OrderStatus {
             order_id: "BINANCE123".to_string(),
             client_order_id: None,
-            symbol: None,
+            ticker: None,
             side: None,
             quantity: None,
             price: None,
@@ -838,7 +836,7 @@ mod tests {
         let status = OrderStatus {
             order_id: "BINANCE123".to_string(),
             client_order_id: None,
-            symbol: None,
+            ticker: None,
             side: None,
             quantity: None,
             price: None,
@@ -864,8 +862,8 @@ mod tests {
         manager.add_order(btc_order1).unwrap();
         manager.add_order(btc_order2).unwrap();
 
-        let symbol = Symbol::crypto("ETH", "USDT");
-        let eth_request = OrderRequest::market_buy(symbol, dec!(1.0));
+        let eth_ticker = "ETH/USDT".to_string();
+        let eth_request = OrderRequest::market_buy(eth_ticker, dec!(1.0));
         manager.create_order(eth_request, "binance").unwrap();
 
         let btc_orders = manager.get_orders_for_symbol("BTC/USDT");
@@ -879,11 +877,11 @@ mod tests {
     fn test_get_orders_by_strategy() {
         let mut manager = OrderManager::new();
 
-        let symbol = Symbol::crypto("BTC", "USDT");
+        let ticker = "BTC/USDT".to_string();
 
         let grid_request =
-            OrderRequest::market_buy(symbol.clone(), dec!(0.1)).with_strategy("grid");
-        let rsi_request = OrderRequest::market_sell(symbol, dec!(0.2)).with_strategy("rsi");
+            OrderRequest::market_buy(ticker.clone(), dec!(0.1)).with_strategy("grid");
+        let rsi_request = OrderRequest::market_sell(ticker, dec!(0.2)).with_strategy("rsi");
 
         manager.create_order(grid_request, "binance").unwrap();
         manager.create_order(rsi_request, "binance").unwrap();
@@ -906,7 +904,7 @@ mod tests {
         let status = OrderStatus {
             order_id: "BINANCE_ORDER_123".to_string(),
             client_order_id: None,
-            symbol: None,
+            ticker: None,
             side: None,
             quantity: None,
             price: None,
@@ -934,7 +932,7 @@ mod tests {
         let status = OrderStatus {
             order_id: "1".to_string(),
             client_order_id: None,
-            symbol: None,
+            ticker: None,
             side: None,
             quantity: None,
             price: None,
@@ -977,7 +975,7 @@ mod tests {
         let status_open = OrderStatus {
             order_id: "123".to_string(),
             client_order_id: None,
-            symbol: None,
+            ticker: None,
             side: None,
             quantity: None,
             price: None,
@@ -992,7 +990,7 @@ mod tests {
         let status_filled = OrderStatus {
             order_id: "123".to_string(),
             client_order_id: None,
-            symbol: None,
+            ticker: None,
             side: None,
             quantity: None,
             price: None,

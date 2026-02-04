@@ -1,5 +1,7 @@
 # 인프라 환경 가이드
 
+> **버전**: v0.6.0 | **최종 업데이트**: 2026-02-04
+>
 > ⚠️ **PostgreSQL과 Redis는 Podman/Docker 컨테이너에서 실행됩니다.**
 > 로컬 `psql` 또는 `redis-cli` 명령어를 직접 사용하지 마세요.
 
@@ -82,3 +84,100 @@ redis-cli
 podman exec -it trader-timescaledb psql -U trader -d trader
 podman exec -it trader-redis redis-cli
 ```
+
+---
+
+## 환경변수 설정 (v0.6.0)
+
+### 기본 설정
+
+```bash
+# .env 파일 예시
+DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
+REDIS_URL=redis://localhost:6379
+```
+
+### 데이터 프로바이더 토글
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `PROVIDER_KRX_API_ENABLED` | false | KRX OPEN API 활성화 (승인 필요) |
+| `PROVIDER_YAHOO_ENABLED` | true | Yahoo Finance 활성화 |
+
+### 심볼 동기화 설정
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `SYMBOL_SYNC_MIN_COUNT` | 100 | 이 수 이하면 자동 동기화 |
+| `SYMBOL_SYNC_KRX` | true | KRX 종목 동기화 |
+| `SYMBOL_SYNC_BINANCE` | true | Binance USDT 페어 동기화 |
+| `SYMBOL_SYNC_YAHOO` | true | Yahoo Finance 주요 종목 동기화 |
+| `SYMBOL_SYNC_YAHOO_MAX` | 500 | Yahoo 최대 수집 종목 수 |
+
+### OHLCV 수집 설정
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `OHLCV_BATCH_SIZE` | 50 | 배치당 심볼 수 |
+| `OHLCV_STALE_DAYS` | 1 | 갱신 기준 일수 |
+| `OHLCV_REQUEST_DELAY_MS` | 500 | API 요청 간 딜레이 (ms) |
+
+### 지표/Fundamental 설정
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `INDICATOR_BATCH_SIZE` | 100 | 배치당 심볼 수 |
+| `INDICATOR_STALE_DAYS` | 1 | 갱신 기준 일수 |
+| `INDICATOR_REQUEST_DELAY_MS` | 50 | 요청 간 딜레이 |
+| `FUNDAMENTAL_COLLECT_ENABLED` | true | Fundamental 수집 활성화 |
+| `FUNDAMENTAL_STALE_DAYS` | 7 | 갱신 기준 (일) |
+| `FUNDAMENTAL_BATCH_SIZE` | 50 | 배치당 처리 심볼 수 |
+
+### 데몬 모드 설정 (trader-collector)
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `DAEMON_INTERVAL_MINUTES` | 60 | 워크플로우 실행 주기 |
+
+### 완전한 .env 예시
+
+```bash
+# 기본 연결
+DATABASE_URL=postgresql://trader:trader_secret@localhost:5432/trader
+REDIS_URL=redis://localhost:6379
+
+# 데이터 프로바이더 토글
+PROVIDER_KRX_API_ENABLED=false   # KRX API 승인 전까지 false
+PROVIDER_YAHOO_ENABLED=true      # Yahoo Finance 활성화
+
+# 심볼 동기화
+SYMBOL_SYNC_MIN_COUNT=100
+SYMBOL_SYNC_KRX=true
+SYMBOL_SYNC_BINANCE=true
+SYMBOL_SYNC_YAHOO=true
+SYMBOL_SYNC_YAHOO_MAX=500
+
+# OHLCV 수집
+OHLCV_BATCH_SIZE=50
+OHLCV_STALE_DAYS=1
+OHLCV_REQUEST_DELAY_MS=500
+
+# 지표 동기화
+INDICATOR_BATCH_SIZE=100
+INDICATOR_STALE_DAYS=1
+INDICATOR_REQUEST_DELAY_MS=50
+
+# 데몬 모드
+DAEMON_INTERVAL_MINUTES=60
+
+# 로깅
+RUST_LOG=info
+```
+
+---
+
+## 참고 문서
+
+- [Collector 빠른 시작](./collector_quick_start.md) - Standalone Collector 가이드
+- [아키텍처](./architecture.md) - 시스템 구조
+- [API 문서](./api.md) - REST API 명세

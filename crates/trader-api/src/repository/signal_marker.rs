@@ -39,7 +39,7 @@ impl SignalMarkerRepository {
             LIMIT 1
             "#
         )
-        .bind(&marker.symbol.base)
+        .bind(&marker.ticker)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| (
@@ -50,7 +50,7 @@ impl SignalMarkerRepository {
             StatusCode::NOT_FOUND,
             Json(ApiErrorResponse::new(
                 "NOT_FOUND",
-                format!("Symbol not found: {}", marker.symbol.base)
+                format!("Symbol not found: {}", marker.ticker)
             ))
         ))?;
 
@@ -366,7 +366,7 @@ impl SignalMarkerRow {
 
         Ok(SignalMarker {
             id: self.id,
-            symbol,
+            ticker: symbol.to_string(),
             timestamp: self.timestamp,
             signal_type,
             side,

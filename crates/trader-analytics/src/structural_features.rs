@@ -267,15 +267,14 @@ impl StructuralFeaturesCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trader_core::types::{MarketType, Symbol};
 
     fn create_test_candles(count: usize) -> Vec<Kline> {
-        let symbol = Symbol::new("TEST", "", MarketType::Stock);
+        let ticker = "TEST/USD".to_string();
         (0..count)
             .map(|i| {
                 let now = chrono::Utc::now();
                 Kline {
-                    symbol: symbol.clone(),
+                    ticker: ticker.clone(),
                     timeframe: trader_core::types::Timeframe::D1,
                     open_time: now,
                     close_time: now,

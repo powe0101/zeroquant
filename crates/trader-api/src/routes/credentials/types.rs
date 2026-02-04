@@ -400,6 +400,7 @@ pub(crate) fn mask_api_key(key: &str) -> String {
 /// - `"stock_kr"`: 한국 주식 (kis)
 /// - `"stock_us"`: 미국 주식 (interactive_brokers, ib)
 /// - `"forex"`: 외환 (oanda)
+/// - `"data_provider"`: 데이터 제공자 (krx - KRX Open API)
 /// - `"unknown"`: 알 수 없는 거래소
 pub(crate) fn infer_market_type(exchange_id: &str) -> &'static str {
     match exchange_id {
@@ -407,6 +408,7 @@ pub(crate) fn infer_market_type(exchange_id: &str) -> &'static str {
         "kis" => "stock_kr",
         "interactive_brokers" | "ib" => "stock_us",
         "oanda" => "forex",
+        "krx" => "data_provider",
         _ => "unknown",
     }
 }
@@ -476,6 +478,7 @@ mod tests {
         assert_eq!(infer_market_type("interactive_brokers"), "stock_us");
         assert_eq!(infer_market_type("ib"), "stock_us");
         assert_eq!(infer_market_type("oanda"), "forex");
+        assert_eq!(infer_market_type("krx"), "data_provider");
         assert_eq!(infer_market_type("unknown_exchange"), "unknown");
     }
 

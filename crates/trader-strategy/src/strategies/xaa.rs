@@ -50,7 +50,7 @@ use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType, Symbol};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType};
 
 /// XAA 자산 타입.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ pub enum XaaAssetType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XaaAssetInfo {
     /// 종목 코드
-    pub symbol: String,
+    pub ticker:  String,
     /// 자산 타입
     pub asset_type: XaaAssetType,
     /// 설명
@@ -81,40 +81,40 @@ pub struct XaaAssetInfo {
 impl XaaAssetInfo {
     /// 새 자산 정보 생성.
     pub fn new(
-        symbol: impl Into<String>,
+        ticker: impl Into<String>,
         asset_type: XaaAssetType,
         description: impl Into<String>,
     ) -> Self {
         Self {
-            symbol: symbol.into(),
+            ticker: ticker.into(),
             asset_type,
             description: description.into(),
         }
     }
 
     /// 카나리아 자산 생성.
-    pub fn canary(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, XaaAssetType::Canary, description)
+    pub fn canary(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, XaaAssetType::Canary, description)
     }
 
     /// 공격 자산 생성 (채권 제외).
-    pub fn offensive(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, XaaAssetType::Offensive, description)
+    pub fn offensive(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, XaaAssetType::Offensive, description)
     }
 
     /// 채권 자산 생성.
-    pub fn bond(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, XaaAssetType::Bond, description)
+    pub fn bond(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, XaaAssetType::Bond, description)
     }
 
     /// 안전 자산 생성.
-    pub fn safe(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, XaaAssetType::Safe, description)
+    pub fn safe(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, XaaAssetType::Safe, description)
     }
 
     /// 현금 대용 자산 생성.
-    pub fn cash(symbol: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::new(symbol, XaaAssetType::Cash, description)
+    pub fn cash(ticker: impl Into<String>, description: impl Into<String>) -> Self {
+        Self::new(ticker, XaaAssetType::Cash, description)
     }
 }
 
@@ -142,8 +142,8 @@ pub struct XaaConfig {
     /// 채권 자산 투자 개수 (기본: 3)
     pub bond_top_n: usize,
 
-    /// 현금 대용 심볼 (BIL, 채권 비교 기준)
-    pub cash_symbol: String,
+    /// 현금 대용 티커 (BIL, 채권 비교 기준)
+    pub cash_ticker:  String,
 
     /// 투자 비율 (총 자산 대비)
     pub invest_rate: Decimal,
@@ -203,7 +203,7 @@ impl XaaConfig {
             safe_assets: vec![XaaAssetInfo::safe("IEF", "iShares 7-10 Year Treasury ETF")],
             offensive_top_n: 4,
             bond_top_n: 3,
-            cash_symbol: "BIL".to_string(),
+            cash_ticker: "BIL".to_string(),
             invest_rate: dec!(1.0),
             rebalance_threshold: dec!(0.03),
             min_global_score: default_min_global_score(),
@@ -235,51 +235,51 @@ impl XaaConfig {
             safe_assets: vec![XaaAssetInfo::safe("305080", "TIGER 미국채10년선물")],
             offensive_top_n: 4,
             bond_top_n: 3,
-            cash_symbol: "BIL".to_string(),
+            cash_ticker: "BIL".to_string(),
             invest_rate: dec!(1.0),
             rebalance_threshold: dec!(0.03),
             min_global_score: default_min_global_score(),
         }
     }
 
-    /// 모든 자산 심볼 가져오기.
-    pub fn all_symbols(&self) -> Vec<String> {
-        let mut symbols: Vec<String> = Vec::new();
+    /// 모든 자산 티커 가져오기.
+    pub fn all_tickers(&self) -> Vec<String> {
+        let mut tickers: Vec<String> = Vec::new();
 
         // 카나리아 자산
         for asset in &self.canary_assets {
-            if !symbols.contains(&asset.symbol) {
-                symbols.push(asset.symbol.clone());
+            if !tickers.contains(&asset.ticker) {
+                tickers.push(asset.ticker.clone());
             }
         }
 
         // 공격 자산
         for asset in &self.offensive_assets {
-            if !symbols.contains(&asset.symbol) {
-                symbols.push(asset.symbol.clone());
+            if !tickers.contains(&asset.ticker) {
+                tickers.push(asset.ticker.clone());
             }
         }
 
         // 채권 자산
         for asset in &self.bond_assets {
-            if !symbols.contains(&asset.symbol) {
-                symbols.push(asset.symbol.clone());
+            if !tickers.contains(&asset.ticker) {
+                tickers.push(asset.ticker.clone());
             }
         }
 
         // 안전 자산
         for asset in &self.safe_assets {
-            if !symbols.contains(&asset.symbol) {
-                symbols.push(asset.symbol.clone());
+            if !tickers.contains(&asset.ticker) {
+                tickers.push(asset.ticker.clone());
             }
         }
 
         // 현금 자산 (BIL)
-        if !symbols.contains(&self.cash_symbol) {
-            symbols.push(self.cash_symbol.clone());
+        if !tickers.contains(&self.cash_ticker) {
+            tickers.push(self.cash_ticker.clone());
         }
 
-        symbols
+        tickers
     }
 }
 
@@ -287,7 +287,7 @@ impl XaaConfig {
 #[derive(Debug, Clone, Default)]
 struct AssetMomentum {
     /// 종목 코드
-    symbol: String,
+    ticker:  String,
     /// 모멘텀 스코어 (4기간 평균)
     momentum: Decimal,
     /// 6개월 모멘텀 (채권용)
@@ -405,8 +405,8 @@ impl XaaStrategy {
     }
 
     /// 가격 히스토리 업데이트.
-    fn update_price_history(&mut self, symbol: &str, price: Decimal) {
-        let history = self.price_history.entry(symbol.to_string()).or_default();
+    fn update_price_history(&mut self, ticker: &str, price: Decimal) {
+        let history = self.price_history.entry(ticker.to_string()).or_default();
         history.insert(0, price);
 
         // 최대 300일 보관
@@ -419,12 +419,12 @@ impl XaaStrategy {
     ///
     /// 공식: (1M + 3M + 6M + 12M) / 4
     /// HAA와 다르게 4로 나눠 평균을 구함.
-    fn calculate_momentum(&self, symbol: &str) -> Option<Decimal> {
-        let prices = self.price_history.get(symbol)?;
+    fn calculate_momentum(&self, ticker: &str) -> Option<Decimal> {
+        let prices = self.price_history.get(ticker)?;
 
         // 최소 240일(12개월) 데이터 필요
         if prices.len() < 240 {
-            debug!("[XAA] {} 데이터 부족: {}일", symbol, prices.len());
+            debug!("[XAA] {} 데이터 부족: {}일", ticker, prices.len());
             return None;
         }
 
@@ -453,7 +453,7 @@ impl XaaStrategy {
 
         debug!(
             "[XAA] {} Momentum: {:.4} (1M:{:.2}%, 3M:{:.2}%, 6M:{:.2}%, 12M:{:.2}%)",
-            symbol,
+            ticker,
             momentum,
             ret_1m * dec!(100),
             ret_3m * dec!(100),
@@ -467,12 +467,12 @@ impl XaaStrategy {
     /// 6개월 모멘텀 계산 (채권 전용).
     ///
     /// 공식: 6개월 수익률
-    fn calculate_momentum6(&self, symbol: &str) -> Option<Decimal> {
-        let prices = self.price_history.get(symbol)?;
+    fn calculate_momentum6(&self, ticker: &str) -> Option<Decimal> {
+        let prices = self.price_history.get(ticker)?;
 
         // 최소 120일(6개월) 데이터 필요
         if prices.len() < 121 {
-            debug!("[XAA] {} Momentum6 데이터 부족: {}일", symbol, prices.len());
+            debug!("[XAA] {} Momentum6 데이터 부족: {}일", ticker, prices.len());
             return None;
         }
 
@@ -487,7 +487,7 @@ impl XaaStrategy {
 
         debug!(
             "[XAA] {} Momentum6: {:.4} ({:.2}%)",
-            symbol,
+            ticker,
             momentum6,
             momentum6 * dec!(100)
         );
@@ -500,17 +500,17 @@ impl XaaStrategy {
     /// 카나리아 자산의 모멘텀이 음수이면 방어 모드로 전환.
     fn check_canary_assets(&self, config: &XaaConfig) -> PortfolioMode {
         for asset in &config.canary_assets {
-            if let Some(momentum) = self.calculate_momentum(&asset.symbol) {
+            if let Some(momentum) = self.calculate_momentum(&asset.ticker) {
                 if momentum < Decimal::ZERO {
                     info!(
                         "[XAA] 카나리아 {} 모멘텀 음수 ({:.4}) → 방어 모드",
-                        asset.symbol, momentum
+                        asset.ticker, momentum
                     );
                     return PortfolioMode::Defensive;
                 }
             } else {
                 // 데이터 부족 시 방어적으로 처리
-                warn!("[XAA] 카나리아 {} 데이터 부족 → 방어 모드", asset.symbol);
+                warn!("[XAA] 카나리아 {} 데이터 부족 → 방어 모드", asset.ticker);
                 return PortfolioMode::Defensive;
             }
         }
@@ -524,12 +524,12 @@ impl XaaStrategy {
         let mut ranked: Vec<AssetMomentum> = Vec::new();
 
         for asset in assets {
-            if let Some(momentum) = self.calculate_momentum(&asset.symbol) {
+            if let Some(momentum) = self.calculate_momentum(&asset.ticker) {
                 let momentum6 = self
-                    .calculate_momentum6(&asset.symbol)
+                    .calculate_momentum6(&asset.ticker)
                     .unwrap_or(Decimal::ZERO);
                 ranked.push(AssetMomentum {
-                    symbol: asset.symbol.clone(),
+                    ticker: asset.ticker.clone(),
                     momentum,
                     momentum6,
                     target_weight: Decimal::ZERO,
@@ -548,12 +548,12 @@ impl XaaStrategy {
         let mut ranked: Vec<AssetMomentum> = Vec::new();
 
         for asset in assets {
-            if let Some(momentum6) = self.calculate_momentum6(&asset.symbol) {
+            if let Some(momentum6) = self.calculate_momentum6(&asset.ticker) {
                 let momentum = self
-                    .calculate_momentum(&asset.symbol)
+                    .calculate_momentum(&asset.ticker)
                     .unwrap_or(Decimal::ZERO);
                 ranked.push(AssetMomentum {
-                    symbol: asset.symbol.clone(),
+                    ticker: asset.ticker.clone(),
                     momentum,
                     momentum6,
                     target_weight: Decimal::ZERO,
@@ -569,7 +569,7 @@ impl XaaStrategy {
 
     /// BIL 모멘텀6 가져오기.
     fn get_bil_momentum6(&self, config: &XaaConfig) -> Decimal {
-        self.calculate_momentum6(&config.cash_symbol)
+        self.calculate_momentum6(&config.cash_ticker)
             .unwrap_or(Decimal::ZERO)
     }
 
@@ -621,7 +621,7 @@ impl XaaStrategy {
         let base_weight = dec!(1.0) / Decimal::from(total_slots);
 
         // 1위 공격 자산 (음수 모멘텀 재분배용)
-        let top_offensive_symbol = ranked_offensive.first().map(|a| a.symbol.clone());
+        let top_offensive_ticker = ranked_offensive.first().map(|a| a.ticker.clone());
 
         // 방어로 이전할 비중
         let mut safe_overflow = Decimal::ZERO;
@@ -632,11 +632,11 @@ impl XaaStrategy {
         for (i, asset) in ranked_offensive.iter().take(top_n).enumerate() {
             if asset.momentum > Decimal::ZERO {
                 // 모멘텀 양수 → 투자
-                self.add_or_update_allocation(allocations, &asset.symbol, base_weight);
+                self.add_or_update_allocation(allocations, &asset.ticker, base_weight);
                 info!(
                     "[XAA] 공격자산 #{}: {} (Momentum: {:.4}, 비중: {:.1}%)",
                     i + 1,
-                    asset.symbol,
+                    asset.ticker,
                     asset.momentum,
                     base_weight * dec!(100)
                 );
@@ -648,7 +648,7 @@ impl XaaStrategy {
                 info!(
                     "[XAA] 공격자산 #{}: {} 모멘텀 음수 ({:.4}) → 50% 방어, 50% 1위로 이전",
                     i + 1,
-                    asset.symbol,
+                    asset.ticker,
                     asset.momentum
                 );
             }
@@ -656,13 +656,13 @@ impl XaaStrategy {
 
         // 1위 공격자산에 재분배된 비중 추가
         if top_overflow > Decimal::ZERO {
-            if let Some(top_symbol) = &top_offensive_symbol {
+            if let Some(top_ticker) = &top_offensive_ticker {
                 // 1위 자산이 이미 있으면 비중 추가
-                if let Some(existing) = allocations.iter_mut().find(|a| &a.symbol == top_symbol) {
+                if let Some(existing) = allocations.iter_mut().find(|a| &a.ticker == top_ticker) {
                     existing.weight += top_overflow;
                     info!(
                         "[XAA] 1위 공격자산 {} 비중 추가: {:.1}% → 총 {:.1}%",
-                        top_symbol,
+                        top_ticker,
                         top_overflow * dec!(100),
                         existing.weight * dec!(100)
                     );
@@ -674,11 +674,11 @@ impl XaaStrategy {
         for (i, asset) in ranked_bonds.iter().take(total_bonds).enumerate() {
             if asset.momentum6 > bil_momentum6 {
                 // BIL보다 모멘텀6가 높으면 투자
-                self.add_or_update_allocation(allocations, &asset.symbol, base_weight);
+                self.add_or_update_allocation(allocations, &asset.ticker, base_weight);
                 info!(
                     "[XAA] 채권자산 #{}: {} (Momentum6: {:.4} > BIL {:.4}, 비중: {:.1}%)",
                     i + 1,
-                    asset.symbol,
+                    asset.ticker,
                     asset.momentum6,
                     bil_momentum6,
                     base_weight * dec!(100)
@@ -688,7 +688,7 @@ impl XaaStrategy {
                 info!(
                     "[XAA] 채권자산 #{}: {} (Momentum6: {:.4} <= BIL {:.4}) → 현금 보유",
                     i + 1,
-                    asset.symbol,
+                    asset.ticker,
                     asset.momentum6,
                     bil_momentum6
                 );
@@ -710,10 +710,10 @@ impl XaaStrategy {
     ) {
         // 안전 자산 중 첫 번째 선택 (보통 IEF)
         if let Some(safe_asset) = config.safe_assets.first() {
-            self.add_or_update_allocation(allocations, &safe_asset.symbol, weight);
+            self.add_or_update_allocation(allocations, &safe_asset.ticker, weight);
             info!(
                 "[XAA] 방어자산: {} (비중: {:.1}%)",
-                safe_asset.symbol,
+                safe_asset.ticker,
                 weight * dec!(100)
             );
         }
@@ -723,13 +723,13 @@ impl XaaStrategy {
     fn add_or_update_allocation(
         &self,
         allocations: &mut Vec<TargetAllocation>,
-        symbol: &str,
+        ticker: &str,
         weight: Decimal,
     ) {
-        if let Some(existing) = allocations.iter_mut().find(|a| a.symbol == symbol) {
+        if let Some(existing) = allocations.iter_mut().find(|a| a.ticker == ticker) {
             existing.weight += weight;
         } else {
-            allocations.push(TargetAllocation::new(symbol.to_string(), weight));
+            allocations.push(TargetAllocation::new(ticker.to_string(), weight));
         }
     }
 
@@ -759,11 +759,11 @@ impl XaaStrategy {
         // 현재 포지션을 PortfolioPosition으로 변환
         let mut portfolio_positions: Vec<PortfolioPosition> = Vec::new();
 
-        for (symbol, quantity) in &self.positions {
-            if let Some(prices) = self.price_history.get(symbol) {
+        for (ticker, quantity) in &self.positions {
+            if let Some(prices) = self.price_history.get(ticker) {
                 if let Some(current_price) = prices.first() {
                     portfolio_positions.push(PortfolioPosition::new(
-                        symbol,
+                        ticker,
                         *quantity,
                         *current_price,
                     ));
@@ -772,11 +772,11 @@ impl XaaStrategy {
         }
 
         // 현금 포지션 추가
-        let cash_symbol = match config.market {
+        let cash_ticker = match config.market {
             XaaMarketType::US => "USD",
             XaaMarketType::KR => "KRW",
         };
-        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_symbol));
+        portfolio_positions.push(PortfolioPosition::cash(self.cash_balance, cash_ticker));
 
         // 리밸런싱 계산
         let result = self
@@ -793,10 +793,10 @@ impl XaaStrategy {
             };
 
             // 매수 신호인 경우 RouteState/GlobalScore 확인
-            if side == Side::Buy && !self.can_enter(&order.symbol) {
+            if side == Side::Buy && !self.can_enter(&order.ticker) {
                 debug!(
                     "[XAA] {} 매수 신호 스킵 - RouteState/GlobalScore 조건 미충족",
-                    order.symbol
+                    order.ticker
                 );
                 continue;
             }
@@ -808,7 +808,7 @@ impl XaaStrategy {
 
             let signal = Signal::new(
                 self.name(),
-                Symbol::stock(&order.symbol, quote_currency),
+                format!("{}/{}", order.ticker, quote_currency),
                 side,
                 SignalType::Scale,
             )
@@ -882,7 +882,7 @@ impl Strategy for XaaStrategy {
         info!(
             "[XAA] 전략 초기화 - 시장: {:?}, 카나리아: {:?}, 공격자산: {}개, 채권자산: {}개, 초기자본: {}",
             parsed_config.market,
-            parsed_config.canary_assets.iter().map(|a| &a.symbol).collect::<Vec<_>>(),
+            parsed_config.canary_assets.iter().map(|a| &a.ticker).collect::<Vec<_>>(),
             parsed_config.offensive_assets.len(),
             parsed_config.bond_assets.len(),
             self.cash_balance
@@ -901,10 +901,10 @@ impl Strategy for XaaStrategy {
             None => return Ok(Vec::new()),
         };
 
-        let symbol = data.symbol.base.clone();
+        let ticker = data.ticker.clone();
 
         // 관심 자산이 아니면 무시
-        if !config.all_symbols().contains(&symbol) {
+        if !config.all_tickers().contains(&ticker) {
             return Ok(Vec::new());
         }
 
@@ -918,8 +918,8 @@ impl Strategy for XaaStrategy {
 
         // 가격 업데이트
         if let Some(price) = price {
-            self.update_price_history(&symbol, price);
-            debug!("[XAA] 가격 업데이트: {} = {}", symbol, price);
+            self.update_price_history(&ticker, price);
+            debug!("[XAA] 가격 업데이트: {} = {}", ticker, price);
         }
 
         // 리밸런싱 신호 생성
@@ -934,7 +934,7 @@ impl Strategy for XaaStrategy {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
             "[XAA] 주문 체결: {:?} {} {} @ {:?}",
-            order.side, order.quantity, order.symbol, order.average_fill_price
+            order.side, order.quantity, order.ticker, order.average_fill_price
         );
         Ok(())
     }
@@ -943,11 +943,11 @@ impl Strategy for XaaStrategy {
         &mut self,
         position: &Position,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let symbol = position.symbol.base.clone();
-        self.positions.insert(symbol.clone(), position.quantity);
+        let ticker = position.ticker.clone();
+        self.positions.insert(ticker.clone(), position.quantity);
         info!(
             "[XAA] 포지션 업데이트: {} = {} (PnL: {})",
-            symbol, position.quantity, position.unrealized_pnl
+            ticker, position.quantity, position.unrealized_pnl
         );
         Ok(())
     }
@@ -985,12 +985,12 @@ mod tests {
         let config = XaaConfig::us_default();
         assert_eq!(config.market, XaaMarketType::US);
         assert_eq!(config.canary_assets.len(), 1);
-        assert_eq!(config.canary_assets[0].symbol, "TIP");
+        assert_eq!(config.canary_assets[0].ticker, "TIP");
         assert_eq!(config.offensive_assets.len(), 6);
         assert_eq!(config.bond_assets.len(), 2);
         assert_eq!(config.offensive_top_n, 4);
         assert_eq!(config.bond_top_n, 3);
-        assert_eq!(config.cash_symbol, "BIL");
+        assert_eq!(config.cash_ticker, "BIL");
     }
 
     #[test]
@@ -1002,15 +1002,15 @@ mod tests {
     }
 
     #[test]
-    fn test_all_symbols() {
+    fn test_all_tickers() {
         let config = XaaConfig::us_default();
-        let symbols = config.all_symbols();
+        let tickers = config.all_tickers();
 
-        assert!(symbols.contains(&"TIP".to_string()));
-        assert!(symbols.contains(&"SPY".to_string()));
-        assert!(symbols.contains(&"TLT".to_string()));
-        assert!(symbols.contains(&"IEF".to_string()));
-        assert!(symbols.contains(&"BIL".to_string()));
+        assert!(tickers.contains(&"TIP".to_string()));
+        assert!(tickers.contains(&"SPY".to_string()));
+        assert!(tickers.contains(&"TLT".to_string()));
+        assert!(tickers.contains(&"IEF".to_string()));
+        assert!(tickers.contains(&"BIL".to_string()));
     }
 
     #[test]
@@ -1139,9 +1139,9 @@ mod tests {
         let ranked = strategy.rank_offensive_assets(&assets);
 
         assert_eq!(ranked.len(), 3);
-        assert_eq!(ranked[0].symbol, "SPY"); // 가장 높은 모멘텀
-        assert_eq!(ranked[1].symbol, "VEA");
-        assert_eq!(ranked[2].symbol, "IWM");
+        assert_eq!(ranked[0].ticker, "SPY"); // 가장 높은 모멘텀
+        assert_eq!(ranked[1].ticker, "VEA");
+        assert_eq!(ranked[2].ticker, "IWM");
     }
 
     #[test]
@@ -1169,8 +1169,8 @@ mod tests {
         let ranked = strategy.rank_bond_assets(&assets);
 
         assert_eq!(ranked.len(), 2);
-        assert_eq!(ranked[0].symbol, "TLT"); // Momentum6 높은 순
-        assert_eq!(ranked[1].symbol, "IEF");
+        assert_eq!(ranked[0].ticker, "TLT"); // Momentum6 높은 순
+        assert_eq!(ranked[1].ticker, "IEF");
     }
 
     #[test]
@@ -1224,7 +1224,7 @@ register_strategy! {
     name: "XAA",
     description: "확장 자산배분 (eXtended Asset Allocation) 전략입니다.",
     timeframe: "1d",
-    symbols: ["VWO", "BND", "SPY", "EFA", "EEM", "TLT", "IEF", "LQD", "BIL"],
+    tickers: ["VWO", "BND", "SPY", "EFA", "EEM", "TLT", "IEF", "LQD", "BIL"],
     category: Monthly,
     markets: [Stock],
     type: XaaStrategy

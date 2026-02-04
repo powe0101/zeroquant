@@ -1,7 +1,7 @@
 # ZeroQuant Trading Bot - 기술 아키텍처
 
-> 작성일: 2026-01-30
-> 버전: 2.0
+> 작성일: 2026-02-04
+> 버전: 3.0
 
 ---
 
@@ -70,6 +70,9 @@
 | Polars | 고성능 데이터프레임 처리 |
 | ta-rs | 기술적 지표 라이브러리 |
 | ONNX Runtime | ML 모델 추론 (GPU 가속) |
+| KRX OPEN API | 국내 주식 OHLCV/Fundamental 데이터 |
+| Yahoo Finance | 해외 주식/암호화폐 OHLCV 데이터 |
+| ts-rs | TypeScript 바인딩 자동 생성 |
 
 ### 인프라
 | 기술 | 용도 |
@@ -135,15 +138,30 @@ d:\Trader\
 │   │   ├── yahoo/             # Yahoo Finance 데이터
 │   │   └── simulation/        # 시뮬레이션 모드
 │   │
-│   ├── trader-data/           # 데이터 관리 (4,070줄)
+│   ├── trader-collector/      # Standalone 데이터 수집기
+│   │   ├── main.rs            # CLI 엔트리포인트
+│   │   ├── config.rs          # 환경변수 설정
+│   │   └── modules/           # 수집 모듈
+│   │       ├── ohlcv_collect.rs    # OHLCV 수집
+│   │       ├── indicator_sync.rs   # 지표 동기화
+│   │       ├── global_score_sync.rs# GlobalScore 동기화
+│   │       └── fundamental_sync.rs # Fundamental 동기화
+│   │
+│   ├── trader-data/           # 데이터 관리 (6,000+줄)
 │   │   ├── storage/           # TimescaleDB 저장소
 │   │   ├── cache/             # Redis 캐시
-│   │   └── krx.rs             # KRX API 연동
+│   │   └── provider/          # 데이터 프로바이더
+│   │       ├── krx_api.rs     # KRX OPEN API (국내)
+│   │       └── symbol_info.rs # Yahoo Finance (해외)
 │   │
-│   ├── trader-analytics/      # 분석 엔진 (11,039줄)
+│   ├── trader-analytics/      # 분석 엔진 (14,000+줄)
 │   │   ├── backtest/          # 백테스트 엔진
+│   │   │   └── engine.rs      # Multi-TF 백테스트 지원
 │   │   ├── metrics.rs         # 성과 지표 14개
 │   │   ├── indicators.rs      # 기술 지표 11개
+│   │   ├── seven_factor.rs    # 7Factor 스코어링 시스템
+│   │   ├── multi_timeframe_helpers.rs # 다중 TF 헬퍼
+│   │   ├── timeframe_alignment.rs     # TF 정렬 (Bias 방지)
 │   │   └── ml/                # ML 패턴 인식 (4,125줄)
 │   │       ├── pattern.rs     # 캔들/차트 패턴 48종
 │   │       ├── predictor.rs   # ONNX 추론
@@ -158,26 +176,36 @@ d:\Trader\
 │       ├── telegram.rs        # 텔레그램 봇
 │       └── discord.rs         # Discord 웹훅
 │
-├── migrations/                # DB 마이그레이션 (14개)
-│   ├── 001_initial_schema.sql
-│   ├── 002_encrypted_credentials.sql
-│   └── ...
+├── migrations/                # DB 마이그레이션 (19개)
+│   ├── 01_foundation.sql      # 기본 스키마
+│   ├── ...
+│   ├── 13_watchlist.sql       # 관심종목
+│   ├── 18_multi_timeframe.sql # 다중 타임프레임
+│   └── 19_backtest_timeframes_used.sql
 │
 ├── frontend/                  # 웹 대시보드
 │   ├── src/
-│   │   ├── pages/             # 7개 페이지 (7,044줄)
+│   │   ├── pages/             # 11개 페이지 (Lazy Loading)
 │   │   │   ├── Dashboard.tsx
 │   │   │   ├── Backtest.tsx
 │   │   │   ├── Strategies.tsx
+│   │   │   ├── GlobalRanking.tsx  # 글로벌 랭킹
+│   │   │   ├── SymbolDetail.tsx   # 종목 상세
 │   │   │   └── ...
-│   │   ├── components/        # UI 컴포넌트 (4,000+줄)
-│   │   │   ├── DynamicForm.tsx# SDUI 폼 렌더러
-│   │   │   ├── charts/        # 차트 컴포넌트 8개
-│   │   │   └── ...
+│   │   ├── components/        # UI 컴포넌트 (8,000+줄)
+│   │   │   ├── charts/        # 차트 컴포넌트 20개+
+│   │   │   │   ├── MultiTimeframeChart.tsx
+│   │   │   │   ├── VolumeProfile.tsx
+│   │   │   │   └── ...
+│   │   │   ├── strategy/      # 전략 컴포넌트
+│   │   │   │   └── MultiTimeframeSelector.tsx
+│   │   │   ├── screening/     # 스크리닝 컴포넌트
+│   │   │   └── ui/            # 공통 UI (VirtualizedTable 등)
 │   │   ├── api/               # API 클라이언트
-│   │   └── hooks/             # React 훅
+│   │   ├── hooks/             # 커스텀 훅 (useStrategies, useJournal 등)
+│   │   └── types/generated/   # ts-rs 자동 생성 타입
 │   ├── package.json
-│   └── vite.config.ts
+│   └── vite.config.ts         # manualChunks 코드 스플리팅
 │
 ├── config/                    # 설정 파일
 ├── tests/                     # 통합 테스트
@@ -419,18 +447,25 @@ docker-compose --profile ml run --rm trader-ml python scripts/train_ml_model.py
 |-----------|--------|------|
 | `/health` | GET | 헬스 체크 |
 | `/api/v1/strategies` | GET, POST, PUT, DELETE | 전략 CRUD |
-| `/api/v1/backtest/run` | POST | 백테스트 실행 |
+| `/api/v1/strategies/{id}/timeframes` | GET, PUT | 다중 타임프레임 설정 |
+| `/api/v1/backtest/run` | POST | 백테스트 실행 (Multi-TF 지원) |
 | `/api/v1/backtest/results` | GET, POST | 결과 저장/조회 |
+| `/api/v1/market/klines/multi` | GET | 다중 타임프레임 Kline 조회 |
 | `/api/v1/orders` | GET, POST | 주문 관리 |
 | `/api/v1/positions` | GET | 포지션 조회 |
 | `/api/v1/portfolio` | GET | 포트폴리오 조회 |
+| `/api/v1/journal/*` | GET, POST | 매매일지 |
+| `/api/v1/ranking` | GET | 글로벌 스코어 랭킹 |
+| `/api/v1/ranking/7factor/{ticker}` | GET | 7Factor 스코어 |
+| `/api/v1/screening` | GET, POST | 종목 스크리닝 |
+| `/api/v1/watchlist` | GET, POST, DELETE | 관심종목 관리 |
 | `/api/v1/analytics/*` | GET | 성과 분석 |
 | `/api/v1/credentials` | GET, POST, DELETE | API 키 관리 |
 | `/api/v1/notifications/*` | GET, POST | 알림 설정 |
 | `/api/v1/ml/*` | GET, POST | ML 훈련 |
 | `/api/v1/dataset/*` | GET, POST | 데이터셋 관리 |
 | `/api/v1/simulation/*` | POST | 시뮬레이션 제어 |
-| `/ws` | WebSocket | 실시간 스트림 |
+| `/ws` | WebSocket | 실시간 스트림 (Kline 포함) |
 
 ---
 
@@ -467,13 +502,88 @@ docker-compose --profile ml run --rm trader-ml python scripts/train_ml_model.py
 
 ---
 
+## 데이터 프로바이더 아키텍처
+
+### 이중화 구조
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Data Provider Layer                       │
+├──────────────────────┬──────────────────────────────────────┤
+│   KRX OPEN API       │          Yahoo Finance                │
+│   (국내 주식)         │    (해외 주식 / 암호화폐)              │
+├──────────────────────┼──────────────────────────────────────┤
+│ • OHLCV 데이터       │ • OHLCV 데이터                        │
+│ • PER/PBR/배당률     │ • 심볼 정보                           │
+│ • 섹터/업종 정보     │ • Fundamental (Yahoo Quote)           │
+│ • 시가총액           │ • 실시간 시세 (Fallback)              │
+└──────────────────────┴──────────────────────────────────────┘
+         │                          │
+         └──────────┬───────────────┘
+                    │
+         ┌──────────▼──────────┐
+         │   DataProviderConfig │
+         │ ────────────────────│
+         │ krx_api_enabled     │  ← PROVIDER_KRX_API_ENABLED
+         │ yahoo_enabled       │  ← PROVIDER_YAHOO_ENABLED
+         └─────────────────────┘
+```
+
+### 환경변수 설정
+
+| 변수명 | 기본값 | 설명 |
+|--------|--------|------|
+| `PROVIDER_KRX_API_ENABLED` | false | KRX API 활성화 (승인 필요) |
+| `PROVIDER_YAHOO_ENABLED` | true | Yahoo Finance 활성화 |
+
+---
+
+## Multi Timeframe 아키텍처
+
+### 데이터 흐름
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 Multi Timeframe Request                      │
+│               GET /api/v1/market/klines/multi               │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+         ┌────────────▼────────────┐
+         │   TimeframeAligner      │
+         │ ────────────────────────│
+         │ • Look-Ahead Bias 방지  │
+         │ • 타임프레임 정렬       │
+         └────────────┬────────────┘
+                      │
+    ┌─────────────────┼─────────────────┐
+    │                 │                 │
+┌───▼───┐       ┌─────▼─────┐     ┌─────▼─────┐
+│ 1분봉  │       │   5분봉   │     │   일봉    │
+│(Primary)│       │(Secondary)│     │(Secondary)│
+└───┬───┘       └─────┬─────┘     └─────┬─────┘
+    │                 │                 │
+    └─────────────────┼─────────────────┘
+                      │
+         ┌────────────▼────────────┐
+         │  MultiTimeframeHelpers  │
+         │ ────────────────────────│
+         │ • analyze_trend()       │
+         │ • combine_signals()     │
+         │ • detect_divergence()   │
+         └─────────────────────────┘
+```
+
+---
+
 ## 참고 문서
 
 - [API 문서](./api.md)
 - [전략 비교](./STRATEGY_COMPARISON.md)
 - [TODO 목록](./todo.md)
 - [PRD v5.0](./prd.md)
+- [KRX API 스펙](./krx_openapi_spec.md)
+- [Multi KLine 가이드](./multiple_kline_period_implementation_guide.md)
 
 ---
 
-*문서 생성일: 2026-01-30*
+*문서 생성일: 2026-02-04*
