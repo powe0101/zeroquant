@@ -160,10 +160,25 @@ pub fn derive_strategy_config(input: TokenStream) -> TokenStream {
             // hidden 속성
             let is_hidden = schema_attrs.hidden;
 
+            // section 속성 (필드 그룹화용)
+            let section = schema_attrs.values.get("section");
+            let section_expr = if let Some(sec) = section {
+                quote! { Some(#sec.to_string()) }
+            } else {
+                quote! { None }
+            };
+
             // default 값 (schema 속성에서 가져옴)
+            // field_type_str을 사용하여 문자열 타입 여부 확인
+            let field_type_str = schema_attrs.values.get("field_type").map(|s| s.as_str());
+            let is_string_type = matches!(field_type_str, Some("symbol") | Some("string") | Some("symbols"));
+
             let default_expr = if let Some(default_val) = schema_attrs.values.get("default") {
-                // JSON 값으로 파싱 시도
-                if let Ok(parsed) = default_val.parse::<f64>() {
+                // symbol, string, symbols 타입은 항상 문자열로 처리
+                // 예: "005930" (삼성전자), "SPY", "TSLA" 등
+                if is_string_type {
+                    quote! { Some(serde_json::json!(#default_val)) }
+                } else if let Ok(parsed) = default_val.parse::<f64>() {
                     quote! { Some(serde_json::json!(#parsed)) }
                 } else if default_val == "true" {
                     quote! { Some(serde_json::json!(true)) }
@@ -188,6 +203,7 @@ pub fn derive_strategy_config(input: TokenStream) -> TokenStream {
                     options: #options_expr,
                     required: true,
                     hidden: #is_hidden,
+                    section: #section_expr,
                     ..Default::default()
                 }
             });

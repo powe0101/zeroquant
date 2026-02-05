@@ -261,7 +261,7 @@ impl ApiCategory {
     fn path(&self) -> &'static str {
         match self {
             ApiCategory::Index => "idx",
-            ApiCategory::Stock => "stk",
+            ApiCategory::Stock => "sto",
             ApiCategory::Etp => "etp",
             ApiCategory::Bond => "bnd",
             ApiCategory::Derivative => "drv",
@@ -369,7 +369,7 @@ impl KrxApiClient {
         params: &HashMap<&str, &str>,
     ) -> Result<Vec<T>, Box<dyn std::error::Error + Send + Sync>> {
         let url = format!(
-            "{}/svc/sample/apis/{}/{}",
+            "{}/svc/apis/{}/{}",
             self.base_url,
             category.path(),
             api_id

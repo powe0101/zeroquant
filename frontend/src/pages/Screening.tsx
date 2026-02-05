@@ -175,30 +175,29 @@ const MARKET_OPTIONS: { value: string; label: string; emoji: string; indent?: bo
   { value: 'CRYPTO', label: '암호화폐', emoji: '₿' },
 ]
 
-// RouteState 필터 옵션
+// RouteState 필터 옵션 (DB ENUM: ATTACK, ARMED, WAIT, OVERHEAT, NEUTRAL)
 const ROUTE_STATE_OPTIONS = [
-  { value: 'Attack', label: 'ATTACK', bg: 'bg-red-500/20', text: 'text-red-400', emoji: '🚀' },
-  { value: 'Armed', label: 'ARMED', bg: 'bg-orange-500/20', text: 'text-orange-400', emoji: '⚡' },
-  { value: 'Watch', label: 'WATCH', bg: 'bg-yellow-500/20', text: 'text-yellow-400', emoji: '👀' },
-  { value: 'Rest', label: 'REST', bg: 'bg-gray-500/20', text: 'text-gray-400', emoji: '😴' },
+  { value: 'ATTACK', label: 'ATTACK', bg: 'bg-red-500/20', text: 'text-red-400', emoji: '🚀' },
+  { value: 'ARMED', label: 'ARMED', bg: 'bg-orange-500/20', text: 'text-orange-400', emoji: '⚡' },
+  { value: 'WAIT', label: 'WAIT', bg: 'bg-yellow-500/20', text: 'text-yellow-400', emoji: '👀' },
+  { value: 'OVERHEAT', label: 'OVERHEAT', bg: 'bg-pink-500/20', text: 'text-pink-400', emoji: '🔥' },
+  { value: 'NEUTRAL', label: 'NEUTRAL', bg: 'bg-gray-500/20', text: 'text-gray-400', emoji: '😴' },
 ] as const
 
-// RouteState 뱃지 스타일
+// RouteState 뱃지 스타일 (DB ENUM 값과 매칭 - 대문자)
 const ROUTE_STATE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  Attack: { bg: 'bg-red-500/20', text: 'text-red-400', label: 'ATTACK' },
-  Armed: { bg: 'bg-orange-500/20', text: 'text-orange-400', label: 'ARMED' },
-  Watch: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', label: 'WATCH' },
-  Rest: { bg: 'bg-gray-500/20', text: 'text-gray-400', label: 'REST' },
+  ATTACK: { bg: 'bg-red-500/20', text: 'text-red-400', label: 'ATTACK' },
+  ARMED: { bg: 'bg-orange-500/20', text: 'text-orange-400', label: 'ARMED' },
+  WAIT: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', label: 'WAIT' },
+  OVERHEAT: { bg: 'bg-pink-500/20', text: 'text-pink-400', label: 'OVERHEAT' },
+  NEUTRAL: { bg: 'bg-gray-500/20', text: 'text-gray-400', label: 'NEUTRAL' },
 }
 
-// 등급 뱃지 스타일
+// 추천 등급 뱃지 스타일 (BUY, WATCH, HOLD)
 const GRADE_STYLES: Record<string, { bg: string; text: string }> = {
-  S: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
-  A: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
-  B: { bg: 'bg-green-500/20', text: 'text-green-400' },
-  C: { bg: 'bg-yellow-500/20', text: 'text-yellow-400' },
-  D: { bg: 'bg-orange-500/20', text: 'text-orange-400' },
-  F: { bg: 'bg-red-500/20', text: 'text-red-400' },
+  BUY: { bg: 'bg-green-500/20', text: 'text-green-400' },
+  WATCH: { bg: 'bg-yellow-500/20', text: 'text-yellow-400' },
+  HOLD: { bg: 'bg-gray-500/20', text: 'text-gray-400' },
 }
 
 // 한국 시장 섹터 목록
@@ -1603,7 +1602,7 @@ export function Screening() {
                       <td class="px-4 py-3 text-center">
                         <Show when={result.route_state} fallback={<span class="text-[var(--color-text-muted)]">-</span>}>
                           {(() => {
-                            const style = ROUTE_STATE_STYLES[result.route_state!] || ROUTE_STATE_STYLES.Rest
+                            const style = ROUTE_STATE_STYLES[result.route_state!] || ROUTE_STATE_STYLES.NEUTRAL
                             return (
                               <span class={`text-xs px-2 py-1 rounded font-medium ${style.bg} ${style.text}`}>
                                 {style.label}

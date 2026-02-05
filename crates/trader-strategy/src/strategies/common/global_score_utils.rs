@@ -206,6 +206,81 @@ pub fn calculate_risk_adjustment(score: Decimal) -> Decimal {
     }
 }
 
+
+/// GlobalScore를 Signal strength (f64)로 변환.
+///
+/// Signal.strength 필드에 사용되며, Executor의 min_strength 필터와
+/// 포지션 사이징에 영향을 줍니다.
+///
+/// # 점수별 강도
+///
+/// - 90점 이상: 0.8 (강한 신호)
+/// - 80~90점: 0.7
+/// - 70~80점: 0.6 (기본)
+/// - 60~70점: 0.5
+/// - 60점 미만: 0.4 (약한 신호)
+///
+/// # 인자
+///
+/// * `score` - GlobalScore (0~100)
+///
+/// # 반환
+///
+/// Signal strength (0.4 ~ 0.8)
+pub fn calculate_signal_strength(score: Decimal) -> f64 {
+    if score >= dec!(90) {
+        0.8
+    } else if score >= dec!(80) {
+        0.7
+    } else if score >= dec!(70) {
+        0.6
+    } else if score >= dec!(60) {
+        0.5
+    } else {
+        0.4
+    }
+}
+
+/// GlobalScore와 전략 기본 강도를 결합하여 최종 Signal strength 계산.
+///
+/// 전략이 산출한 기본 강도와 GlobalScore를 결합하여
+/// 최종 신호 강도를 계산합니다.
+///
+/// # 공식
+///
+/// `final_strength = base_strength * score_multiplier`
+/// - score_multiplier: 0.75 ~ 1.25 (GlobalScore 기반)
+///
+/// # 인자
+///
+/// * `base_strength` - 전략이 계산한 기본 강도 (0.0 ~ 1.0)
+/// * `global_score` - GlobalScore (0 ~ 100), None이면 기본 강도 반환
+///
+/// # 반환
+///
+/// 조정된 Signal strength (0.0 ~ 1.0 범위로 클램핑)
+pub fn adjust_strength_by_score(base_strength: f64, global_score: Option<Decimal>) -> f64 {
+    let Some(score) = global_score else {
+        return base_strength;
+    };
+
+    // Score를 0.75 ~ 1.25 배율로 변환
+    let multiplier = if score >= dec!(90) {
+        1.25
+    } else if score >= dec!(80) {
+        1.15
+    } else if score >= dec!(70) {
+        1.0
+    } else if score >= dec!(60) {
+        0.85
+    } else {
+        0.75
+    };
+
+    // 최종 강도 계산 및 클램핑
+    (base_strength * multiplier).clamp(0.0, 1.0)
+}
+
 /// 종목 그룹을 GlobalScore로 가중 평균.
 ///
 /// 포트폴리오 리밸런싱 시 사용.

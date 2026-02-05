@@ -220,42 +220,42 @@ pub struct PensionBotConfig {
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "총 투자 금액", min = 1000000, max = 1000000000)]
+    #[schema(label = "총 투자 금액", min = 1000000, max = 1000000000, section = "asset")]
     pub total_amount: Decimal,
 
     /// 평균 모멘텀 계산 기간 (개월)
     #[serde(default = "default_avg_momentum_period")]
-    #[schema(label = "평균 모멘텀 기간 (개월)", min = 3, max = 24)]
+    #[schema(label = "평균 모멘텀 기간 (개월)", min = 3, max = 24, section = "indicator")]
     pub avg_momentum_period: usize,
 
     /// 모멘텀 보너스 상위 종목 수
     #[serde(default = "default_top_bonus_count")]
-    #[schema(label = "모멘텀 보너스 상위 종목 수", min = 1, max = 30)]
+    #[schema(label = "모멘텀 보너스 상위 종목 수", min = 1, max = 30, section = "filter")]
     pub top_bonus_count: usize,
 
     /// 남은 현금 중 단기자금 비율 (0.0~1.0)
     #[serde(default = "default_cash_to_short_term")]
-    #[schema(label = "단기자금 비율", min = 0, max = 1)]
+    #[schema(label = "단기자금 비율", min = 0, max = 1, section = "sizing")]
     pub cash_to_short_term_rate: Decimal,
 
     /// 남은 현금 중 모멘텀 보너스 비율 (0.0~1.0)
     #[serde(default = "default_cash_to_bonus")]
-    #[schema(label = "모멘텀 보너스 비율", min = 0, max = 1)]
+    #[schema(label = "모멘텀 보너스 비율", min = 0, max = 1, section = "sizing")]
     pub cash_to_bonus_rate: Decimal,
 
     /// 리밸런싱 임계값 (%)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 임계값 (%)", min = 1, max = 20)]
+    #[schema(label = "리밸런싱 임계값 (%)", min = 1, max = 20, section = "timing")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 거래 금액
     #[serde(default = "default_min_trade_amount")]
-    #[schema(label = "최소 거래 금액", min = 10000, max = 1000000)]
+    #[schema(label = "최소 거래 금액", min = 10000, max = 1000000, section = "sizing")]
     pub min_trade_amount: Decimal,
 
     /// 최소 GlobalScore (기본값: 60)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -330,7 +330,7 @@ impl Default for PensionBotConfig {
             rebalance_threshold: default_rebalance_threshold(),
             min_trade_amount: default_min_trade_amount(),
             min_global_score: default_min_global_score(),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_rebalancing(),
         }
     }
 }

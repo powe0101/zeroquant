@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use utoipa::ToSchema;
 use trader_core::{
     unrealized_pnl, Kline, MarketData, Side, Signal, SignalMarker, SignalType, Timeframe,
 };
@@ -48,7 +49,7 @@ use crate::state::AppState;
 // ==================== 시뮬레이션 상태 ====================
 
 /// 시뮬레이션 실행 상태
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SimulationState {
     /// 중지됨
@@ -60,7 +61,7 @@ pub enum SimulationState {
 }
 
 /// 시뮬레이션 포지션
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SimulationPosition {
     /// 심볼
     pub symbol: String,
@@ -84,7 +85,7 @@ pub struct SimulationPosition {
 }
 
 /// 시뮬레이션 거래 내역
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SimulationTrade {
     /// 거래 ID
     pub id: String,
@@ -108,7 +109,7 @@ pub struct SimulationTrade {
 }
 
 /// 자산 곡선 포인트
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EquityPoint {
     /// 시간 (시뮬레이션 시간)
     pub timestamp: DateTime<Utc>,
@@ -624,7 +625,7 @@ pub fn create_simulation_engine() -> SharedSimulationEngine {
 // ==================== 요청/응답 타입 ====================
 
 /// 시뮬레이션 시작 요청
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SimulationStartRequest {
     /// 전략 ID
     pub strategy_id: String,
@@ -669,7 +670,7 @@ fn default_slippage_rate() -> Decimal {
 }
 
 /// 시뮬레이션 시작 응답
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SimulationStartResponse {
     /// 성공 여부
     pub success: bool,
@@ -682,7 +683,7 @@ pub struct SimulationStartResponse {
 }
 
 /// 시뮬레이션 중지 응답
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SimulationStopResponse {
     /// 성공 여부
     pub success: bool,
@@ -697,7 +698,7 @@ pub struct SimulationStopResponse {
 }
 
 /// 시뮬레이션 상태 응답
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SimulationStatusResponse {
     /// 현재 상태
     pub state: SimulationState,
@@ -734,7 +735,7 @@ pub struct SimulationStatusResponse {
 }
 
 /// 포지션 목록 응답
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SimulationPositionsResponse {
     /// 포지션 목록
     pub positions: Vec<SimulationPosition>,
@@ -743,7 +744,7 @@ pub struct SimulationPositionsResponse {
 }
 
 /// 거래 내역 응답
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SimulationTradesResponse {
     /// 거래 목록
     pub trades: Vec<SimulationTrade>,
@@ -756,7 +757,7 @@ pub struct SimulationTradesResponse {
 }
 
 /// 자산 곡선 응답
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SimulationEquityResponse {
     /// 자산 곡선
     pub equity_curve: Vec<EquityPoint>,
@@ -765,7 +766,7 @@ pub struct SimulationEquityResponse {
 }
 
 /// 신호 마커 응답
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SimulationSignalsResponse {
     /// 신호 마커 목록
     pub signals: Vec<SignalMarker>,
@@ -774,7 +775,7 @@ pub struct SimulationSignalsResponse {
 }
 
 /// API 에러 응답
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SimulationApiError {
     /// 에러 코드
     pub code: String,

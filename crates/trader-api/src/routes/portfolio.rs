@@ -23,6 +23,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::repository::{
@@ -39,7 +40,7 @@ use trader_core::{ExecutionHistoryRequest, ExecutionRecord};
 /// 포트폴리오 요약 응답.
 ///
 /// Frontend의 PortfolioSummary 타입과 매칭됩니다.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioSummaryResponse {
     /// 총 자산 가치 (현금 + 평가액)
@@ -59,7 +60,7 @@ pub struct PortfolioSummaryResponse {
 }
 
 /// 상세 잔고 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BalanceResponse {
     /// 한국 주식 잔고
@@ -73,7 +74,7 @@ pub struct BalanceResponse {
 }
 
 /// 한국 주식 잔고 정보.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KrBalanceInfo {
     /// 예수금 (현금)
@@ -87,7 +88,7 @@ pub struct KrBalanceInfo {
 }
 
 /// 미국 주식 잔고 정보.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UsBalanceInfo {
     /// 총 평가금액 (USD)
@@ -99,7 +100,7 @@ pub struct UsBalanceInfo {
 }
 
 /// 보유 종목 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HoldingsResponse {
     /// 한국 주식 보유 종목
@@ -111,7 +112,7 @@ pub struct HoldingsResponse {
 }
 
 /// 개별 보유 종목 정보.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HoldingInfo {
     /// 종목 코드/심볼
@@ -140,14 +141,14 @@ pub struct HoldingInfo {
 // ==================== 쿼리 파라미터 ====================
 
 /// 포트폴리오 API 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct PortfolioQuery {
     /// 특정 자격증명 ID로 조회 (선택)
     pub credential_id: Option<Uuid>,
 }
 
 /// 체결 내역 조회 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct OrderHistoryQuery {
     /// 자격증명 ID (필수)
     pub credential_id: Uuid,
@@ -241,10 +242,18 @@ pub async fn get_or_create_exchange_providers(
 
 /// 포트폴리오 요약 조회.
 ///
-/// GET /api/v1/portfolio/summary?credential_id=...
-///
 /// KIS API에서 실제 계좌 정보를 조회하여 반환합니다.
 /// credential_id가 제공되면 해당 계정의 데이터를 조회합니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portfolio/summary",
+    tag = "portfolio",
+    params(PortfolioQuery),
+    responses(
+        (status = 200, description = "포트폴리오 요약 조회 성공", body = PortfolioSummaryResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_portfolio_summary(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PortfolioQuery>,
@@ -404,8 +413,16 @@ pub async fn get_portfolio_summary(
 }
 
 /// 상세 잔고 조회.
-///
-/// GET /api/v1/portfolio/balance?credential_id=...
+#[utoipa::path(
+    get,
+    path = "/api/v1/portfolio/balance",
+    tag = "portfolio",
+    params(PortfolioQuery),
+    responses(
+        (status = 200, description = "잔고 조회 성공", body = BalanceResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_balance(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PortfolioQuery>,
@@ -487,8 +504,16 @@ pub async fn get_balance(
 }
 
 /// 보유 종목 목록 조회.
-///
-/// GET /api/v1/portfolio/holdings?credential_id=...
+#[utoipa::path(
+    get,
+    path = "/api/v1/portfolio/holdings",
+    tag = "portfolio",
+    params(PortfolioQuery),
+    responses(
+        (status = 200, description = "보유종목 조회 성공", body = HoldingsResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_holdings(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PortfolioQuery>,
@@ -653,7 +678,7 @@ pub async fn get_holdings(
 }
 
 /// 체결 내역 조회 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderHistoryResponse {
     /// 체결 내역 목록
@@ -668,7 +693,7 @@ pub struct OrderHistoryResponse {
 }
 
 /// 체결 내역 DTO (프론트엔드용 직렬화).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionRecordDto {
     /// 거래소
@@ -724,9 +749,17 @@ impl From<&ExecutionRecord> for ExecutionRecordDto {
 
 /// 체결 내역 조회.
 ///
-/// GET /api/v1/portfolio/orders?credential_id=...&start_date=...&end_date=...
-///
 /// 거래소 중립적인 ExecutionHistory를 반환합니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/portfolio/orders",
+    tag = "portfolio",
+    params(OrderHistoryQuery),
+    responses(
+        (status = 200, description = "체결 내역 조회 성공", body = OrderHistoryResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_order_history(
     State(state): State<Arc<AppState>>,
     Query(params): Query<OrderHistoryQuery>,

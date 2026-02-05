@@ -55,8 +55,9 @@ pub use position_sizing::{
 };
 
 pub use global_score_utils::{
-    calculate_risk_adjustment, calculate_score_weight, calculate_weighted_average, get_score,
-    select_top_tickers, ScoreFilterOptions,
+    adjust_strength_by_score, calculate_risk_adjustment, calculate_score_weight,
+    calculate_signal_strength, calculate_weighted_average, get_score, select_top_tickers,
+    ScoreFilterOptions,
 };
 
 pub use screening_integration::{

@@ -1,0 +1,101 @@
+{
+  "description": "자산배분 전략 회귀 테스트 파라미터",
+  "strategies": [
+    {
+      "strategy_id": "haa",
+      "name": "HAA 자산배분",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "offensive_top_n": 1,
+        "defensive_top_n": 1,
+        "invest_rate": "1.0",
+        "rebalance_threshold": "1.0",
+        "canary_threshold": "0.0",
+        "canary_tickers": ["005930"]
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "xaa",
+      "name": "XAA 자산배분",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "offensive_top_n": 1,
+        "defensive_top_n": 1,
+        "invest_rate": "1.0",
+        "rebalance_threshold": "1.0",
+        "canary_threshold": "0.0",
+        "bond_momentum_months": 3
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "baa",
+      "name": "BAA 자산배분",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "offensive_top_n": 1,
+        "defensive_top_n": 1,
+        "invest_rate": "1.0",
+        "rebalance_threshold": "1.0",
+        "canary_threshold": "0.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "all_weather",
+      "name": "All Weather",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "invest_rate": "1.0",
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "dual_momentum",
+      "name": "Dual Momentum",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "invest_rate": "1.0",
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    }
+  ]
+}

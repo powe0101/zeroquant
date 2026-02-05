@@ -9,6 +9,7 @@ use std::time::Duration;
 
 /// 캔들스틱 타임프레임.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa-support", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Timeframe {
     /// 1분봉

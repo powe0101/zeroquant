@@ -10,6 +10,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiErrorResponse, ApiResult};
@@ -21,7 +22,7 @@ use crate::AppState;
 // ==================== Request/Response 타입 ====================
 
 /// 알림 규칙 목록 조회 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ListAlertRulesQuery {
     /// 활성화된 규칙만 조회 (기본 false)
     #[serde(default)]
@@ -29,7 +30,7 @@ pub struct ListAlertRulesQuery {
 }
 
 /// 알림 규칙 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListAlertRulesResponse {
     /// 총 규칙 수
     pub total: usize,

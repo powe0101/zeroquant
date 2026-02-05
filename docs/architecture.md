@@ -1,7 +1,7 @@
 # ZeroQuant Trading Bot - 기술 아키텍처
 
-> 작성일: 2026-02-04
-> 버전: 3.0
+> 작성일: 2026-02-05
+> 버전: 3.1 (v0.7.0 반영)
 
 ---
 
@@ -99,21 +99,30 @@ d:\Trader\
 │   │   ├── signal.rs          # 전략 신호
 │   │   └── symbol.rs          # 심볼 정의
 │   │
-│   ├── trader-api/            # REST API 서버 (19,588줄)
+│   ├── trader-api/            # REST API 서버 (20,000+줄)
 │   │   ├── routes/            # 17개 API 라우트
 │   │   │   ├── backtest.rs    # 백테스트 실행
 │   │   │   ├── strategies.rs  # 전략 CRUD
 │   │   │   ├── portfolio.rs   # 포트폴리오 조회
 │   │   │   └── ...
+│   │   ├── openapi.rs         # OpenAPI 3.0 스펙 중앙 집계 [v0.7.0]
 │   │   ├── state.rs           # 앱 상태 관리
 │   │   ├── websocket.rs       # 실시간 통신
-│   │   └── main.rs            # 서버 엔트리포인트
+│   │   └── main.rs            # 서버 엔트리포인트 (Swagger UI: /swagger-ui)
 │   │
-│   ├── trader-strategy/       # 전략 엔진 (15,842줄)
-│   │   ├── strategies/        # 25개 전략 구현
-│   │   │   ├── rsi.rs         # RSI 평균회귀
-│   │   │   ├── grid.rs        # 그리드 트레이딩
-│   │   │   ├── haa.rs         # HAA 자산배분
+│   ├── trader-strategy/       # 전략 엔진 (16,000+줄)
+│   │   ├── strategies/        # 16개 통합 전략 (v0.7.0 리팩토링)
+│   │   │   ├── common/            # 공통 모듈 (v0.7.0 대폭 확장)
+│   │   │   │   ├── exit_config.rs      # 청산 설정 프리셋 [v0.7.0]
+│   │   │   │   ├── global_score_utils.rs # GlobalScore 유틸리티 [v0.7.0]
+│   │   │   │   ├── indicators.rs       # 기술 지표 (RSI, SMA, BB 등)
+│   │   │   │   ├── position_sizing.rs  # 포지션 사이징
+│   │   │   │   ├── risk_checks.rs      # 리스크 검증
+│   │   │   │   └── signal_filters.rs   # 신호 필터링
+│   │   │   ├── day_trading.rs     # 단타/그리드 (Grid, Market Interest Day 통합)
+│   │   │   ├── mean_reversion.rs  # 평균회귀 (RSI, Bollinger 통합)
+│   │   │   ├── rotation.rs        # 모멘텀 로테이션 (4개 전략 통합)
+│   │   │   ├── asset_allocation.rs # 자산배분 (HAA/XAA/BAA/All Weather 통합)
 │   │   │   └── ...
 │   │   ├── engine.rs          # 전략 실행 엔진
 │   │   └── registry.rs        # 전략 레지스트리
@@ -147,12 +156,14 @@ d:\Trader\
 │   │       ├── global_score_sync.rs# GlobalScore 동기화
 │   │       └── fundamental_sync.rs # Fundamental 동기화
 │   │
-│   ├── trader-data/           # 데이터 관리 (6,000+줄)
+│   ├── trader-data/           # 데이터 관리 (7,000+줄)
 │   │   ├── storage/           # TimescaleDB 저장소
 │   │   ├── cache/             # Redis 캐시
 │   │   └── provider/          # 데이터 프로바이더
-│   │       ├── krx_api.rs     # KRX OPEN API (국내)
-│   │       └── symbol_info.rs # Yahoo Finance (해외)
+│   │       ├── krx_api.rs          # KRX OPEN API (국내 OHLCV/Fundamental)
+│   │       ├── naver.rs            # 네이버 금융 크롤러 (국내 Fundamental)
+│   │       ├── yahoo_fundamental.rs # Yahoo Finance 펀더멘털 (해외) [v0.7.0]
+│   │       └── symbol_info.rs      # Yahoo Finance 심볼 정보
 │   │
 │   ├── trader-analytics/      # 분석 엔진 (14,000+줄)
 │   │   ├── backtest/          # 백테스트 엔진
@@ -167,21 +178,26 @@ d:\Trader\
 │   │       ├── predictor.rs   # ONNX 추론
 │   │       └── features.rs    # Feature Engineering
 │   │
-│   ├── trader-cli/            # CLI 도구 (1,981줄)
-│   │   ├── download.rs        # 데이터 다운로드
-│   │   ├── backtest.rs        # CLI 백테스트
-│   │   └── import.rs          # 데이터 임포트
+│   ├── trader-cli/            # CLI 도구 (2,600+줄)
+│   │   ├── commands/
+│   │   │   ├── download.rs        # 데이터 다운로드
+│   │   │   ├── backtest.rs        # CLI 백테스트
+│   │   │   ├── import.rs          # 데이터 임포트
+│   │   │   └── strategy_test.rs   # 전략 통합 테스트 (661줄) [v0.7.0]
+│   │   └── main.rs
 │   │
 │   └── trader-notification/   # 알림 서비스 (690줄)
 │       ├── telegram.rs        # 텔레그램 봇
 │       └── discord.rs         # Discord 웹훅
 │
-├── migrations/                # DB 마이그레이션 (19개)
-│   ├── 01_foundation.sql      # 기본 스키마
-│   ├── ...
-│   ├── 13_watchlist.sql       # 관심종목
-│   ├── 18_multi_timeframe.sql # 다중 타임프레임
-│   └── 19_backtest_timeframes_used.sql
+├── migrations/                # DB 마이그레이션 (7개 통합, v0.7.0)
+│   ├── 01_core_foundation.sql      # 기본 스키마, ENUM, 확장
+│   ├── 02_data_management.sql      # 심볼 정보, OHLCV, 펀더멘털
+│   ├── 03_trading_analytics.sql    # 매매일지, 포트폴리오 분석
+│   ├── 04_strategy_signals.sql     # 전략, 신호, 알림 시스템
+│   ├── 05_evaluation_ranking.sql   # Reality Check, 랭킹 시스템
+│   ├── 06_user_settings.sql        # 관심종목, 스크리닝 프리셋
+│   └── README.md                   # 마이그레이션 가이드
 │
 ├── frontend/                  # 웹 대시보드
 │   ├── src/

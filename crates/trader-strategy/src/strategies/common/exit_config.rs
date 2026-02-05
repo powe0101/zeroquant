@@ -110,4 +110,134 @@ impl ExitConfig {
             None
         }
     }
+
+    // ============================================================================
+    // 전략 유형별 프리셋 (각 전략에서 사용)
+    // ============================================================================
+
+    /// 단기 트레이딩용 프리셋.
+    ///
+    /// - 좁은 손절 (2%)
+    /// - 적절한 익절 (4%)
+    /// - 트레일링 스탑 비활성화
+    /// - 반대 신호 청산 활성화
+    ///
+    /// 적용 대상: day_trading, sector_vb, momentum_surge
+    pub fn for_day_trading() -> Self {
+        Self {
+            stop_loss_enabled: true,
+            stop_loss_pct: dec!(2.0),
+            take_profit_enabled: true,
+            take_profit_pct: dec!(4.0),
+            trailing_stop_enabled: false,
+            trailing_trigger_pct: dec!(2.0),
+            trailing_stop_pct: dec!(1.0),
+            exit_on_opposite_signal: true,
+        }
+    }
+
+    /// 평균회귀용 프리셋.
+    ///
+    /// - 중간 손절 (3%)
+    /// - 넓은 익절 (6%)
+    /// - 트레일링 스탑 비활성화
+    /// - 반대 신호 청산 활성화
+    ///
+    /// 적용 대상: mean_reversion, range_trading, candle_pattern
+    pub fn for_mean_reversion() -> Self {
+        Self {
+            stop_loss_enabled: true,
+            stop_loss_pct: dec!(3.0),
+            take_profit_enabled: true,
+            take_profit_pct: dec!(6.0),
+            trailing_stop_enabled: false,
+            trailing_trigger_pct: dec!(3.0),
+            trailing_stop_pct: dec!(1.5),
+            exit_on_opposite_signal: true,
+        }
+    }
+
+    /// 그리드/물타기용 프리셋.
+    ///
+    /// - 손절 비활성화 (전략 특성상 물타기)
+    /// - 익절만 활성화 (3%)
+    /// - 트레일링 스탑 비활성화
+    /// - 반대 신호 청산 비활성화
+    ///
+    /// 적용 대상: infinity_bot, grid_trading, magic_split
+    pub fn for_grid_trading() -> Self {
+        Self {
+            stop_loss_enabled: false,
+            stop_loss_pct: dec!(10.0),
+            take_profit_enabled: true,
+            take_profit_pct: dec!(3.0),
+            trailing_stop_enabled: false,
+            trailing_trigger_pct: dec!(2.0),
+            trailing_stop_pct: dec!(1.0),
+            exit_on_opposite_signal: false,
+        }
+    }
+
+    /// 자산배분/로테이션용 프리셋.
+    ///
+    /// - 손절 비활성화 (리밸런싱으로 관리)
+    /// - 익절 비활성화 (리밸런싱으로 관리)
+    /// - 트레일링 스탑 비활성화
+    /// - 반대 신호 청산 비활성화
+    ///
+    /// 적용 대상: asset_allocation, rotation, pension_bot
+    pub fn for_rebalancing() -> Self {
+        Self {
+            stop_loss_enabled: false,
+            stop_loss_pct: dec!(15.0),
+            take_profit_enabled: false,
+            take_profit_pct: dec!(30.0),
+            trailing_stop_enabled: false,
+            trailing_trigger_pct: dec!(5.0),
+            trailing_stop_pct: dec!(2.0),
+            exit_on_opposite_signal: false,
+        }
+    }
+
+    /// 레버리지 ETF용 프리셋.
+    ///
+    /// - 손절 필수 (5%)
+    /// - 넓은 익절 (10%)
+    /// - 트레일링 스탑 활성화
+    /// - 반대 신호 청산 활성화
+    ///
+    /// 적용 대상: us_3x_leverage, market_bothside
+    pub fn for_leverage() -> Self {
+        Self {
+            stop_loss_enabled: true,
+            stop_loss_pct: dec!(5.0),
+            take_profit_enabled: true,
+            take_profit_pct: dec!(10.0),
+            trailing_stop_enabled: true,
+            trailing_trigger_pct: dec!(5.0),
+            trailing_stop_pct: dec!(2.0),
+            exit_on_opposite_signal: true,
+        }
+    }
+
+    /// 모멘텀용 프리셋.
+    ///
+    /// - 중간 손절 (5%)
+    /// - 넓은 익절 (15%)
+    /// - 트레일링 스탑 활성화
+    /// - 반대 신호 청산 활성화
+    ///
+    /// 적용 대상: compound_momentum, momentum_power, rsi_multi_tf
+    pub fn for_momentum() -> Self {
+        Self {
+            stop_loss_enabled: true,
+            stop_loss_pct: dec!(5.0),
+            take_profit_enabled: true,
+            take_profit_pct: dec!(15.0),
+            trailing_stop_enabled: true,
+            trailing_trigger_pct: dec!(8.0),
+            trailing_stop_pct: dec!(3.0),
+            exit_on_opposite_signal: true,
+        }
+    }
 }

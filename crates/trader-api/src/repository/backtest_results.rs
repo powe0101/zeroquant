@@ -69,7 +69,7 @@ pub struct BacktestResultInput {
 }
 
 /// 저장된 결과 응답용 DTO.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct BacktestResultDto {
     pub id: String,
     pub strategy_id: String,

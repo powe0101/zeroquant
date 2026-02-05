@@ -5,12 +5,31 @@ use sqlx::PgPool;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use trader_collector::{modules, CollectorConfig};
 
-/// 전체 워크플로우 실행 (에러 시 로깅 후 계속).
-async fn run_workflow(pool: &PgPool, config: &CollectorConfig) {
+/// 데이터베이스 URL에서 민감정보(비밀번호) 마스킹.
+/// 예: postgres://user:password@host:5432/db → postgres://user:****@host:5432/db
+fn mask_database_url(url: &str) -> String {
+    // URL 형식: scheme://user:password@host:port/database
+    if let Some(at_pos) = url.find('@') {
+        if let Some(colon_pos) = url[..at_pos].rfind(':') {
+            // scheme://user: 까지 + **** + @host:port/database
+            let prefix = &url[..colon_pos + 1];
+            let suffix = &url[at_pos..];
+            return format!("{}****{}", prefix, suffix);
+        }
+    }
+    // 파싱 실패 시 전체 마스킹
+    "****".to_string()
+}
+
+/// 그룹 A: 외부 API 워크플로우 (Rate Limited)
+/// - 심볼 동기화, Fundamental(Naver/KRX/Yahoo), OHLCV
+async fn run_external_api_workflow(pool: &PgPool, config: &CollectorConfig) {
+    tracing::info!("[Group A] 외부 API 워크플로우 시작");
+
     // 1. 심볼 동기화
     match modules::sync_symbols(pool, config).await {
-        Ok(stats) => stats.log_summary("심볼 동기화"),
-        Err(e) => tracing::error!("심볼 동기화 실패: {}", e),
+        Ok(stats) => stats.log_summary("[A] 심볼 동기화"),
+        Err(e) => tracing::error!("[A] 심볼 동기화 실패: {}", e),
     }
 
     // 2. Fundamental 동기화 (PER, PBR, 섹터 등)
@@ -21,50 +40,100 @@ async fn run_workflow(pool: &PgPool, config: &CollectorConfig) {
                 processed = stats.processed,
                 valuation = stats.valuation_updated,
                 sector = stats.sector_updated,
-                "KRX Fundamental 동기화 완료"
+                "[A] KRX Fundamental 동기화 완료"
             ),
-            Err(e) => tracing::error!("KRX Fundamental 동기화 실패: {}", e),
+            Err(e) => tracing::error!("[A] KRX Fundamental 동기화 실패: {}", e),
         }
     } else if config.providers.naver_enabled {
-        // KRX API가 없으면 네이버 금융으로 fallback
-        match modules::sync_naver_fundamentals(pool, config.providers.naver_request_delay_ms, None)
-            .await
-        {
+        let naver_options = modules::NaverSyncOptions {
+            request_delay_ms: config.providers.naver_request_delay_ms,
+            batch_size: None,
+            resume: false,
+            stale_hours: Some(config.fundamental_collect.stale_days as u32 * 24),
+        };
+        match modules::sync_naver_fundamentals_with_options(pool, naver_options).await {
             Ok(stats) => tracing::info!(
                 processed = stats.processed,
                 valuation = stats.valuation_updated,
                 sector = stats.sector_updated,
-                "네이버 Fundamental 동기화 완료"
+                "[A] 네이버 Fundamental 동기화 완료"
             ),
-            Err(e) => tracing::error!("네이버 Fundamental 동기화 실패: {}", e),
+            Err(e) => tracing::error!("[A] 네이버 Fundamental 동기화 실패: {}", e),
         }
-    } else {
-        tracing::info!("Fundamental 동기화 건너뜀 (KRX API, 네이버 모두 비활성화)");
     }
 
-    // 3. OHLCV 수집 (지표도 함께 계산) - 데몬 모드에서는 24시간 증분 수집
+    // 2-2. Yahoo Finance Fundamental 동기화 (US/글로벌 시장)
+    if config.providers.yahoo_enabled {
+        let yahoo_options = modules::YahooSyncOptions {
+            request_delay_ms: config.fundamental_collect.request_delay_ms,
+            batch_size: Some(100),
+            market_filter: None,
+            resume: false,
+            stale_hours: Some(config.fundamental_collect.stale_days as u32 * 24),
+        };
+        match modules::sync_yahoo_fundamentals(pool, yahoo_options).await {
+            Ok(stats) => tracing::info!(
+                processed = stats.processed,
+                valuation = stats.valuation_updated,
+                market_cap = stats.market_cap_updated,
+                "[A] Yahoo Fundamental 동기화 완료"
+            ),
+            Err(e) => tracing::error!("[A] Yahoo Fundamental 동기화 실패: {}", e),
+        }
+    }
+
+    // 3. OHLCV 수집 - 데몬 모드에서는 24시간 증분 수집
     match modules::collect_ohlcv(pool, config, None, Some(24)).await {
-        Ok(stats) => stats.log_summary("OHLCV 수집"),
-        Err(e) => tracing::error!("OHLCV 수집 실패: {}", e),
+        Ok(stats) => stats.log_summary("[A] OHLCV 수집"),
+        Err(e) => tracing::error!("[A] OHLCV 수집 실패: {}", e),
     }
 
-    // 4. 분석 지표 동기화 (누락된 지표 보완)
+    tracing::info!("[Group A] 외부 API 워크플로우 완료");
+}
+
+/// 그룹 B: 내부 계산 워크플로우 (No Rate Limit)
+/// - Indicator, GlobalScore, Screening View
+/// DB 데이터만 사용하므로 연속 실행 가능
+async fn run_internal_calc_workflow(pool: &PgPool, config: &CollectorConfig) {
+    tracing::debug!("[Group B] 내부 계산 워크플로우 시작");
+
+    // 1. 분석 지표 동기화 (누락된 지표 보완)
     match modules::sync_indicators(pool, config, None).await {
-        Ok(stats) => stats.log_summary("지표 동기화"),
-        Err(e) => tracing::error!("지표 동기화 실패: {}", e),
+        Ok(stats) => {
+            if stats.success > 0 {
+                stats.log_summary("[B] 지표 동기화");
+            }
+        }
+        Err(e) => tracing::error!("[B] 지표 동기화 실패: {}", e),
     }
 
-    // 5. GlobalScore 동기화 (랭킹용)
+    // 2. GlobalScore 동기화 (랭킹용)
     match modules::sync_global_scores(pool, config, None).await {
-        Ok(stats) => stats.log_summary("GlobalScore 동기화"),
-        Err(e) => tracing::error!("GlobalScore 동기화 실패: {}", e),
+        Ok(stats) => {
+            if stats.success > 0 {
+                stats.log_summary("[B] GlobalScore 동기화");
+            }
+        }
+        Err(e) => tracing::error!("[B] GlobalScore 동기화 실패: {}", e),
     }
 
-    // 6. 스크리닝 Materialized View 갱신
+    // 3. 스크리닝 Materialized View 갱신
     match modules::refresh_screening_view(pool).await {
-        Ok(stats) => stats.log_summary("스크리닝 뷰 갱신"),
-        Err(e) => tracing::error!("스크리닝 뷰 갱신 실패: {}", e),
+        Ok(stats) => {
+            if stats.success > 0 {
+                stats.log_summary("[B] 스크리닝 뷰 갱신");
+            }
+        }
+        Err(e) => tracing::error!("[B] 스크리닝 뷰 갱신 실패: {}", e),
     }
+
+    tracing::debug!("[Group B] 내부 계산 워크플로우 완료");
+}
+
+/// 전체 워크플로우 실행 (레거시 호환 - RunAll 명령용)
+async fn run_workflow(pool: &PgPool, config: &CollectorConfig) {
+    run_external_api_workflow(pool, config).await;
+    run_internal_calc_workflow(pool, config).await;
 }
 
 #[derive(Parser)]
@@ -160,6 +229,26 @@ enum Commands {
         stale_hours: Option<u32>,
     },
 
+    /// Yahoo Finance Fundamental 데이터 동기화 (US/글로벌 시장)
+    /// PER, PBR, ROE, ROA, 영업이익률 등 수집
+    SyncYahooFundamentals {
+        /// 배치당 처리할 심볼 수 (기본: 전체)
+        #[arg(long)]
+        batch_size: Option<i64>,
+
+        /// 특정 시장만 처리 (예: "US")
+        #[arg(long)]
+        market: Option<String>,
+
+        /// 이전 중단점부터 재개
+        #[arg(long)]
+        resume: bool,
+
+        /// N시간 이내 업데이트된 심볼 스킵
+        #[arg(long)]
+        stale_hours: Option<u32>,
+    },
+
     /// 스크리닝 Materialized View 갱신
     /// symbol_info + fundamental + global_score 통합 뷰 갱신
     RefreshScreening,
@@ -216,7 +305,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 설정 로드
     let config = CollectorConfig::from_env()?;
-    tracing::debug!(database_url = %config.database_url, "설정 로드 완료");
+    // 민감정보 마스킹 (비밀번호, 사용자명 숨김)
+    let masked_url = mask_database_url(&config.database_url);
+    tracing::debug!(database_url = %masked_url, "설정 로드 완료");
 
     // DB 연결
     let pool = sqlx::PgPool::connect(&config.database_url).await?;
@@ -361,6 +452,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+        Commands::SyncYahooFundamentals {
+            batch_size,
+            market,
+            resume,
+            stale_hours,
+        } => {
+            if !config.providers.yahoo_enabled {
+                tracing::warn!("Yahoo Finance가 비활성화되어 있습니다. PROVIDER_YAHOO_ENABLED=true로 활성화하세요.");
+                return Ok(());
+            }
+
+            let options = modules::YahooSyncOptions {
+                request_delay_ms: config.fundamental_collect.request_delay_ms,
+                batch_size,
+                market_filter: market,
+                resume,
+                stale_hours,
+            };
+            let stats = modules::sync_yahoo_fundamentals(&pool, options).await?;
+            tracing::info!(
+                processed = stats.processed,
+                valuation = stats.valuation_updated,
+                market_cap = stats.market_cap_updated,
+                failed = stats.failed,
+                "Yahoo Fundamental 동기화 완료"
+            );
+        }
         Commands::RefreshScreening => {
             let stats = modules::refresh_screening_view(&pool).await?;
             stats.log_summary("스크리닝 뷰 갱신");
@@ -483,40 +601,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Daemon => {
+            // 내부 계산 주기 (분) - 환경변수 또는 기본값 5분
+            let internal_calc_interval_minutes: u64 = std::env::var("INTERNAL_CALC_INTERVAL_MINUTES")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5);
+
             tracing::info!(
-                "=== 데몬 모드 시작 (주기: {}분) ===",
-                config.daemon.interval_minutes
+                "=== 데몬 모드 시작 ===\n  \
+                 [Group A] 외부 API 주기: {}분 (Fundamental, OHLCV)\n  \
+                 [Group B] 내부 계산 주기: {}분 (Indicator, Score)",
+                config.daemon.interval_minutes,
+                internal_calc_interval_minutes
             );
 
-            // 데몬 시작 시 즉시 한 번 실행
+            // 초기 실행: 두 그룹 모두 실행
             tracing::info!("=== 초기 워크플로우 실행 시작 ===");
-            run_workflow(&pool, &config).await;
-            tracing::info!(
-                "=== 초기 워크플로우 완료, 다음 실행: {}분 후 ===",
-                config.daemon.interval_minutes
-            );
+            run_external_api_workflow(&pool, &config).await;
+            run_internal_calc_workflow(&pool, &config).await;
+            tracing::info!("=== 초기 워크플로우 완료 ===");
 
-            let mut interval = tokio::time::interval(config.daemon.interval());
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // 첫 tick은 즉시 발생하므로 건너뜀 (이미 위에서 실행함)
-            interval.tick().await;
+            // 두 그룹을 병렬로 실행
+            let pool_a = pool.clone();
+            let pool_b = pool.clone();
+            let config_a = config.clone();
+            let config_b = config.clone();
 
-            loop {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("종료 신호 수신, 데몬 종료 중...");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        tracing::info!("=== 워크플로우 실행 시작 ===");
-                        run_workflow(&pool, &config).await;
-                        tracing::info!(
-                            "=== 워크플로우 완료, 다음 실행: {}분 후 ===",
-                            config.daemon.interval_minutes
-                        );
+            // 종료 시그널 공유
+            let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+            let mut shutdown_rx_a = shutdown_tx.subscribe();
+            let mut shutdown_rx_b = shutdown_tx.subscribe();
+
+            // Group A: 외부 API 워크플로우 (긴 주기)
+            let group_a_handle = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(config_a.daemon.interval());
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await; // 첫 tick 건너뜀 (이미 초기 실행함)
+
+                loop {
+                    tokio::select! {
+                        _ = shutdown_rx_a.recv() => {
+                            tracing::info!("[Group A] 종료 신호 수신");
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            run_external_api_workflow(&pool_a, &config_a).await;
+                            tracing::info!(
+                                "[Group A] 다음 실행: {}분 후",
+                                config_a.daemon.interval_minutes
+                            );
+                        }
                     }
                 }
-            }
+            });
+
+            // Group B: 내부 계산 워크플로우 (짧은 주기, 연속 실행)
+            let group_b_handle = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(
+                    std::time::Duration::from_secs(internal_calc_interval_minutes * 60)
+                );
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await; // 첫 tick 건너뜀
+
+                loop {
+                    tokio::select! {
+                        _ = shutdown_rx_b.recv() => {
+                            tracing::info!("[Group B] 종료 신호 수신");
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            run_internal_calc_workflow(&pool_b, &config_b).await;
+                        }
+                    }
+                }
+            });
+
+            // Ctrl+C 대기 후 종료 시그널 전송
+            tokio::signal::ctrl_c().await.ok();
+            tracing::info!("종료 신호 수신, 데몬 종료 중...");
+            let _ = shutdown_tx.send(());
+
+            // 두 그룹 종료 대기
+            let _ = tokio::join!(group_a_handle, group_b_handle);
         }
     }
 

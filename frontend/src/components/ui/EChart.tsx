@@ -7,7 +7,7 @@
 import { onMount, onCleanup, createEffect, on } from 'solid-js'
 import type { Component, JSX } from 'solid-js'
 import * as echarts from 'echarts/core'
-import { PieChart, TreemapChart, BarChart, LineChart, HeatmapChart, GaugeChart, ScatterChart } from 'echarts/charts'
+import { PieChart, TreemapChart, BarChart, LineChart, HeatmapChart, GaugeChart, ScatterChart, CandlestickChart } from 'echarts/charts'
 import {
   TitleComponent,
   TooltipComponent,
@@ -30,6 +30,7 @@ echarts.use([
   HeatmapChart,
   GaugeChart,
   ScatterChart,       // 기회맵(OpportunityMap) 등에 사용
+  CandlestickChart,   // 캔들스틱 차트 (종목 상세)
   TitleComponent,
   TooltipComponent,
   LegendComponent,

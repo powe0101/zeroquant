@@ -10,9 +10,11 @@ use chrono::{Datelike, TimeZone, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use trader_core::{Kline, MarketData, Position, Side, Timeframe};
+use trader_core::{Kline, MarketData, Position, Side, StrategyContext, Timeframe};
 use trader_strategy::strategies::asset_allocation::{
     AssetAllocationConfig, AssetAllocationStrategy, StrategyVariant,
 };
@@ -161,6 +163,83 @@ async fn feed_falling_prices_in_month(
         let data = create_kline_at_month(ticker, price, year, month, day_num);
         let _ = strategy.on_market_data(&data).await;
     }
+}
+
+/// 상승 추세 klines 데이터 생성 (StrategyContext용)
+fn generate_rising_klines(ticker: &str, days: usize, base_price: Decimal) -> Vec<Kline> {
+    let mut klines = Vec::new();
+    for day in (0..days).rev() {
+        let price = base_price + Decimal::from((days - day) as i32 * 2);
+        let timestamp = Utc::now() - chrono::Duration::days(day as i64);
+        let kline = Kline::new(
+            ticker.to_string(),
+            Timeframe::D1,
+            timestamp,
+            price - dec!(5),
+            price + dec!(5),
+            price - dec!(10),
+            price,
+            dec!(10000),
+            timestamp,
+        );
+        klines.push(kline);
+    }
+    klines
+}
+
+/// 하락 추세 klines 데이터 생성 (StrategyContext용)
+fn generate_falling_klines(ticker: &str, days: usize, base_price: Decimal) -> Vec<Kline> {
+    let mut klines = Vec::new();
+    for day in (0..days).rev() {
+        let price = base_price - Decimal::from((days - day) as i32 * 2);
+        let timestamp = Utc::now() - chrono::Duration::days(day as i64);
+        let kline = Kline::new(
+            ticker.to_string(),
+            Timeframe::D1,
+            timestamp,
+            price - dec!(5),
+            price + dec!(5),
+            price - dec!(10),
+            price,
+            dec!(10000),
+            timestamp,
+        );
+        klines.push(kline);
+    }
+    klines
+}
+
+/// StrategyContext 설정 헬퍼 - 상승 추세 데이터로 설정
+fn setup_context_with_rising_prices(
+    tickers: &[&str],
+    days: usize,
+    base_price: Decimal,
+) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+    for ticker in tickers {
+        let klines = generate_rising_klines(ticker, days, base_price);
+        context.update_klines(ticker, Timeframe::D1, klines);
+    }
+    Arc::new(RwLock::new(context))
+}
+
+/// StrategyContext 설정 헬퍼 - 커스텀 가격 데이터로 설정
+fn setup_context_with_mixed_prices(
+    rising_tickers: &[&str],
+    falling_tickers: &[&str],
+    days: usize,
+    base_price: Decimal,
+) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+    for ticker in rising_tickers {
+        let klines = generate_rising_klines(ticker, days, base_price);
+        context.update_klines(ticker, Timeframe::D1, klines);
+    }
+    for ticker in falling_tickers {
+        let klines = generate_falling_klines(ticker, days, base_price + dec!(50));
+        context.update_klines(ticker, Timeframe::D1, klines);
+    }
+    Arc::new(RwLock::new(context))
 }
 
 /// 짧은 모멘텀 기간의 커스텀 설정 (테스트용)
@@ -340,10 +419,13 @@ mod canary_mode_tests {
         let config = test_config_with_canary();
         strategy.initialize(config).await.unwrap();
 
-        // 모든 자산에 상승 추세 데이터 입력 (1개월 모멘텀용 30일+)
-        for ticker in &["VWO", "SPY", "VEA", "AGG", "BIL"] {
-            feed_rising_prices(&mut strategy, ticker, 30, dec!(100)).await;
-        }
+        // StrategyContext에 상승 추세 데이터 설정 (1개월 모멘텀용 35일)
+        let context = setup_context_with_rising_prices(
+            &["VWO", "SPY", "VEA", "AGG", "BIL"],
+            35,
+            dec!(100),
+        );
+        strategy.set_context(context);
 
         // 현재 시점 데이터로 리밸런싱 트리거
         let data = create_kline("SPY", dec!(160));
@@ -368,18 +450,14 @@ mod canary_mode_tests {
         let config = test_config_with_canary();
         strategy.initialize(config).await.unwrap();
 
-        // 공격 자산은 상승
-        for ticker in &["SPY", "VEA"] {
-            feed_rising_prices(&mut strategy, ticker, 30, dec!(100)).await;
-        }
-
-        // 카나리아 자산 (VWO)은 하락 → 모멘텀 음수 → Defensive
-        feed_falling_prices(&mut strategy, "VWO", 30, dec!(150)).await;
-
-        // 방어 자산도 데이터 입력
-        for ticker in &["AGG", "BIL"] {
-            feed_rising_prices(&mut strategy, ticker, 30, dec!(50)).await;
-        }
+        // StrategyContext에 혼합 데이터 설정 (VWO만 하락)
+        let context = setup_context_with_mixed_prices(
+            &["SPY", "VEA", "AGG", "BIL"],  // 상승 추세
+            &["VWO"],                        // 하락 추세 (카나리아)
+            35,
+            dec!(100),
+        );
+        strategy.set_context(context);
 
         // 현재 시점 데이터로 리밸런싱 트리거
         let data = create_kline("SPY", dec!(160));

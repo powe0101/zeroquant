@@ -100,6 +100,8 @@ impl KrMarketType {
 }
 
 /// 네이버 금융 펀더멘털 데이터
+///
+/// Yahoo Finance와 동일한 수준의 데이터를 제공합니다.
 #[derive(Debug, Clone, Default)]
 pub struct NaverFundamentalData {
     /// 종목 코드
@@ -112,6 +114,8 @@ pub struct NaverFundamentalData {
     pub market_cap: Option<Decimal>,
     /// PER (주가수익비율)
     pub per: Option<Decimal>,
+    /// Forward PER (예상 PER) - 네이버 미제공, 항상 None
+    pub forward_per: Option<Decimal>,
     /// PBR (주가순자산비율)
     pub pbr: Option<Decimal>,
     /// PSR (주가매출비율)
@@ -120,6 +124,8 @@ pub struct NaverFundamentalData {
     pub roe: Option<Decimal>,
     /// EPS (주당순이익, 원)
     pub eps: Option<Decimal>,
+    /// Forward EPS (예상 EPS) - 네이버 미제공, 항상 None
+    pub forward_eps: Option<Decimal>,
     /// BPS (주당순자산, 원)
     pub bps: Option<Decimal>,
     /// 배당수익률 (%)
@@ -128,6 +134,10 @@ pub struct NaverFundamentalData {
     pub week_52_high: Option<Decimal>,
     /// 52주 최저가
     pub week_52_low: Option<Decimal>,
+    /// 10일 평균 거래량
+    pub avg_volume_10d: Option<i64>,
+    /// 3개월 평균 거래량 - 네이버 미제공, 항상 None
+    pub avg_volume_3m: Option<i64>,
     /// 업종(섹터)
     pub sector: Option<String>,
     /// 동일업종 PER
@@ -152,14 +162,26 @@ pub struct NaverFundamentalData {
     pub net_income_growth_yoy: Option<Decimal>,
     /// ROA (총자산이익률, %)
     pub roa: Option<Decimal>,
+    /// 매출총이익률 (%) - 네이버 미제공, 항상 None
+    pub gross_margin: Option<Decimal>,
     /// 영업이익률 (%)
     pub operating_margin: Option<Decimal>,
+    /// 순이익률 (%) - 계산: 순이익/매출액*100
+    pub net_profit_margin: Option<Decimal>,
     /// 부채비율 (%)
     pub debt_ratio: Option<Decimal>,
     /// 유동비율 (%)
     pub current_ratio: Option<Decimal>,
     /// 당좌비율 (%)
     pub quick_ratio: Option<Decimal>,
+    /// 발행주식수
+    pub shares_outstanding: Option<i64>,
+    /// 유통주식수 - 네이버 미제공, 항상 None
+    pub float_shares: Option<i64>,
+    /// 베타 - 네이버 미제공, 항상 None
+    pub beta: Option<Decimal>,
+    /// 통화 (항상 KRW)
+    pub currency: String,
 }
 
 /// 네이버 금융 크롤러
@@ -209,6 +231,7 @@ impl NaverFinanceFetcher {
     ) -> Result<NaverFundamentalData, NaverError> {
         let mut data = NaverFundamentalData {
             ticker: ticker.to_string(),
+            currency: "KRW".to_string(),
             ..Default::default()
         };
 
@@ -218,13 +241,50 @@ impl NaverFinanceFetcher {
 
         // 2. BPS, ROE 등 누락된 데이터가 있으면 coinfo 페이지에서 보완
         if data.bps.is_none() || data.roe.is_none() {
-            // 딜레이 적용
             tokio::time::sleep(self.request_delay).await;
-            // coinfo 페이지에서 추가 데이터 수집 (에러는 무시)
             let _ = self.fetch_coinfo_page(ticker, &mut data).await;
         }
 
+        // TODO: 컨센서스 데이터 (Forward PER/EPS) 수집
+        // 네이버 금융 컨센서스 페이지 크롤링 필요
+        // if data.forward_per.is_none() || data.forward_eps.is_none() {
+        //     tokio::time::sleep(self.request_delay).await;
+        //     let _ = self.fetch_consensus_page(ticker, &mut data).await;
+        // }
+
+        // TODO: 재무제표에서 매출총이익률 추출
+        // 네이버 금융 재무제표 페이지 크롤링 필요
+        // if data.gross_margin.is_none() {
+        //     tokio::time::sleep(self.request_delay).await;
+        //     let _ = self.fetch_financial_statements(ticker, &mut data).await;
+        // }
+
+        // 5. 추가 계산: 누락된 지표 보완
+        self.calculate_derived_metrics(&mut data);
+
         Ok(data)
+    }
+
+    /// 파생 지표 계산 (직접 추출 불가능한 지표들)
+    fn calculate_derived_metrics(&self, data: &mut NaverFundamentalData) {
+        // 순이익률 계산: 순이익 / 매출액 * 100
+        if data.net_profit_margin.is_none() {
+            if let (Some(net_income), Some(revenue)) = (data.net_income, data.revenue) {
+                if revenue > Decimal::ZERO {
+                    data.net_profit_margin = Some((net_income / revenue) * Decimal::from(100));
+                }
+            }
+        }
+
+        // 발행주식수 계산: 시가총액 / 현재가
+        if data.shares_outstanding.is_none() {
+            if let (Some(market_cap), Some(current_price)) = (data.market_cap, data.current_price) {
+                if current_price > Decimal::ZERO {
+                    let shares = market_cap / current_price;
+                    data.shares_outstanding = Some(shares.to_string().parse::<i64>().unwrap_or(0));
+                }
+            }
+        }
     }
 
     /// main 페이지 크롤링 (시가총액, 52주 고저, 업종, 투자지표 등)

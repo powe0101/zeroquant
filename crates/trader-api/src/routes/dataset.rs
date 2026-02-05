@@ -21,6 +21,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info};
+use utoipa::{IntoParams, ToSchema};
 
 use trader_core::Timeframe;
 use trader_data::cache::CachedHistoricalDataProvider;
@@ -32,7 +33,7 @@ use crate::state::AppState;
 // ==================== 응답 타입 ====================
 
 /// 캐시된 데이터셋 요약.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetSummary {
     /// 심볼
@@ -53,7 +54,7 @@ pub struct DatasetSummary {
 }
 
 /// 데이터셋 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetListResponse {
     pub datasets: Vec<DatasetSummary>,
@@ -61,7 +62,7 @@ pub struct DatasetListResponse {
 }
 
 /// 캔들 데이터 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CandleDataResponse {
     pub symbol: String,
@@ -71,7 +72,7 @@ pub struct CandleDataResponse {
 }
 
 /// 단일 캔들.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CandleItem {
     pub time: String,
@@ -83,7 +84,7 @@ pub struct CandleItem {
 }
 
 /// 데이터셋 다운로드 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchDatasetRequest {
     /// 심볼 (예: 005930, AAPL)
@@ -111,7 +112,7 @@ fn default_limit() -> usize {
 }
 
 /// 데이터셋 다운로드 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchDatasetResponse {
     pub symbol: String,
@@ -121,7 +122,7 @@ pub struct FetchDatasetResponse {
 }
 
 /// 정렬 컬럼.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum SortColumn {
@@ -149,7 +150,7 @@ impl SortColumn {
 }
 
 /// 정렬 방향.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum SortOrder {
@@ -168,7 +169,7 @@ impl SortOrder {
 }
 
 /// 캔들 조회 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 pub struct CandleQuery {
     /// 타임프레임 (기본: 1d)
@@ -193,7 +194,7 @@ fn default_candle_limit() -> usize {
 }
 
 /// 삭제 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct DeleteQuery {
     /// 특정 타임프레임만 삭제 (선택사항)
     pub timeframe: Option<String>,
@@ -202,8 +203,16 @@ pub struct DeleteQuery {
 // ==================== Handler ====================
 
 /// 캐시된 데이터셋 목록 조회.
-///
-/// GET /api/v1/dataset
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset",
+    tag = "dataset",
+    responses(
+        (status = 200, description = "데이터셋 목록 조회 성공", body = DatasetListResponse),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 pub async fn list_datasets(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DatasetListResponse>, (StatusCode, Json<ApiError>)> {
@@ -282,15 +291,18 @@ pub async fn list_datasets(
 }
 
 /// 새 데이터셋 다운로드 요청.
-///
-/// POST /api/v1/dataset/fetch
-///
-/// # 요청 본문
-/// - `symbol`: 심볼 (예: 005930, AAPL)
-/// - `timeframe`: 타임프레임 (기본값: 1d)
-/// - `limit`: 캔들 수 (start_date/end_date가 없을 때 사용, 기본값: 500)
-/// - `start_date`: 시작 날짜 (선택, 예: 2024-01-01)
-/// - `end_date`: 종료 날짜 (선택, 예: 2024-12-31)
+#[utoipa::path(
+    post,
+    path = "/api/v1/dataset/fetch",
+    tag = "dataset",
+    request_body = FetchDatasetRequest,
+    responses(
+        (status = 200, description = "데이터셋 다운로드 성공", body = FetchDatasetResponse),
+        (status = 400, description = "잘못된 요청", body = ApiError),
+        (status = 502, description = "외부 API 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 pub async fn fetch_dataset(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FetchDatasetRequest>,
@@ -507,15 +519,22 @@ fn calculate_effective_limit(
 }
 
 /// 특정 심볼의 캔들 데이터 조회 (정렬 지원).
-///
-/// GET /api/v1/dataset/:symbol
-///
-/// # 쿼리 파라미터
-/// - `timeframe`: 타임프레임 (1d, 1h, 5m 등)
-/// - `limit`: 조회할 캔들 수
-/// - `page`: 페이지 번호
-/// - `sortBy`: 정렬 컬럼 (time, open, high, low, close, volume)
-/// - `sortOrder`: 정렬 방향 (asc, desc)
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset/{symbol}",
+    tag = "dataset",
+    params(
+        ("symbol" = String, Path, description = "심볼 (예: 005930, AAPL)"),
+        CandleQuery
+    ),
+    responses(
+        (status = 200, description = "캔들 데이터 조회 성공", body = CandleDataResponse),
+        (status = 404, description = "심볼 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 502, description = "외부 API 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 pub async fn get_candles(
     State(state): State<Arc<AppState>>,
     Path(symbol): Path<String>,
@@ -725,8 +744,21 @@ pub async fn get_candles(
 }
 
 /// 특정 심볼 캐시 삭제.
-///
-/// DELETE /api/v1/dataset/:symbol
+#[utoipa::path(
+    delete,
+    path = "/api/v1/dataset/{symbol}",
+    tag = "dataset",
+    params(
+        ("symbol" = String, Path, description = "심볼 (예: 005930, AAPL)"),
+        DeleteQuery
+    ),
+    responses(
+        (status = 200, description = "캐시 삭제 성공"),
+        (status = 404, description = "심볼 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 pub async fn delete_dataset(
     State(state): State<Arc<AppState>>,
     Path(symbol): Path<String>,
@@ -873,7 +905,7 @@ fn timeframe_to_db_string(tf: &str) -> String {
 // ==================== 심볼 검색 ====================
 
 /// 심볼 검색 요청 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct SymbolSearchQuery {
     /// 검색어 (티커 또는 회사명)
     pub q: String,
@@ -887,7 +919,7 @@ fn default_search_limit() -> i64 {
 }
 
 /// 심볼 검색 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SymbolSearchResponse {
     pub results: Vec<SymbolSearchResult>,
@@ -898,18 +930,18 @@ pub struct SymbolSearchResponse {
 ///
 /// 티커 코드와 회사명으로 검색합니다.
 /// DB에 없는 종목은 KRX/Yahoo Finance에서 자동으로 조회하여 저장합니다.
-///
-/// # Query Parameters
-///
-/// - `q`: 검색어 (필수)
-/// - `limit`: 최대 결과 수 (선택, 기본 10)
-///
-/// # 예시
-///
-/// ```text
-/// GET /api/v1/dataset/search?q=삼성&limit=5
-/// GET /api/v1/dataset/search?q=AAPL
-/// ```
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset/search",
+    tag = "dataset",
+    params(SymbolSearchQuery),
+    responses(
+        (status = 200, description = "심볼 검색 성공", body = SymbolSearchResponse),
+        (status = 400, description = "잘못된 검색어", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 pub async fn search_symbols(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SymbolSearchQuery>,
@@ -985,7 +1017,7 @@ pub async fn search_symbols(
 // ==================== 심볼 배치 조회 ====================
 
 /// 심볼 배치 조회 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SymbolBatchRequest {
     /// 조회할 티커 목록 (최대 100개)
@@ -993,7 +1025,7 @@ pub struct SymbolBatchRequest {
 }
 
 /// 심볼 배치 조회 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SymbolBatchResponse {
     /// 심볼 정보 목록
@@ -1003,26 +1035,18 @@ pub struct SymbolBatchResponse {
 }
 
 /// 여러 티커의 심볼 정보 일괄 조회.
-///
-/// POST /api/v1/dataset/symbols/batch
-///
-/// # 요청 본문
-/// ```json
-/// {
-///   "tickers": ["005930", "AAPL", "BTCUSDT"]
-/// }
-/// ```
-///
-/// # 응답
-/// ```json
-/// {
-///   "symbols": [
-///     { "ticker": "005930", "name": "삼성전자", "market": "KOSPI", "yahooSymbol": "005930.KS" },
-///     { "ticker": "AAPL", "name": "Apple Inc.", "market": "NASDAQ", "yahooSymbol": "AAPL" }
-///   ],
-///   "total": 2
-/// }
-/// ```
+#[utoipa::path(
+    post,
+    path = "/api/v1/dataset/symbols/batch",
+    tag = "dataset",
+    request_body = SymbolBatchRequest,
+    responses(
+        (status = 200, description = "심볼 배치 조회 성공", body = SymbolBatchResponse),
+        (status = 400, description = "잘못된 요청 (티커 없거나 100개 초과)", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 pub async fn get_symbols_batch(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SymbolBatchRequest>,
@@ -1103,7 +1127,7 @@ pub fn dataset_router() -> Router<Arc<AppState>> {
 // ==================== 심볼 상태 관리 ====================
 
 /// 실패 심볼 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FailedSymbolsResponse {
     /// 실패한 심볼 목록.
@@ -1113,7 +1137,7 @@ pub struct FailedSymbolsResponse {
 }
 
 /// 실패 심볼 정보 DTO.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FailedSymbolDto {
     pub id: String,
@@ -1130,7 +1154,7 @@ pub struct FailedSymbolDto {
 }
 
 /// 심볼 통계 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SymbolStatsResponse {
     /// 비활성화된 심볼 수.
@@ -1142,7 +1166,7 @@ pub struct SymbolStatsResponse {
 }
 
 /// 심볼 재활성화 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReactivateSymbolsRequest {
     /// 재활성화할 심볼 ID 목록.
@@ -1150,7 +1174,7 @@ pub struct ReactivateSymbolsRequest {
 }
 
 /// 심볼 재활성화 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReactivateSymbolsResponse {
     pub success: bool,
@@ -1160,7 +1184,7 @@ pub struct ReactivateSymbolsResponse {
 }
 
 /// 실패 심볼 목록 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 pub struct FailedSymbolsQuery {
     /// 최소 실패 횟수 (기본: 1).
@@ -1173,8 +1197,17 @@ fn default_min_failures() -> i32 {
 }
 
 /// 실패 심볼 목록 조회.
-///
-/// GET /api/v1/dataset/symbols/failed
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset/symbols/failed",
+    tag = "dataset",
+    params(FailedSymbolsQuery),
+    responses(
+        (status = 200, description = "실패 심볼 목록 조회 성공", body = FailedSymbolsResponse),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 async fn get_failed_symbols(
     State(state): State<Arc<AppState>>,
     Query(params): Query<FailedSymbolsQuery>,
@@ -1234,8 +1267,16 @@ async fn get_failed_symbols(
 }
 
 /// 심볼 통계 조회.
-///
-/// GET /api/v1/dataset/symbols/stats
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset/symbols/stats",
+    tag = "dataset",
+    responses(
+        (status = 200, description = "심볼 통계 조회 성공", body = SymbolStatsResponse),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 async fn get_symbol_stats(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SymbolStatsResponse>, (StatusCode, Json<ApiError>)> {
@@ -1266,8 +1307,18 @@ async fn get_symbol_stats(
 }
 
 /// 심볼 재활성화.
-///
-/// POST /api/v1/dataset/symbols/reactivate
+#[utoipa::path(
+    post,
+    path = "/api/v1/dataset/symbols/reactivate",
+    tag = "dataset",
+    request_body = ReactivateSymbolsRequest,
+    responses(
+        (status = 200, description = "심볼 재활성화 성공", body = ReactivateSymbolsResponse),
+        (status = 400, description = "잘못된 요청", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError),
+        (status = 503, description = "DB 연결 없음", body = ApiError)
+    )
+)]
 async fn reactivate_symbols(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ReactivateSymbolsRequest>,

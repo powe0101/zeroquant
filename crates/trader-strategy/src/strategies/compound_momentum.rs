@@ -36,13 +36,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::domain::{RouteState, StrategyContext};
+use trader_core::types::Timeframe;
 
 use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
-use crate::strategies::common::ExitConfig;
+use crate::strategies::common::{adjust_strength_by_score, ExitConfig};
 use crate::traits::Strategy;
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType};
+use trader_core::{MarketData, Order, Position, Side, Signal, SignalType};
 
 /// Simple Power 전략 설정.
 #[derive(Debug, Clone, Serialize, Deserialize, StrategyConfig)]
@@ -55,68 +56,68 @@ use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Sig
 pub struct CompoundMomentumConfig {
     /// 시장 타입 (US/KR)
     #[serde(default)]
-    #[schema(label = "시장 타입")]
+    #[schema(label = "시장 타입", section = "asset")]
     pub market: MarketType,
 
     /// 공격 자산 (기본: TQQQ)
     #[serde(default = "default_aggressive_asset")]
-    #[schema(label = "공격 자산")]
+    #[schema(label = "공격 자산", section = "asset")]
     pub aggressive_asset: String,
     /// 공격 자산 기본 비중
     #[serde(default = "default_aggressive_weight")]
-    #[schema(label = "공격 자산 비중", min = 0, max = 1)]
+    #[schema(label = "공격 자산 비중", min = 0, max = 1, section = "sizing")]
     pub aggressive_weight: Decimal,
 
     /// 배당 자산 (기본: SCHD)
     #[serde(default = "default_dividend_asset")]
-    #[schema(label = "배당 자산")]
+    #[schema(label = "배당 자산", section = "asset")]
     pub dividend_asset: String,
     /// 배당 자산 비중
     #[serde(default = "default_dividend_weight")]
-    #[schema(label = "배당 자산 비중", min = 0, max = 1)]
+    #[schema(label = "배당 자산 비중", min = 0, max = 1, section = "sizing")]
     pub dividend_weight: Decimal,
 
     /// 금리 헤지 자산 (기본: PFIX)
     #[serde(default = "default_rate_hedge_asset")]
-    #[schema(label = "금리 헤지 자산")]
+    #[schema(label = "금리 헤지 자산", section = "asset")]
     pub rate_hedge_asset: String,
     /// 금리 헤지 비중
     #[serde(default = "default_rate_hedge_weight")]
-    #[schema(label = "금리 헤지 비중", min = 0, max = 1)]
+    #[schema(label = "금리 헤지 비중", min = 0, max = 1, section = "sizing")]
     pub rate_hedge_weight: Decimal,
 
     /// 채권 레버리지 자산 (기본: TMF)
     #[serde(default = "default_bond_leverage_asset")]
-    #[schema(label = "채권 레버리지 자산")]
+    #[schema(label = "채권 레버리지 자산", section = "asset")]
     pub bond_leverage_asset: String,
     /// 채권 레버리지 비중
     #[serde(default = "default_bond_leverage_weight")]
-    #[schema(label = "채권 레버리지 비중", min = 0, max = 1)]
+    #[schema(label = "채권 레버리지 비중", min = 0, max = 1, section = "sizing")]
     pub bond_leverage_weight: Decimal,
 
     /// MA 기간 (기본: 130일)
     #[serde(default = "default_ma_period")]
-    #[schema(label = "MA 기간", min = 20, max = 300)]
+    #[schema(label = "MA 기간", min = 20, max = 300, section = "indicator")]
     pub ma_period: usize,
 
     /// 리밸런싱 주기 (월 단위)
     #[serde(default = "default_rebalance_interval")]
-    #[schema(label = "리밸런싱 주기 (월)", min = 1, max = 12)]
+    #[schema(label = "리밸런싱 주기 (월)", min = 1, max = 12, section = "timing")]
     pub rebalance_interval_months: u32,
 
     /// 투자 비율 (총 자산 대비)
     #[serde(default = "default_invest_rate")]
-    #[schema(label = "투자 비율", min = 0, max = 1)]
+    #[schema(label = "투자 비율", min = 0, max = 1, section = "sizing")]
     pub invest_rate: Decimal,
 
     /// 리밸런싱 임계값 (비중 편차)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 임계값", min = 0.01, max = 0.2)]
+    #[schema(label = "리밸런싱 임계값", min = 0.01, max = 0.2, section = "timing")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 GlobalScore (기본값: 60)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -202,7 +203,7 @@ impl CompoundMomentumConfig {
             invest_rate: dec!(1.0),
             rebalance_threshold: dec!(0.03),
             min_global_score: dec!(60),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_momentum(),
         }
     }
 
@@ -229,7 +230,7 @@ impl CompoundMomentumConfig {
             invest_rate: dec!(1.0),
             rebalance_threshold: dec!(0.03),
             min_global_score: dec!(60),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_momentum(),
         }
     }
 
@@ -288,10 +289,8 @@ impl Default for AssetMomentumState {
 /// Simple Power 전략.
 pub struct CompoundMomentumStrategy {
     config: Option<CompoundMomentumConfig>,
-    /// StrategyContext (RouteState, GlobalScore 조회용)
+    /// StrategyContext (RouteState, GlobalScore, Klines 조회용)
     context: Option<Arc<RwLock<StrategyContext>>>,
-    /// 자산별 가격 히스토리 (최신 가격이 앞에)
-    price_history: HashMap<String, Vec<Decimal>>,
     /// 자산별 모멘텀 상태
     momentum_states: HashMap<String, AssetMomentumState>,
     /// 현재 포지션
@@ -310,7 +309,6 @@ impl CompoundMomentumStrategy {
         Self {
             config: None,
             context: None,
-            price_history: HashMap::new(),
             momentum_states: HashMap::new(),
             positions: HashMap::new(),
             last_rebalance_ym: None,
@@ -329,7 +327,6 @@ impl CompoundMomentumStrategy {
         Self {
             config: Some(config),
             context: None,
-            price_history: HashMap::new(),
             momentum_states: HashMap::new(),
             positions: HashMap::new(),
             last_rebalance_ym: None,
@@ -338,18 +335,37 @@ impl CompoundMomentumStrategy {
         }
     }
 
-    /// 가격 히스토리 업데이트.
-    fn update_price_history(&mut self, ticker: &str, price: Decimal) {
-        let history = self.price_history.entry(ticker.to_string()).or_default();
-        history.insert(0, price); // 최신 가격을 앞에
+    // ========================================================================
+    // StrategyContext 헬퍼
+    // ========================================================================
 
-        // 최대 300일 보관
-        if history.len() > 300 {
-            history.truncate(300);
-        }
+    /// StrategyContext에서 가격 히스토리 가져오기 (최신 가격이 앞에)
+    fn get_price_history(&self, ticker: &str) -> Vec<Decimal> {
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return vec![],
+        };
+        let klines = ctx_lock.get_klines(ticker, Timeframe::D1);
+        // 최신 가격이 앞에 오도록 역순으로 변환
+        klines.iter().rev().map(|k| k.close).collect()
     }
 
-    /// 이동평균 계산.
+    /// 충분한 데이터가 있는지 확인
+    fn has_sufficient_data(&self) -> bool {
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return false,
+        };
+        // 적어도 공격 자산의 MA 기간 + 3일 이상 필요
+        let prices = self.get_price_history(&config.aggressive_asset);
+        prices.len() >= config.ma_period + 3
+    }
+
+    /// 이동평균 계산 (최신 가격이 앞에 있는 배열 기준).
     fn calculate_ma(&self, prices: &[Decimal], period: usize, offset: usize) -> Option<Decimal> {
         if prices.len() < period + offset {
             return None;
@@ -365,25 +381,25 @@ impl CompoundMomentumStrategy {
         Some(sum / Decimal::from(period))
     }
 
-    /// 모멘텀 상태 계산.
+    /// 모멘텀 상태 계산 (StrategyContext 기반).
     fn calculate_momentum_state(
         &self,
         ticker: &str,
         config: &CompoundMomentumConfig,
     ) -> AssetMomentumState {
-        let prices = match self.price_history.get(ticker) {
-            Some(p) if p.len() >= config.ma_period + 3 => p,
-            _ => return AssetMomentumState::default(),
-        };
+        let prices = self.get_price_history(ticker);
+        if prices.len() < config.ma_period + 3 {
+            return AssetMomentumState::default();
+        }
 
         // 전일 종가 (index 1, 오늘은 index 0)
         let prev_close = prices.get(1).copied();
 
         // 현재 MA130 (전일 기준, index 1에서 시작)
-        let ma_current = self.calculate_ma(prices, config.ma_period, 1);
+        let ma_current = self.calculate_ma(&prices, config.ma_period, 1);
 
         // 전일 MA130 (2일 전 기준, index 2에서 시작)
-        let ma_previous = self.calculate_ma(prices, config.ma_period, 2);
+        let ma_previous = self.calculate_ma(&prices, config.ma_period, 2);
 
         let mut cut_count: u8 = 0;
         let mut rate = dec!(1.0);
@@ -561,6 +577,21 @@ impl CompoundMomentumStrategy {
         true
     }
 
+    /// GlobalScore 기반 동적 강도 계산.
+    fn get_adjusted_strength(&self, ticker: &str, base_strength: f64) -> f64 {
+        let Some(ctx) = self.context.as_ref() else {
+            return base_strength;
+        };
+        let Ok(ctx_lock) = ctx.try_read() else {
+            return base_strength;
+        };
+        if let Some(score) = ctx_lock.get_global_score(ticker) {
+            adjust_strength_by_score(base_strength, Some(score.overall_score))
+        } else {
+            base_strength
+        }
+    }
+
     /// 리밸런싱 필요 여부 확인.
     fn should_rebalance(&self, current_time: DateTime<Utc>) -> bool {
         let current_ym = format!("{}_{}", current_time.year(), current_time.month());
@@ -588,14 +619,13 @@ impl CompoundMomentumStrategy {
         let mut portfolio_positions: Vec<PortfolioPosition> = Vec::new();
 
         for (ticker, quantity) in &self.positions {
-            if let Some(prices) = self.price_history.get(ticker) {
-                if let Some(current_price) = prices.first() {
-                    portfolio_positions.push(PortfolioPosition::new(
-                        ticker,
-                        *quantity,
-                        *current_price,
-                    ));
-                }
+            let prices = self.get_price_history(ticker);
+            if let Some(current_price) = prices.first() {
+                portfolio_positions.push(PortfolioPosition::new(
+                    ticker,
+                    *quantity,
+                    *current_price,
+                ));
             }
         }
 
@@ -635,6 +665,10 @@ impl CompoundMomentumStrategy {
                 MarketType::KR => "KRW",
             };
 
+            // GlobalScore 기반 동적 강도 적용 (BUY 신호에만)
+            let base_strength = if side == Side::Buy { 0.7 } else { 0.9 };
+            let strength = self.get_adjusted_strength(&order.ticker, base_strength);
+
             // Signal 빌더 패턴으로 생성
             let signal = Signal::new(
                 self.name(),
@@ -642,6 +676,7 @@ impl CompoundMomentumStrategy {
                 side,
                 SignalType::Scale, // 리밸런싱은 Scale 타입 사용
             )
+            .with_strength(strength)
             .with_metadata("current_weight", json!(order.current_weight.to_string()))
             .with_metadata("target_weight", json!(order.target_weight.to_string()))
             .with_metadata("amount", json!(order.amount.to_string()))
@@ -732,18 +767,9 @@ impl Strategy for CompoundMomentumStrategy {
             return Ok(Vec::new());
         }
 
-        // MarketDataType에서 가격 추출
-        let price = match &data.data {
-            MarketDataType::Kline(kline) => Some(kline.close),
-            MarketDataType::Ticker(ticker) => Some(ticker.last),
-            MarketDataType::Trade(trade) => Some(trade.price),
-            MarketDataType::OrderBook(_) => None, // 호가창에서는 가격 추출 안함
-        };
-
-        // 가격 업데이트
-        if let Some(price) = price {
-            self.update_price_history(&ticker, price);
-            debug!("[Simple Power] 가격 업데이트: {} = {}", ticker, price);
+        // StrategyContext에 충분한 데이터가 있는지 확인
+        if !self.has_sufficient_data() {
+            return Ok(Vec::new());
         }
 
         // 리밸런싱 신호 생성
@@ -895,48 +921,23 @@ mod tests {
     }
 
     #[test]
-    fn test_update_price_history() {
-        let mut strategy = CompoundMomentumStrategy::new();
-        strategy.update_price_history("TQQQ", dec!(100));
-        strategy.update_price_history("TQQQ", dec!(101));
-        strategy.update_price_history("TQQQ", dec!(102));
-
-        let history = strategy.price_history.get("TQQQ").unwrap();
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[0], dec!(102)); // 최신 가격이 앞에
-        assert_eq!(history[1], dec!(101));
-        assert_eq!(history[2], dec!(100));
-    }
-
-    #[test]
-    fn test_momentum_state_no_data() {
+    fn test_momentum_state_no_context() {
+        // StrategyContext 없이 모멘텀 상태 계산 - 기본값 반환
         let strategy = CompoundMomentumStrategy::new();
         let config = CompoundMomentumConfig::us_default();
         let state = strategy.calculate_momentum_state("TQQQ", &config);
 
-        // 데이터 없으면 기본값
+        // Context 없으면 기본값
         assert_eq!(state.cut_count, 0);
         assert_eq!(state.rate_multiplier, dec!(1.0));
         assert!(!state.is_out);
     }
 
     #[test]
-    fn test_momentum_state_with_data() {
-        let mut strategy = CompoundMomentumStrategy::new();
-        let config = CompoundMomentumConfig::us_default();
-
-        // 상승 추세 데이터 생성 (최신이 가장 높음)
-        let prices: Vec<Decimal> = (0..200)
-            .rev()
-            .map(|i| dec!(100) + Decimal::from(i) * dec!(0.1))
-            .collect();
-        strategy.price_history.insert("TQQQ".to_string(), prices);
-
-        let state = strategy.calculate_momentum_state("TQQQ", &config);
-
-        // 상승 추세이므로 컷 없음
-        assert_eq!(state.cut_count, 0);
-        assert_eq!(state.rate_multiplier, dec!(1.0));
+    fn test_has_sufficient_data_without_context() {
+        // StrategyContext 없이는 데이터 부족
+        let strategy = CompoundMomentumStrategy::new();
+        assert!(!strategy.has_sufficient_data());
     }
 
     #[test]
@@ -953,10 +954,10 @@ mod tests {
 use crate::register_strategy;
 
 register_strategy! {
-    id: "simple_power",
-    aliases: [],
-    name: "Simple Power",
-    description: "심플 파워 모멘텀 자산배분 전략입니다.",
+    id: "compound_momentum",
+    aliases: ["simple_power"],
+    name: "Compound Momentum",
+    description: "복합 모멘텀 자산배분 전략입니다.",
     timeframe: "1d",
     tickers: ["TQQQ", "SCHD", "PFIX", "TMF"],
     category: Monthly,

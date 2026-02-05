@@ -110,7 +110,7 @@ pub struct StrategyDetailResponse {
 }
 
 /// 전략 시작/중지 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct StrategyActionResponse {
     /// 성공 여부
@@ -124,21 +124,23 @@ pub struct StrategyActionResponse {
 }
 
 /// 전략 설정 변경 요청.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct UpdateConfigRequest {
     /// 새로운 설정 (JSON)
     #[ts(type = "Record<string, unknown>")]
+    #[schema(value_type = Object)]
     pub config: Value,
 }
 
 /// 리스크 설정 변경 요청.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct UpdateRiskSettingsRequest {
     /// 리스크 설정 (RiskConfig 형식)
     #[serde(default)]
     #[ts(type = "Record<string, unknown> | null")]
+    #[schema(value_type = Option<Object>)]
     pub risk_config: Option<Value>,
     /// 할당 자본 (NULL이면 전체 계좌 잔고 사용)
     #[serde(default)]
@@ -149,7 +151,7 @@ pub struct UpdateRiskSettingsRequest {
 }
 
 /// 전략 심볼 변경 요청.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct UpdateSymbolsRequest {
     /// 새로운 심볼 목록
@@ -157,7 +159,7 @@ pub struct UpdateSymbolsRequest {
 }
 
 /// 전략 복사 요청.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct CloneStrategyRequest {
     /// 새 전략 이름
@@ -165,10 +167,12 @@ pub struct CloneStrategyRequest {
     /// 파라미터 오버라이드 (옵션)
     #[serde(default)]
     #[ts(type = "Record<string, unknown> | null")]
+    #[schema(value_type = Option<Object>)]
     pub override_params: Option<Value>,
     /// 리스크 설정 오버라이드 (옵션)
     #[serde(default)]
     #[ts(type = "Record<string, unknown> | null")]
+    #[schema(value_type = Option<Object>)]
     pub override_risk_config: Option<Value>,
     /// 할당 자본 오버라이드 (옵션)
     #[serde(default)]
@@ -176,7 +180,7 @@ pub struct CloneStrategyRequest {
 }
 
 /// 전략 복사 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct CloneStrategyResponse {
     /// 성공 여부
@@ -192,7 +196,7 @@ pub struct CloneStrategyResponse {
 }
 
 /// 전략 생성 요청.
-#[derive(Debug, Deserialize, Validate, TS)]
+#[derive(Debug, Deserialize, Validate, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct CreateStrategyRequest {
     /// 전략 타입 (예: "grid_trading", "rsi", "bollinger" 등)
@@ -203,10 +207,12 @@ pub struct CreateStrategyRequest {
     pub name: Option<String>,
     /// 전략 파라미터
     #[ts(type = "Record<string, unknown>")]
+    #[schema(value_type = Object)]
     pub parameters: Value,
     /// 리스크 설정 (옵션, RiskConfig 형식)
     #[serde(default)]
     #[ts(type = "Record<string, unknown> | null")]
+    #[schema(value_type = Option<Object>)]
     pub risk_config: Option<Value>,
     /// 할당 자본 (옵션, NULL이면 전체 계좌 잔고 사용)
     #[serde(default)]
@@ -220,11 +226,12 @@ pub struct CreateStrategyRequest {
     /// 형식: {"primary": "5m", "secondary": [{"timeframe": "1h", "candle_count": 24}]}
     #[serde(default, rename = "multiTimeframeConfig")]
     #[ts(type = "Record<string, unknown> | null")]
+    #[schema(value_type = Option<Object>)]
     pub multi_timeframe_config: Option<Value>,
 }
 
 /// 전략 생성 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct CreateStrategyResponse {
     /// 성공 여부
@@ -238,7 +245,7 @@ pub struct CreateStrategyResponse {
 }
 
 /// 엔진 통계 응답.
-#[derive(Debug, Serialize, Deserialize, TS)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, TS)]
 #[ts(export, export_to = "strategies/")]
 pub struct EngineStatsResponse {
     /// 전체 전략 수
@@ -379,6 +386,17 @@ fn engine_error_to_response(err: EngineError) -> (StatusCode, Json<ApiError>) {
 /// 전략 생성.
 ///
 /// POST /api/v1/strategies
+#[utoipa::path(
+    post,
+    path = "/api/v1/strategies",
+    tag = "strategies",
+    request_body = CreateStrategyRequest,
+    responses(
+        (status = 200, description = "전략 생성 성공", body = CreateStrategyResponse),
+        (status = 400, description = "잘못된 요청", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn create_strategy(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateStrategyRequest>,
@@ -514,6 +532,17 @@ pub async fn create_strategy(
 /// 전략 삭제.
 ///
 /// DELETE /api/v1/strategies/{id}
+#[utoipa::path(
+    delete,
+    path = "/api/v1/strategies/{id}",
+    tag = "strategies",
+    params(("id" = String, Path, description = "전략 ID")),
+    responses(
+        (status = 200, description = "전략 삭제 성공", body = StrategyActionResponse),
+        (status = 404, description = "전략을 찾을 수 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn delete_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -643,7 +672,16 @@ pub async fn list_strategies(State(state): State<Arc<AppState>>) -> impl IntoRes
 /// 특정 전략 상세 조회.
 ///
 /// GET /api/v1/strategies/{id}
-// TODO: Add utoipa::path when StrategyStatus implements ToSchema
+#[utoipa::path(
+    get,
+    path = "/api/v1/strategies/{id}",
+    tag = "strategies",
+    params(("id" = String, Path, description = "전략 ID")),
+    responses(
+        (status = 200, description = "전략 상세 조회 성공", body = Object, description = "StrategyDetailResponse (StrategyStatus 포함)"),
+        (status = 404, description = "전략을 찾을 수 없음", body = ApiError)
+    )
+)]
 pub async fn get_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -681,6 +719,17 @@ pub async fn get_strategy(
 /// POST /api/v1/strategies/{id}/start
 ///
 /// 다중 타임프레임 전략의 경우, 시작 전에 필요한 캔들 데이터를 자동으로 로드합니다.
+#[utoipa::path(
+    post,
+    path = "/api/v1/strategies/{id}/start",
+    tag = "strategies",
+    params(("id" = String, Path, description = "전략 ID")),
+    responses(
+        (status = 200, description = "전략 시작 성공", body = StrategyActionResponse),
+        (status = 400, description = "이미 실행 중", body = ApiError),
+        (status = 404, description = "전략을 찾을 수 없음", body = ApiError)
+    )
+)]
 pub async fn start_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -817,6 +866,17 @@ async fn load_multi_timeframe_data(
 /// 전략 중지.
 ///
 /// POST /api/v1/strategies/{id}/stop
+#[utoipa::path(
+    post,
+    path = "/api/v1/strategies/{id}/stop",
+    tag = "strategies",
+    params(("id" = String, Path, description = "전략 ID")),
+    responses(
+        (status = 200, description = "전략 중지 성공", body = StrategyActionResponse),
+        (status = 400, description = "실행 중이 아님", body = ApiError),
+        (status = 404, description = "전략을 찾을 수 없음", body = ApiError)
+    )
+)]
 pub async fn stop_strategy(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -856,6 +916,18 @@ pub async fn stop_strategy(
 /// 전략 설정 변경.
 ///
 /// PUT /api/v1/strategies/{id}/config
+#[utoipa::path(
+    put,
+    path = "/api/v1/strategies/{id}/config",
+    tag = "strategies",
+    params(("id" = String, Path, description = "전략 ID")),
+    request_body = UpdateConfigRequest,
+    responses(
+        (status = 200, description = "설정 변경 성공", body = StrategyActionResponse),
+        (status = 404, description = "전략을 찾을 수 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn update_config(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -909,6 +981,18 @@ pub async fn update_config(
 /// 전략 리스크 설정 변경.
 ///
 /// PUT /api/v1/strategies/{id}/risk
+#[utoipa::path(
+    put,
+    path = "/api/v1/strategies/{id}/risk",
+    tag = "strategies",
+    params(("id" = String, Path, description = "전략 ID")),
+    request_body = UpdateRiskSettingsRequest,
+    responses(
+        (status = 200, description = "리스크 설정 변경 성공", body = StrategyActionResponse),
+        (status = 404, description = "전략을 찾을 수 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn update_risk_settings(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -979,6 +1063,18 @@ pub async fn update_risk_settings(
 /// 전략 심볼 변경.
 ///
 /// PUT /api/v1/strategies/{id}/symbols
+#[utoipa::path(
+    put,
+    path = "/api/v1/strategies/{id}/symbols",
+    tag = "strategies",
+    params(("id" = String, Path, description = "전략 ID")),
+    request_body = UpdateSymbolsRequest,
+    responses(
+        (status = 200, description = "심볼 변경 성공", body = StrategyActionResponse),
+        (status = 404, description = "전략을 찾을 수 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn update_symbols(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -1037,6 +1133,18 @@ pub async fn update_symbols(
 /// 전략 복사 (파생 전략 생성).
 ///
 /// POST /api/v1/strategies/{id}/clone
+#[utoipa::path(
+    post,
+    path = "/api/v1/strategies/{id}/clone",
+    tag = "strategies",
+    params(("id" = String, Path, description = "원본 전략 ID")),
+    request_body = CloneStrategyRequest,
+    responses(
+        (status = 200, description = "전략 복사 성공", body = CloneStrategyResponse),
+        (status = 404, description = "원본 전략을 찾을 수 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn clone_strategy(
     State(state): State<Arc<AppState>>,
     Path(source_id): Path<String>,
@@ -1187,6 +1295,14 @@ pub async fn clone_strategy(
 /// 엔진 통계 조회.
 ///
 /// GET /api/v1/strategies/stats
+#[utoipa::path(
+    get,
+    path = "/api/v1/strategies/stats",
+    tag = "strategies",
+    responses(
+        (status = 200, description = "엔진 통계 조회 성공", body = EngineStatsResponse)
+    )
+)]
 pub async fn get_engine_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let engine = state.strategy_engine.read().await;
     let stats = engine.get_engine_stats().await;
@@ -1197,7 +1313,7 @@ pub async fn get_engine_stats(State(state): State<Arc<AppState>>) -> impl IntoRe
 // ==================== 다중 타임프레임 ====================
 
 /// 타임프레임 설정 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TimeframeConfigResponse {
     /// 전략 ID
     pub strategy_id: String,
@@ -1207,23 +1323,36 @@ pub struct TimeframeConfigResponse {
     pub is_multi_timeframe: bool,
     /// 다중 타임프레임 설정 (NULL이면 단일 TF)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
     pub multi_timeframe_config: Option<Value>,
     /// Secondary 타임프레임 목록 (편의용)
     pub secondary_timeframes: Vec<String>,
 }
 
 /// 타임프레임 설정 업데이트 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateTimeframeConfigRequest {
     /// 다중 타임프레임 설정
     /// 형식: {"primary": "5m", "secondary": [{"timeframe": "1h", "candle_count": 24}]}
     #[serde(rename = "multiTimeframeConfig")]
+    #[schema(value_type = Option<Object>)]
     pub multi_timeframe_config: Option<Value>,
 }
 
 /// 전략 타임프레임 설정 조회.
-///
-/// GET /api/v1/strategies/{id}/timeframes
+#[utoipa::path(
+    get,
+    path = "/api/v1/strategies/{id}/timeframes",
+    tag = "strategies",
+    params(
+        ("id" = String, Path, description = "전략 ID")
+    ),
+    responses(
+        (status = 200, description = "타임프레임 설정 조회 성공", body = TimeframeConfigResponse),
+        (status = 404, description = "전략 없음", body = ApiError),
+        (status = 503, description = "DB 미사용 가능", body = ApiError)
+    )
+)]
 pub async fn get_strategy_timeframes(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -1280,8 +1409,21 @@ pub async fn get_strategy_timeframes(
 }
 
 /// 전략 타임프레임 설정 업데이트.
-///
-/// PUT /api/v1/strategies/{id}/timeframes
+#[utoipa::path(
+    put,
+    path = "/api/v1/strategies/{id}/timeframes",
+    tag = "strategies",
+    params(
+        ("id" = String, Path, description = "전략 ID")
+    ),
+    request_body = UpdateTimeframeConfigRequest,
+    responses(
+        (status = 200, description = "타임프레임 설정 업데이트 성공", body = TimeframeConfigResponse),
+        (status = 400, description = "잘못된 요청", body = ApiError),
+        (status = 404, description = "전략 없음", body = ApiError),
+        (status = 503, description = "DB 미사용 가능", body = ApiError)
+    )
+)]
 pub async fn update_strategy_timeframes(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

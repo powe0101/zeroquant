@@ -45,6 +45,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use trader_core::domain::{RouteState, StrategyContext};
+use trader_core::types::Timeframe;
 use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType};
 
 use super::common::{
@@ -239,35 +240,35 @@ impl Default for AssetAllocationConfig {
 )]
 pub struct HaaConfig {
     /// 현금 티커
-    #[schema(label = "현금 티커", default = "BIL")]
+    #[schema(label = "현금 티커", section = "asset", default = "BIL")]
     pub cash_ticker: String,
 
     /// 공격 자산 선택 수
-    #[schema(label = "공격 자산 선택 수", field_type = "integer", min = 1, max = 10, default = "4")]
+    #[schema(label = "공격 자산 선택 수", section = "filter", field_type = "integer", min = 1, max = 10, default = "4")]
     pub offensive_top_n: usize,
 
     /// 방어 자산 선택 수
-    #[schema(label = "방어 자산 선택 수", field_type = "integer", min = 1, max = 10, default = "3")]
+    #[schema(label = "방어 자산 선택 수", section = "filter", field_type = "integer", min = 1, max = 10, default = "3")]
     pub defensive_top_n: usize,
 
     /// 투자 비율 (0.0 ~ 1.0)
-    #[schema(label = "투자 비율", field_type = "number", min = 0, max = 1, default = "1.0")]
+    #[schema(label = "투자 비율", section = "timing", field_type = "number", min = 0, max = 1, default = "1.0")]
     pub invest_rate: Decimal,
 
     /// 리밸런싱 임계값 (%)
-    #[schema(label = "리밸런싱 임계값 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 임계값 (%)", section = "timing", field_type = "number", min = 1, max = 20, default = "5")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 Global Score
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "55")]
+    #[schema(label = "최소 GlobalScore", section = "filter", field_type = "number", min = 0, max = 100, default = "55")]
     pub min_global_score: Decimal,
 
     /// 카나리아 임계값 (양수 모멘텀 비율)
-    #[schema(label = "카나리아 임계값", field_type = "number", min = 0, max = 1, default = "0.5")]
+    #[schema(label = "카나리아 임계값", section = "filter", field_type = "number", min = 0, max = 1, default = "0.5")]
     pub canary_threshold: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -298,39 +299,39 @@ impl From<HaaConfig> for AssetAllocationConfig {
 )]
 pub struct XaaConfig {
     /// 현금 티커
-    #[schema(label = "현금 티커", default = "BIL")]
+    #[schema(label = "현금 티커", section = "asset", default = "BIL")]
     pub cash_ticker: String,
 
     /// 공격 자산 선택 수
-    #[schema(label = "공격 자산 선택 수", field_type = "integer", min = 1, max = 10, default = "4")]
+    #[schema(label = "공격 자산 선택 수", section = "filter", field_type = "integer", min = 1, max = 10, default = "4")]
     pub offensive_top_n: usize,
 
     /// 방어 자산 선택 수
-    #[schema(label = "방어 자산 선택 수", field_type = "integer", min = 1, max = 10, default = "3")]
+    #[schema(label = "방어 자산 선택 수", section = "filter", field_type = "integer", min = 1, max = 10, default = "3")]
     pub defensive_top_n: usize,
 
     /// 채권 모멘텀 기간 (개월)
-    #[schema(label = "채권 모멘텀 기간", field_type = "integer", min = 1, max = 24, default = "6")]
+    #[schema(label = "채권 모멘텀 기간", section = "indicator", field_type = "integer", min = 1, max = 24, default = "6")]
     pub bond_momentum_months: usize,
 
     /// 투자 비율 (0.0 ~ 1.0)
-    #[schema(label = "투자 비율", field_type = "number", min = 0, max = 1, default = "1.0")]
+    #[schema(label = "투자 비율", section = "timing", field_type = "number", min = 0, max = 1, default = "1.0")]
     pub invest_rate: Decimal,
 
     /// 리밸런싱 임계값 (%)
-    #[schema(label = "리밸런싱 임계값 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 임계값 (%)", section = "timing", field_type = "number", min = 1, max = 20, default = "5")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 Global Score
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "55")]
+    #[schema(label = "최소 GlobalScore", section = "filter", field_type = "number", min = 0, max = 100, default = "55")]
     pub min_global_score: Decimal,
 
     /// 카나리아 임계값
-    #[schema(label = "카나리아 임계값", field_type = "number", min = 0, max = 1, default = "0.5")]
+    #[schema(label = "카나리아 임계값", section = "filter", field_type = "number", min = 0, max = 1, default = "0.5")]
     pub canary_threshold: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -365,35 +366,35 @@ impl From<XaaConfig> for AssetAllocationConfig {
 )]
 pub struct BaaConfig {
     /// 현금 티커
-    #[schema(label = "현금 티커", default = "BIL")]
+    #[schema(label = "현금 티커", section = "asset", default = "BIL")]
     pub cash_ticker: String,
 
     /// 공격 자산 선택 수 (BAA는 보통 1개)
-    #[schema(label = "공격 자산 선택 수", field_type = "integer", min = 1, max = 5, default = "1")]
+    #[schema(label = "공격 자산 선택 수", section = "filter", field_type = "integer", min = 1, max = 5, default = "1")]
     pub offensive_top_n: usize,
 
     /// 방어 자산 선택 수
-    #[schema(label = "방어 자산 선택 수", field_type = "integer", min = 1, max = 10, default = "3")]
+    #[schema(label = "방어 자산 선택 수", section = "filter", field_type = "integer", min = 1, max = 10, default = "3")]
     pub defensive_top_n: usize,
 
     /// 투자 비율 (0.0 ~ 1.0)
-    #[schema(label = "투자 비율", field_type = "number", min = 0, max = 1, default = "1.0")]
+    #[schema(label = "투자 비율", section = "timing", field_type = "number", min = 0, max = 1, default = "1.0")]
     pub invest_rate: Decimal,
 
     /// 리밸런싱 임계값 (%)
-    #[schema(label = "리밸런싱 임계값 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 임계값 (%)", section = "timing", field_type = "number", min = 1, max = 20, default = "5")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 Global Score
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "55")]
+    #[schema(label = "최소 GlobalScore", section = "filter", field_type = "number", min = 0, max = 100, default = "55")]
     pub min_global_score: Decimal,
 
     /// 카나리아 임계값 (BAA는 75% 권장)
-    #[schema(label = "카나리아 임계값", field_type = "number", min = 0, max = 1, default = "0.75")]
+    #[schema(label = "카나리아 임계값", section = "filter", field_type = "number", min = 0, max = 1, default = "0.75")]
     pub canary_threshold: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -425,19 +426,19 @@ impl From<BaaConfig> for AssetAllocationConfig {
 )]
 pub struct AllWeatherConfig {
     /// 현금 티커
-    #[schema(label = "현금 티커", default = "BIL")]
+    #[schema(label = "현금 티커", section = "asset", default = "BIL")]
     pub cash_ticker: String,
 
     /// 투자 비율 (0.0 ~ 1.0)
-    #[schema(label = "투자 비율", field_type = "number", min = 0, max = 1, default = "1.0")]
+    #[schema(label = "투자 비율", section = "timing", field_type = "number", min = 0, max = 1, default = "1.0")]
     pub invest_rate: Decimal,
 
     /// 리밸런싱 임계값 (%)
-    #[schema(label = "리밸런싱 임계값 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 임계값 (%)", section = "timing", field_type = "number", min = 1, max = 20, default = "5")]
     pub rebalance_threshold: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -466,23 +467,23 @@ impl From<AllWeatherConfig> for AssetAllocationConfig {
 )]
 pub struct DualMomentumConfig {
     /// 현금 티커
-    #[schema(label = "현금 티커", default = "BIL")]
+    #[schema(label = "현금 티커", section = "asset", default = "BIL")]
     pub cash_ticker: String,
 
     /// 투자 비율 (0.0 ~ 1.0)
-    #[schema(label = "투자 비율", field_type = "number", min = 0, max = 1, default = "1.0")]
+    #[schema(label = "투자 비율", section = "timing", field_type = "number", min = 0, max = 1, default = "1.0")]
     pub invest_rate: Decimal,
 
     /// 리밸런싱 임계값 (%)
-    #[schema(label = "리밸런싱 임계값 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 임계값 (%)", section = "timing", field_type = "number", min = 1, max = 20, default = "5")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 Global Score
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "50")]
+    #[schema(label = "최소 GlobalScore", section = "filter", field_type = "number", min = 0, max = 100, default = "50")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -693,7 +694,6 @@ impl AssetAllocationConfig {
 pub struct AssetAllocationStrategy {
     config: Option<AssetAllocationConfig>,
     context: Option<Arc<RwLock<StrategyContext>>>,
-    price_history: HashMap<String, Vec<Decimal>>,
     positions: HashMap<String, Decimal>,
     last_rebalance_ym: Option<String>,
     rebalance_calculator: RebalanceCalculator,
@@ -708,7 +708,6 @@ impl AssetAllocationStrategy {
         Self {
             config: None,
             context: None,
-            price_history: HashMap::new(),
             positions: HashMap::new(),
             last_rebalance_ym: None,
             rebalance_calculator: RebalanceCalculator::new(RebalanceConfig::us_market()),
@@ -776,27 +775,28 @@ impl AssetAllocationStrategy {
         self.momentum_calculator = MomentumCalculator::new(momentum_config);
     }
 
-    /// 가격 히스토리 업데이트.
-    fn update_price_history(&mut self, ticker: &str, price: Decimal) {
-        let history = self
-            .price_history
-            .entry(ticker.to_string())
-            .or_default();
-        history.insert(0, price); // 최신 가격을 앞에 추가
+    /// StrategyContext에서 가격 히스토리 가져오기.
+    fn get_price_history(&self, ticker: &str) -> Option<Vec<Decimal>> {
+        let ctx = self.context.as_ref()?;
+        let ctx_lock = ctx.try_read().ok()?;
+        let klines = ctx_lock.get_klines(ticker, Timeframe::D1);
 
-        // 최대 300일 유지
-        if history.len() > 300 {
-            history.truncate(300);
+        if klines.is_empty() {
+            return None;
         }
+
+        // klines를 가격 벡터로 변환 (최신이 앞에)
+        let prices: Vec<Decimal> = klines.iter().rev().map(|k| k.close).collect();
+        Some(prices)
     }
 
-    /// 자산별 모멘텀 계산.
+    /// 자산별 모멘텀 계산 (StrategyContext에서 가격 가져옴).
     fn calculate_asset_momentum(&self, ticker: &str) -> Option<MomentumResult> {
-        let prices = self.price_history.get(ticker)?;
+        let prices = self.get_price_history(ticker)?;
         if prices.len() < 21 {
             return None;
         }
-        Some(self.momentum_calculator.calculate(prices))
+        Some(self.momentum_calculator.calculate(&prices))
     }
 
     /// 카나리아 자산 확인.
@@ -989,7 +989,8 @@ impl AssetAllocationStrategy {
             .positions
             .iter()
             .filter_map(|(ticker, &qty)| {
-                let price = self.price_history.get(ticker)?.first()?;
+                let prices = self.get_price_history(ticker)?;
+                let price = prices.first()?;
                 Some(PortfolioPosition::new(ticker.clone(), qty, *price))
             })
             .collect();
@@ -1031,10 +1032,8 @@ impl AssetAllocationStrategy {
                 };
 
                 let current_price = self
-                    .price_history
-                    .get(&order.ticker)
-                    .and_then(|p| p.first())
-                    .copied()
+                    .get_price_history(&order.ticker)
+                    .and_then(|p: Vec<Decimal>| p.first().copied())
                     .unwrap_or(Decimal::ZERO);
 
                 let signal_type = if side == Side::Buy {
@@ -1189,13 +1188,12 @@ impl Strategy for AssetAllocationStrategy {
             MarketDataType::OrderBook(_) => None,
         };
 
-        // 가격 업데이트
-        if let Some(price) = price {
-            self.update_price_history(&ticker, price);
-            debug!("[AssetAllocation] 가격 업데이트: {} = {}", ticker, price);
+        // 리밸런싱 신호 생성 (가격은 StrategyContext에서 가져옴)
+        // price 변수가 있으면 데이터 유효성 확인용으로만 사용
+        if price.is_none() {
+            return Ok(vec![]);
         }
 
-        // 리밸런싱 신호 생성
         let signals = self.generate_rebalance_signals(&config, data.timestamp);
 
         Ok(signals)

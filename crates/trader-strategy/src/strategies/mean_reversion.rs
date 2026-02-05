@@ -16,6 +16,7 @@
 //! - `GlobalScore`: 종목 품질 필터링
 //! - 손절/익절: 설정된 비율로 자동 청산
 
+use crate::strategies::common::adjust_strength_by_score;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -170,27 +171,27 @@ impl Default for ExitConfig {
 pub struct RsiConfig {
     /// 거래 티커.
     #[serde(default = "default_ticker")]
-    #[schema(label = "거래 종목", field_type = "symbol", default = "005930")]
+    #[schema(label = "거래 종목", field_type = "symbol", default = "005930", section = "asset")]
     pub ticker: String,
 
     /// 거래 금액.
     #[serde(default = "default_amount")]
-    #[schema(label = "거래 금액", field_type = "number", min = 10000, max = 100000000, default = 1000000)]
+    #[schema(label = "거래 금액", field_type = "number", min = 10000, max = 100000000, default = 1000000, section = "asset")]
     pub amount: Decimal,
 
     /// RSI 기간.
     #[serde(default = "default_rsi_period")]
-    #[schema(label = "RSI 기간", field_type = "integer", min = 2, max = 100, default = 14)]
+    #[schema(label = "RSI 기간", field_type = "integer", min = 2, max = 100, default = 14, section = "indicator")]
     pub rsi_period: usize,
 
     /// 과매도 임계값.
     #[serde(default = "default_oversold")]
-    #[schema(label = "과매도 임계값", field_type = "number", min = 0, max = 50, default = 30)]
+    #[schema(label = "과매도 임계값", field_type = "number", min = 0, max = 50, default = 30, section = "indicator")]
     pub oversold: Decimal,
 
     /// 과매수 임계값.
     #[serde(default = "default_overbought")]
-    #[schema(label = "과매수 임계값", field_type = "number", min = 50, max = 100, default = 70)]
+    #[schema(label = "과매수 임계값", field_type = "number", min = 50, max = 100, default = 70, section = "indicator")]
     pub overbought: Decimal,
 
     /// 청산 설정.
@@ -200,12 +201,12 @@ pub struct RsiConfig {
 
     /// 최대 포지션 수.
     #[serde(default = "default_max_positions")]
-    #[schema(label = "최대 포지션 수", field_type = "integer", min = 1, max = 10, default = 1)]
+    #[schema(label = "최대 포지션 수", field_type = "integer", min = 1, max = 10, default = 1, section = "filter")]
     pub max_positions: usize,
 
     /// 최소 GlobalScore.
     #[serde(default = "default_min_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: Decimal,
 }
 
@@ -242,32 +243,32 @@ impl From<RsiConfig> for MeanReversionConfig {
 pub struct BollingerConfig {
     /// 거래 티커.
     #[serde(default = "default_ticker")]
-    #[schema(label = "거래 종목", field_type = "symbol", default = "005930")]
+    #[schema(label = "거래 종목", field_type = "symbol", default = "005930", section = "asset")]
     pub ticker: String,
 
     /// 거래 금액.
     #[serde(default = "default_amount")]
-    #[schema(label = "거래 금액", field_type = "number", min = 10000, max = 100000000, default = 1000000)]
+    #[schema(label = "거래 금액", field_type = "number", min = 10000, max = 100000000, default = 1000000, section = "asset")]
     pub amount: Decimal,
 
     /// 볼린저 밴드 기간.
     #[serde(default = "default_bb_period")]
-    #[schema(label = "기간", field_type = "integer", min = 5, max = 100, default = 20)]
+    #[schema(label = "기간", field_type = "integer", min = 5, max = 100, default = 20, section = "indicator")]
     pub period: usize,
 
     /// 표준편차 배수.
     #[serde(default = "default_std_multiplier")]
-    #[schema(label = "표준편차 배수", field_type = "number", min = 0.5, max = 5, default = 2)]
+    #[schema(label = "표준편차 배수", field_type = "number", min = 0.5, max = 5, default = 2, section = "indicator")]
     pub std_multiplier: Decimal,
 
     /// RSI 확인 사용 여부.
     #[serde(default = "default_true")]
-    #[schema(label = "RSI 확인 사용", field_type = "boolean", default = true)]
+    #[schema(label = "RSI 확인 사용", field_type = "boolean", default = true, section = "indicator")]
     pub use_rsi_confirmation: bool,
 
     /// 최소 밴드폭 (%).
     #[serde(default = "default_min_bandwidth")]
-    #[schema(label = "최소 밴드폭 (%)", field_type = "number", min = 0, max = 10, default = 1)]
+    #[schema(label = "최소 밴드폭 (%)", field_type = "number", min = 0, max = 10, default = 1, section = "indicator")]
     pub min_bandwidth_pct: Decimal,
 
     /// 청산 설정.
@@ -277,12 +278,12 @@ pub struct BollingerConfig {
 
     /// 최대 포지션 수.
     #[serde(default = "default_max_positions")]
-    #[schema(label = "최대 포지션 수", field_type = "integer", min = 1, max = 10, default = 1)]
+    #[schema(label = "최대 포지션 수", field_type = "integer", min = 1, max = 10, default = 1, section = "filter")]
     pub max_positions: usize,
 
     /// 최소 GlobalScore.
     #[serde(default = "default_min_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: Decimal,
 }
 
@@ -760,91 +761,6 @@ impl RsiCalculator {
     }
 }
 
-/// 볼린저 밴드 계산기.
-#[derive(Debug, Clone, Default)]
-struct BollingerCalculator {
-    prices: VecDeque<Decimal>,
-    period: usize,
-    std_multiplier: Decimal,
-}
-
-impl BollingerCalculator {
-    fn new(period: usize, std_multiplier: Decimal) -> Self {
-        Self {
-            prices: VecDeque::with_capacity(period + 1),
-            period,
-            std_multiplier,
-        }
-    }
-
-    fn update(&mut self, close: Decimal) -> Option<(Decimal, Decimal, Decimal)> {
-        self.prices.push_back(close);
-        while self.prices.len() > self.period {
-            self.prices.pop_front();
-        }
-
-        if self.prices.len() < self.period {
-            return None;
-        }
-
-        let sum: Decimal = self.prices.iter().sum();
-        let sma = sum / Decimal::from(self.period);
-
-        let variance: Decimal = self
-            .prices
-            .iter()
-            .map(|p| (*p - sma) * (*p - sma))
-            .sum::<Decimal>()
-            / Decimal::from(self.period);
-
-        // 간단한 제곱근 근사 (Newton's method)
-        let std_dev = self.sqrt_approx(variance);
-
-        let upper = sma + self.std_multiplier * std_dev;
-        let lower = sma - self.std_multiplier * std_dev;
-
-        Some((lower, sma, upper))
-    }
-
-    fn sqrt_approx(&self, n: Decimal) -> Decimal {
-        if n <= Decimal::ZERO {
-            return Decimal::ZERO;
-        }
-        let mut x = n;
-        for _ in 0..10 {
-            x = (x + n / x) / dec!(2);
-        }
-        x
-    }
-
-    fn bandwidth(&self) -> Option<Decimal> {
-        if self.prices.len() < self.period {
-            return None;
-        }
-
-        // update()를 호출하지 않고 직접 계산 (immutable 유지)
-        let sum: Decimal = self.prices.iter().sum();
-        let sma = sum / Decimal::from(self.period);
-
-        if sma == Decimal::ZERO {
-            return None;
-        }
-
-        let variance: Decimal = self
-            .prices
-            .iter()
-            .map(|p| (*p - sma) * (*p - sma))
-            .sum::<Decimal>()
-            / Decimal::from(self.period);
-
-        let std_dev = self.sqrt_approx(variance);
-        let upper = sma + self.std_multiplier * std_dev;
-        let lower = sma - self.std_multiplier * std_dev;
-
-        Some((upper - lower) / sma * dec!(100))
-    }
-}
-
 // ================================================================================================
 // 전략 구현
 // ================================================================================================
@@ -863,9 +779,6 @@ pub struct MeanReversionStrategy {
     // RSI 상태
     rsi_calculator: RsiCalculator,
     prev_rsi: Option<Decimal>,
-
-    // 볼린저 상태
-    bollinger_calculator: BollingerCalculator,
 
     // 그리드 상태
     grid_levels: Vec<GridLevel>,
@@ -888,7 +801,6 @@ impl MeanReversionStrategy {
             initialized: false,
             rsi_calculator: RsiCalculator::new(14),
             prev_rsi: None,
-            bollinger_calculator: BollingerCalculator::new(20, dec!(2)),
             grid_levels: Vec::new(),
             grid_base_price: Decimal::ZERO,
             split_states: Vec::new(),
@@ -905,15 +817,7 @@ impl MeanReversionStrategy {
             strategy.rsi_calculator = RsiCalculator::new(*period);
         }
 
-        // 볼린저 계산기 초기화
-        if let EntrySignalConfig::Bollinger {
-            period,
-            std_multiplier,
-            ..
-        } = &config.entry_signal
-        {
-            strategy.bollinger_calculator = BollingerCalculator::new(*period, *std_multiplier);
-        }
+        // 볼린저 밴드: StructuralFeatures에서 bb_upper/bb_middle/bb_lower 사용 (별도 초기화 불필요)
 
         strategy.config = Some(config);
         strategy
@@ -937,6 +841,29 @@ impl MeanReversionStrategy {
     /// 매직 분할 전략 팩토리.
     pub fn magic_split() -> Self {
         Self::with_config(MeanReversionConfig::magic_split_default("BTCUSDT"))
+    }
+
+    /// StrategyContext에서 RSI 가져오기.
+    fn get_rsi_from_context(&self, ticker: &str) -> Option<Decimal> {
+        let ctx = self.context.as_ref()?;
+        let ctx_lock = ctx.try_read().ok()?;
+
+        // structural_features에서 RSI 가져오기
+        let features = ctx_lock.structural_features.get(ticker)?;
+        Some(features.rsi)
+    }
+
+    /// StrategyContext에서 볼린저 밴드 가져오기.
+    ///
+    /// # 반환
+    /// (lower, middle, upper, bandwidth_pct)
+    fn get_bollinger_from_context(&self, ticker: &str) -> Option<(Decimal, Decimal, Decimal, Decimal)> {
+        let ctx = self.context.as_ref()?;
+        let ctx_lock = ctx.try_read().ok()?;
+
+        // structural_features에서 볼린저 밴드 가져오기
+        let features = ctx_lock.structural_features.get(ticker)?;
+        Some((features.bb_lower, features.bb_middle, features.bb_upper, features.bb_width))
     }
 
     /// StrategyContext 기반 진입 가능 여부 체크.
@@ -986,6 +913,28 @@ impl MeanReversionStrategy {
         true
     }
 
+    /// GlobalScore 기반 신호 강도 계산.
+    fn get_adjusted_strength(&self, base_strength: f64) -> f64 {
+        let Some(config) = self.config.as_ref() else {
+            return base_strength;
+        };
+        let ticker = &config.ticker;
+
+        let Some(ctx) = self.context.as_ref() else {
+            return base_strength;
+        };
+
+        let Ok(ctx_lock) = ctx.try_read() else {
+            return base_strength;
+        };
+
+        if let Some(score) = ctx_lock.get_global_score(ticker) {
+            adjust_strength_by_score(base_strength, Some(score.overall_score))
+        } else {
+            base_strength
+        }
+    }
+
     /// 쿨다운 체크.
     fn is_in_cooldown(&self) -> bool {
         self.cooldown_counter > 0
@@ -1025,8 +974,13 @@ impl MeanReversionStrategy {
             return vec![];
         };
 
-        let Some(rsi) = self.rsi_calculator.update(price) else {
-            return vec![];
+        // StrategyContext에서 RSI 가져오기
+        let rsi = match self.get_rsi_from_context(&config.ticker) {
+            Some(r) => r,
+            None => {
+                debug!(ticker = %config.ticker, "StrategyContext에서 RSI를 가져올 수 없음");
+                return vec![];
+            }
         };
 
         let mut signals = vec![];
@@ -1035,24 +989,20 @@ impl MeanReversionStrategy {
         if !self.has_position() && !self.is_in_cooldown() && self.can_enter() {
             // RSI 과매도 → 매수
             if rsi < *oversold {
-                if let Some(prev) = self.prev_rsi {
-                    if prev < *oversold && rsi > prev {
-                        // RSI 상향 크로스
-                        let strength = ((*oversold - rsi) / *oversold).to_f64().unwrap_or(0.5);
-                        signals.push(
-                            Signal::new(
-                                "mean_reversion",
-                                config.ticker.clone(),
-                                Side::Buy,
-                                SignalType::Entry,
-                            )
-                            .with_strength(strength)
-                            .with_prices(Some(price), None, None)
-                            .with_metadata("variant", json!("rsi"))
-                            .with_metadata("rsi", json!(rsi.to_string())),
-                        );
-                    }
-                }
+                let base_strength = ((*oversold - rsi) / *oversold).to_f64().unwrap_or(0.5);
+                let strength = self.get_adjusted_strength(base_strength);
+                signals.push(
+                    Signal::new(
+                        "mean_reversion",
+                        config.ticker.clone(),
+                        Side::Buy,
+                        SignalType::Entry,
+                    )
+                    .with_strength(strength)
+                    .with_prices(Some(price), None, None)
+                    .with_metadata("variant", json!("rsi"))
+                    .with_metadata("rsi", json!(rsi.to_string())),
+                );
             }
         }
 
@@ -1142,15 +1092,16 @@ impl MeanReversionStrategy {
             return vec![];
         };
 
-        let Some((lower, middle, _upper)) = self.bollinger_calculator.update(price) else {
-            return vec![];
+        // StrategyContext에서 볼린저 밴드 가져오기
+        let (lower, middle, _upper, bandwidth) = match self.get_bollinger_from_context(&config.ticker) {
+            Some(bb) => bb,
+            None => {
+                debug!(ticker = %config.ticker, "StrategyContext에서 볼린저 밴드를 가져올 수 없음");
+                return vec![];
+            }
         };
 
         // 밴드폭 체크 (스퀴즈 회피)
-        let bandwidth = self
-            .bollinger_calculator
-            .bandwidth()
-            .unwrap_or(Decimal::ZERO);
         if bandwidth < *min_bandwidth_pct {
             debug!(bandwidth = %bandwidth, "볼린저 스퀴즈 - 대기");
             return vec![];
@@ -1170,6 +1121,7 @@ impl MeanReversionStrategy {
                 };
 
                 if rsi_ok {
+                    let strength = self.get_adjusted_strength(0.8);
                     signals.push(
                         Signal::new(
                             "mean_reversion",
@@ -1177,7 +1129,7 @@ impl MeanReversionStrategy {
                             Side::Buy,
                             SignalType::Entry,
                         )
-                        .with_strength(0.8)
+                        .with_strength(strength)
                         .with_prices(Some(price), None, None)
                         .with_metadata("variant", json!("bollinger"))
                         .with_metadata("lower_band", json!(lower.to_string())),
@@ -1310,9 +1262,11 @@ impl MeanReversionStrategy {
             } else {
                 SignalType::Exit
             };
+            // GlobalScore 기반 동적 강도 적용
+            let strength = self.get_adjusted_strength(0.7);
             signals.push(
                 Signal::new("mean_reversion", ticker.clone(), side, signal_type)
-                    .with_strength(0.7)
+                    .with_strength(strength)
                     .with_prices(Some(price), None, None)
                     .with_metadata("variant", json!("grid"))
                     .with_metadata("grid_level", json!(level_price.to_string())),
@@ -1458,6 +1412,8 @@ impl MeanReversionStrategy {
         for (i, action, value) in actions {
             match action {
                 SplitAction::Buy => {
+                    // GlobalScore 기반 동적 강도 적용
+                    let strength = self.get_adjusted_strength(0.8);
                     signals.push(
                         Signal::new(
                             "mean_reversion",
@@ -1465,7 +1421,7 @@ impl MeanReversionStrategy {
                             Side::Buy,
                             SignalType::Entry,
                         )
-                        .with_strength(0.8)
+                        .with_strength(strength)
                         .with_prices(Some(price), None, None)
                         .with_metadata("variant", json!("split"))
                         .with_metadata("level", json!(i + 1))
@@ -1587,12 +1543,8 @@ impl Strategy for MeanReversionStrategy {
             EntrySignalConfig::Rsi { period, .. } => {
                 self.rsi_calculator = RsiCalculator::new(*period);
             }
-            EntrySignalConfig::Bollinger {
-                period,
-                std_multiplier,
-                ..
-            } => {
-                self.bollinger_calculator = BollingerCalculator::new(*period, *std_multiplier);
+            EntrySignalConfig::Bollinger { .. } => {
+                // 볼린저 밴드: StructuralFeatures에서 bb_upper/bb_middle/bb_lower 사용
                 self.rsi_calculator = RsiCalculator::new(14); // RSI 확인용
             }
             EntrySignalConfig::Grid { levels, .. } => {

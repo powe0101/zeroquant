@@ -18,14 +18,14 @@ use chrono::{Datelike, NaiveTime, Timelike, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
+use utoipa::{IntoParams, ToSchema};
 
 use trader_core::Timeframe;
 use trader_data::cache::CachedHistoricalDataProvider;
 use trader_exchange::connector::kis::{
     KisAccountType, KisConfig, KisKrClient, KisOAuth, KisUsClient,
 };
-use trader_exchange::historical::HistoricalDataProvider;
-use trader_exchange::YahooFinanceProvider;
+// API 서버는 ohlcv 테이블에서만 읽음 (외부 API 호출 없음)
 
 use crate::repository::KlinesRepository;
 use crate::routes::credentials::EncryptedCredentials;
@@ -37,7 +37,7 @@ use crate::state::AppState;
 /// 시장 상태 응답.
 ///
 /// Frontend의 MarketStatus 타입과 매칭됩니다.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketStatusResponse {
     /// 시장 코드 (KR/US)
@@ -56,7 +56,7 @@ pub struct MarketStatusResponse {
 }
 
 /// 시장 세션 타입
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ToSchema)]
 pub enum MarketSession {
     Regular,
     PreMarket,
@@ -201,7 +201,7 @@ fn get_us_market_status() -> MarketStatusResponse {
 // ==================== 캔들스틱 데이터 ====================
 
 /// 캔들스틱 데이터 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct KlinesQuery {
     /// 심볼 (예: BTC/USDT, 005930)
     pub symbol: String,
@@ -222,7 +222,7 @@ fn default_limit() -> usize {
 }
 
 /// 캔들스틱 데이터 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KlinesResponse {
     pub symbol: String,
@@ -231,7 +231,7 @@ pub struct KlinesResponse {
 }
 
 /// 단일 캔들 데이터.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CandleData {
     /// 타임스탬프 (ISO 8601 날짜)
     pub time: String,
@@ -243,7 +243,7 @@ pub struct CandleData {
 }
 
 /// 다중 타임프레임 캔들 데이터 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct MultiKlinesQuery {
     /// 심볼 (예: BTC/USDT, 005930)
     pub symbol: String,
@@ -255,7 +255,7 @@ pub struct MultiKlinesQuery {
 }
 
 /// 다중 타임프레임 캔들 데이터 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MultiKlinesResponse {
     pub symbol: String,
@@ -481,70 +481,44 @@ pub async fn get_klines(
         "캔들 데이터 조회 시작"
     );
 
-    // DB 연결이 있으면 캐시 기반 제공자 사용, 없으면 직접 Yahoo Finance 사용
-    let klines = if let Some(pool) = &state.db_pool {
-        let cached_provider = CachedHistoricalDataProvider::new(pool.clone());
+    // DB 연결 필수 - ohlcv 테이블에서만 읽기 (외부 API 호출 없음)
+    let pool = state.db_pool.as_ref().ok_or_else(|| {
+        error!("DB 연결 없음, 캔들 데이터 조회 불가");
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new(
+                "DB_NOT_CONNECTED",
+                "데이터베이스 연결이 필요합니다".to_string(),
+            )),
+        )
+    })?;
 
-        debug!(
-            symbol = %query.symbol,
-            "캐시 기반 데이터 제공자 사용"
-        );
+    let cached_provider = CachedHistoricalDataProvider::new(pool.clone());
 
-        cached_provider
-            .get_klines(&query.symbol, timeframe, query.limit)
-            .await
-            .map_err(|e| {
-                error!(
-                    symbol = %query.symbol,
-                    timeframe = %query.timeframe,
-                    error = %e,
-                    "캐시 데이터 조회 실패"
-                );
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(ApiError::new(
-                        "DATA_FETCH_ERROR",
-                        format!("차트 데이터 조회 실패: {}", e),
-                    )),
-                )
-            })?
-    } else {
-        // Fallback: DB 연결 없이 직접 Yahoo Finance 사용
-        debug!(
-            symbol = %query.symbol,
-            "DB 연결 없음, 직접 Yahoo Finance 사용"
-        );
+    debug!(
+        symbol = %query.symbol,
+        "읽기 전용 모드 - ohlcv 테이블에서만 조회"
+    );
 
-        let provider = YahooFinanceProvider::new().map_err(|e| {
-            error!("Yahoo Finance 연결 실패: {}", e);
+    // 읽기 전용 모드: 외부 API 호출 없이 ohlcv 테이블에서만 조회
+    let klines = cached_provider
+        .get_klines_readonly(&query.symbol, timeframe, query.limit)
+        .await
+        .map_err(|e| {
+            error!(
+                symbol = %query.symbol,
+                timeframe = %query.timeframe,
+                error = %e,
+                "캐시 데이터 조회 실패"
+            );
             (
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::BAD_GATEWAY,
                 Json(ApiError::new(
-                    "YAHOO_FINANCE_ERROR",
-                    format!("Yahoo Finance 연결 실패: {}", e),
+                    "DATA_FETCH_ERROR",
+                    format!("차트 데이터 조회 실패: {}", e),
                 )),
             )
         })?;
-
-        provider
-            .get_klines(&query.symbol, timeframe, query.limit)
-            .await
-            .map_err(|e| {
-                error!(
-                    symbol = %query.symbol,
-                    timeframe = %query.timeframe,
-                    error = %e,
-                    "Yahoo Finance 데이터 조회 실패"
-                );
-                (
-                    StatusCode::BAD_GATEWAY,
-                    Json(ApiError::new(
-                        "YAHOO_FINANCE_ERROR",
-                        format!("차트 데이터 조회 실패: {}", e),
-                    )),
-                )
-            })?
-    };
 
     info!(
         symbol = %query.symbol,
@@ -662,12 +636,12 @@ pub async fn get_multi_klines(
                     error = %e,
                     "다중 타임프레임 데이터 조회 실패, 순차 조회로 폴백"
                 );
-                // 폴백: 순차 조회
+                // 폴백: 순차 조회 (읽기 전용)
                 let cached_provider = CachedHistoricalDataProvider::new(pool.clone());
                 for tf_str in &timeframes {
                     let timeframe = parse_timeframe(tf_str);
                     match cached_provider
-                        .get_klines(&query.symbol, timeframe, query.limit)
+                        .get_klines_readonly(&query.symbol, timeframe, query.limit)
                         .await
                     {
                         Ok(klines) => {
@@ -692,50 +666,14 @@ pub async fn get_multi_klines(
             }
         }
     } else {
-        // Fallback: DB 연결 없이 직접 Yahoo Finance 사용
-        let provider = YahooFinanceProvider::new().map_err(|e| {
-            error!("Yahoo Finance 연결 실패: {}", e);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(ApiError::new(
-                    "YAHOO_FINANCE_ERROR",
-                    format!("Yahoo Finance 연결 실패: {}", e),
-                )),
-            )
-        })?;
-
-        // 순차적으로 각 타임프레임 데이터 조회
-        for tf_str in &timeframes {
-            let timeframe = parse_timeframe(tf_str);
-            match provider
-                .get_klines(&query.symbol, timeframe, query.limit)
-                .await
-            {
-                Ok(klines) => {
-                    let candles: Vec<CandleData> = klines
-                        .into_iter()
-                        .map(|k| CandleData {
-                            time: k.open_time.format("%Y-%m-%d %H:%M:%S").to_string(),
-                            open: k.open.to_string().parse().unwrap_or(0.0),
-                            high: k.high.to_string().parse().unwrap_or(0.0),
-                            low: k.low.to_string().parse().unwrap_or(0.0),
-                            close: k.close.to_string().parse().unwrap_or(0.0),
-                            volume: k.volume.to_string().parse().unwrap_or(0.0),
-                        })
-                        .collect();
-                    data.insert(tf_str.clone(), candles);
-                }
-                Err(e) => {
-                    warn!(
-                        symbol = %query.symbol,
-                        timeframe = %tf_str,
-                        error = %e,
-                        "타임프레임 데이터 조회 실패"
-                    );
-                    data.insert(tf_str.clone(), vec![]);
-                }
-            }
-        }
+        // DB 연결 필수 - ohlcv 테이블에서만 읽음
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError::new(
+                "DB_NOT_CONNECTED",
+                "데이터베이스 연결이 필요합니다".to_string(),
+            )),
+        ));
     }
 
     info!(
@@ -775,7 +713,7 @@ fn parse_timeframe(tf: &str) -> Timeframe {
 // ==================== 현재가 (Ticker) ====================
 
 /// 현재가 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TickerResponse {
     pub symbol: String,
@@ -789,7 +727,7 @@ pub struct TickerResponse {
 }
 
 /// 현재가 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct TickerQuery {
     pub symbol: String,
 }
@@ -909,7 +847,7 @@ pub async fn get_ticker(
 // ==================== Market Breadth ====================
 
 /// Market Breadth 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MarketBreadthResponse {
     /// 전체 시장 Above_MA20 비율 (백분율).

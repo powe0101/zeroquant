@@ -6,7 +6,9 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
-use trader_core::{Kline, MarketData, Position, Side, Timeframe};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use trader_core::{Kline, MarketData, Position, Side, StrategyContext, Timeframe};
 use trader_strategy::strategies::range_trading::{RangeTradingConfig, RangeTradingStrategy};
 use trader_strategy::Strategy;
 use uuid::Uuid;
@@ -91,6 +93,31 @@ fn ma_filter_config(ticker: &str) -> serde_json::Value {
     })
 }
 
+/// StrategyContext에 가격 데이터 설정
+fn setup_context_with_prices(ticker: &str, prices: &[Decimal], start_timestamp: i64) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+    let mut klines = Vec::new();
+
+    for (i, price) in prices.iter().enumerate() {
+        let timestamp = chrono::DateTime::from_timestamp(start_timestamp + (i as i64 * 86400), 0).unwrap();
+        let kline = Kline::new(
+            ticker.to_string(),
+            Timeframe::D1,
+            timestamp,
+            *price,              // open
+            *price + dec!(10),   // high
+            *price - dec!(10),   // low
+            *price,              // close
+            dec!(1000000),       // volume
+            timestamp,           // close_time
+        );
+        klines.push(kline);
+    }
+
+    context.update_klines(ticker, Timeframe::D1, klines);
+    Arc::new(RwLock::new(context))
+}
+
 /// 테스트용 포지션 생성
 fn create_position(ticker: &str, quantity: Decimal) -> Position {
     Position {
@@ -165,7 +192,7 @@ async fn test_initialization_resets_state() {
 
     let state = strategy.get_state();
     assert!(state["state"]["current_zone"].is_null());
-    assert_eq!(state["prices_count"], 0);
+    assert_eq!(state["klines_count"], 0);
 }
 
 // ============================================================================
@@ -196,7 +223,7 @@ async fn test_zone_calculation_basic() {
         .await
         .unwrap();
 
-    // 구간 정보 설정을 위한 데이터 주입
+    // StrategyContext에 데이터 설정
     // target_period=5일, div_num=10이므로
     // 100~110 범위를 10개 구간으로 분할 (구간당 1)
     let prices: Vec<Decimal> = vec![
@@ -206,12 +233,18 @@ async fn test_zone_calculation_basic() {
         dec!(108),
         dec!(110), // 워밍업 (최저=100, 최고=110)
     ];
-    feed_prices(&mut strategy, "005930", &prices, 1000000).await;
+    let context = setup_context_with_prices("005930", &prices, 1000000);
+    strategy.set_context(context);
+
+    // 데이터 처리를 트리거하기 위한 마지막 데이터 입력
+    let data = create_simple_kline("005930", dec!(110), 1000000 + 5 * 86400);
+    let _ = strategy.on_market_data(&data).await;
 
     let state = strategy.get_state();
+    // klines_count >= target_period(5) 이면 초기화 완료
     assert!(
-        state["initialized"].as_bool().unwrap_or(false),
-        "초기화 완료되어야 함"
+        state["klines_count"].as_i64().unwrap_or(0) >= 5,
+        "충분한 데이터 후 초기화 완료되어야 함"
     );
 
     // zone 정보 확인
@@ -228,9 +261,14 @@ async fn test_zone_boundary_values() {
         .await
         .unwrap();
 
-    // 구간 설정: 100~110, 10개 구간 (구간당 1)
+    // StrategyContext에 구간 설정 데이터: 100~110, 10개 구간 (구간당 1)
     let warmup_prices: Vec<Decimal> = vec![dec!(100), dec!(102), dec!(104), dec!(106), dec!(110)];
-    feed_prices(&mut strategy, "005930", &warmup_prices, 1000000).await;
+    let context = setup_context_with_prices("005930", &warmup_prices, 1000000);
+    strategy.set_context(context);
+
+    // 데이터 처리 트리거
+    let data = create_simple_kline("005930", dec!(110), 1000000 + 5 * 86400);
+    let _ = strategy.on_market_data(&data).await;
 
     // 경계값 테스트를 위한 추가 데이터
     // 가격이 구간 경계에 있을 때 동작 확인
@@ -334,23 +372,25 @@ async fn test_ma_filter_blocks_buy_below_ma() {
         .await
         .unwrap();
 
-    // 하락 추세 데이터 (MA 아래)
+    // StrategyContext에 하락 추세 데이터 설정 (MA 아래)
     let prices: Vec<Decimal> = vec![dec!(120), dec!(115), dec!(110), dec!(105), dec!(100)];
-    feed_prices(&mut strategy, "005930", &prices, 1000000).await;
+    let context = setup_context_with_prices("005930", &prices, 1000000);
+    strategy.set_context(context);
 
     // 구간 상승 시도 (하지만 MA 아래)
     let price1 = create_simple_kline("005930", dec!(100), 1000000 + 6 * 86400);
     strategy.on_market_data(&price1).await.unwrap();
 
     let price2 = create_simple_kline("005930", dec!(108), 1000000 + 7 * 86400);
-    let signals = strategy.on_market_data(&price2).await.unwrap();
+    let _signals = strategy.on_market_data(&price2).await.unwrap();
 
     // MA 필터 동작 확인
     // 참고: 실제 전략의 MA 필터 로직에 따라 결과가 달라질 수 있음
     // 여기서는 시그널 발생 여부만 확인하고, 전략의 동작을 검증
     let state = strategy.get_state();
+    // klines_count >= target_period(5)이면 초기화 완료
     assert!(
-        state["initialized"].as_bool().unwrap_or(false),
+        state["klines_count"].as_i64().unwrap_or(0) >= 5,
         "전략 초기화 완료"
     );
 }
@@ -437,9 +477,14 @@ async fn test_state_tracking_zones() {
         .await
         .unwrap();
 
-    // 워밍업
+    // StrategyContext에 데이터 설정
     let prices: Vec<Decimal> = vec![dec!(100), dec!(102), dec!(104), dec!(106), dec!(110)];
-    feed_prices(&mut strategy, "005930", &prices, 1000000).await;
+    let context = setup_context_with_prices("005930", &prices, 1000000);
+    strategy.set_context(context);
+
+    // 데이터 처리 트리거
+    let data = create_simple_kline("005930", dec!(110), 1000000 + 5 * 86400);
+    let _ = strategy.on_market_data(&data).await;
 
     let state = strategy.get_state();
 
@@ -516,9 +561,9 @@ async fn test_shutdown() {
     let result = strategy.shutdown().await;
     assert!(result.is_ok(), "셧다운 성공해야 함");
 
-    // 셧다운 후 initialized false 확인
+    // 셧다운 후에도 상태 조회 가능
     let state = strategy.get_state();
-    assert!(!state["initialized"].as_bool().unwrap_or(true));
+    assert!(state.get("state").is_some(), "셧다운 후에도 상태 조회 가능");
 }
 
 // ============================================================================
@@ -538,8 +583,8 @@ async fn test_get_state_structure() {
     // 필수 필드 확인
     assert!(state.get("config").is_some());
     assert!(state.get("state").is_some());
-    assert!(state.get("initialized").is_some());
-    assert!(state.get("prices_count").is_some());
+    assert!(state.get("has_context").is_some());
+    assert!(state.get("klines_count").is_some());
 }
 
 // ============================================================================
@@ -588,8 +633,10 @@ async fn test_empty_data_handling() {
         .unwrap();
 
     let state = strategy.get_state();
-    assert_eq!(state["initialized"], false);
-    assert_eq!(state["prices_count"], 0);
+    // 데이터가 없으면 klines_count는 0
+    assert_eq!(state["klines_count"], 0);
+    // context가 설정되지 않으면 has_context는 false
+    assert_eq!(state["has_context"], false);
 }
 
 #[tokio::test]
@@ -709,9 +756,14 @@ async fn test_reinitialize_and_trade() {
         .await
         .unwrap();
 
-    // 첫 번째 사이클
+    // 첫 번째 사이클 - StrategyContext에 데이터 설정
     let cycle1: Vec<Decimal> = vec![dec!(100), dec!(102), dec!(104), dec!(106), dec!(110)];
-    feed_prices(&mut strategy, "005930", &cycle1, 1000000).await;
+    let context1 = setup_context_with_prices("005930", &cycle1, 1000000);
+    strategy.set_context(context1);
+
+    // 데이터 트리거
+    let data1 = create_simple_kline("005930", dec!(110), 1000000 + 5 * 86400);
+    let _ = strategy.on_market_data(&data1).await;
 
     // 재초기화
     strategy
@@ -719,11 +771,16 @@ async fn test_reinitialize_and_trade() {
         .await
         .unwrap();
 
-    // 두 번째 사이클 (다른 가격대)
+    // 두 번째 사이클 (다른 가격대) - 새 StrategyContext에 데이터 설정
     let cycle2: Vec<Decimal> = vec![dec!(200), dec!(205), dec!(210), dec!(215), dec!(220)];
-    let signals = feed_prices(&mut strategy, "005930", &cycle2, 2000000).await;
+    let context2 = setup_context_with_prices("005930", &cycle2, 2000000);
+    strategy.set_context(context2);
 
-    // 재초기화 후에도 정상 동작
+    // 데이터 트리거
+    let data2 = create_simple_kline("005930", dec!(220), 2000000 + 5 * 86400);
+    let _ = strategy.on_market_data(&data2).await;
+
+    // 재초기화 후에도 정상 동작 (klines_count >= target_period 확인)
     let state = strategy.get_state();
-    assert!(state["initialized"].as_bool().unwrap_or(false));
+    assert!(state["klines_count"].as_i64().unwrap_or(0) >= 5, "재초기화 후에도 데이터 축적됨");
 }

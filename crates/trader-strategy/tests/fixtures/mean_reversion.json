@@ -1,0 +1,98 @@
+{
+  "description": "평균회귀 전략 회귀 테스트 파라미터",
+  "strategies": [
+    {
+      "strategy_id": "rsi",
+      "name": "RSI 평균회귀",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "amount": "10000000",
+        "rsi_period": 7,
+        "overbought": 55,
+        "oversold": 45,
+        "exit_config": {
+          "stop_loss_pct": "3.0",
+          "take_profit_pct": "2.0",
+          "exit_on_neutral": true,
+          "cooldown_candles": 1
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_candles_required": 20,
+        "min_trades": 5
+      }
+    },
+    {
+      "strategy_id": "bollinger",
+      "name": "볼린저 밴드",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "amount": "10000000",
+        "period": 10,
+        "std_multiplier": "1.0",
+        "use_rsi_confirmation": false,
+        "min_bandwidth_pct": "0.0",
+        "exit_config": {
+          "stop_loss_pct": "3.0",
+          "take_profit_pct": "2.0",
+          "cooldown_candles": 1
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_candles_required": 20,
+        "min_trades": 5
+      }
+    },
+    {
+      "strategy_id": "grid",
+      "name": "그리드 트레이딩",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "amount": "10000000",
+        "spacing_pct": "0.3",
+        "levels": 10,
+        "use_atr": false,
+        "exit_config": {
+          "stop_loss_pct": "5.0",
+          "take_profit_pct": "0.0"
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 10
+      }
+    },
+    {
+      "strategy_id": "magic_split",
+      "name": "매직 분할매수",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "levels": [
+          {"trigger_rate": "-0.5", "target_rate": "0.5", "amount": "2000000"},
+          {"trigger_rate": "-1.0", "target_rate": "1.0", "amount": "2000000"},
+          {"trigger_rate": "-1.5", "target_rate": "1.5", "amount": "2000000"},
+          {"trigger_rate": "-2.0", "target_rate": "2.0", "amount": "2000000"},
+          {"trigger_rate": "-2.5", "target_rate": "2.5", "amount": "2000000"}
+        ],
+        "exit_config": {
+          "stop_loss_pct": "5.0",
+          "take_profit_pct": "0.0"
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 5
+      }
+    }
+  ]
+}

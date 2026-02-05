@@ -7,13 +7,15 @@ pub mod indicator_sync;
 pub mod ohlcv_collect;
 pub mod screening_refresh;
 pub mod symbol_sync;
+pub mod utils;
 
 pub use checkpoint::{
     clear_checkpoint, list_checkpoints, mark_interrupted, CheckpointInfo, CheckpointStatus,
 };
 pub use fundamental_sync::{
     fetch_and_save_naver_fundamental, sync_krx_fundamentals, sync_naver_fundamentals,
-    sync_naver_fundamentals_with_options, FundamentalSyncStats, NaverSyncOptions,
+    sync_naver_fundamentals_with_options, sync_yahoo_fundamentals, FundamentalSyncStats,
+    NaverSyncOptions, YahooSyncOptions,
 };
 pub use global_score_sync::{
     sync_global_scores, sync_global_scores_with_options, GlobalScoreSyncOptions,

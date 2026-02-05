@@ -4,18 +4,19 @@
 
 use chrono::{Duration, Utc};
 use rust_decimal::Decimal;
-use sqlx::PgPool;
+use sqlx::{PgPool, QueryBuilder, Postgres};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use trader_analytics::{
-    indicators::{IndicatorEngine, TtmSqueezeParams},
+    indicators::IndicatorEngine,
     MarketRegimeCalculator, RouteStateCalculator,
 };
 use trader_core::{Kline, Timeframe};
 
 use super::checkpoint::{self, CheckpointStatus};
+use super::utils::{calculate_ttm_squeeze, to_screaming_snake_case};
 use crate::config::CollectorConfig;
 use crate::error::CollectorError;
 use crate::stats::CollectionStats;
@@ -241,42 +242,7 @@ pub async fn sync_indicators_with_options(
     Ok(stats)
 }
 
-/// CamelCase를 SCREAMING_SNAKE_CASE로 변환.
-/// 예: StrongUptrend → STRONG_UPTREND, BottomBounce → BOTTOM_BOUNCE
-fn to_screaming_snake_case(s: &str) -> String {
-    let mut result = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() && i > 0 {
-            result.push('_');
-        }
-        result.push(c.to_ascii_uppercase());
-    }
-    result
-}
-
-/// TTM Squeeze 계산.
-fn calculate_ttm_squeeze(
-    engine: &IndicatorEngine,
-    candles: &[Kline],
-) -> (Option<bool>, Option<i32>) {
-    let high: Vec<Decimal> = candles.iter().map(|c| c.high).collect();
-    let low: Vec<Decimal> = candles.iter().map(|c| c.low).collect();
-    let close: Vec<Decimal> = candles.iter().map(|c| c.close).collect();
-
-    let params = TtmSqueezeParams::default();
-
-    match engine.ttm_squeeze(&high, &low, &close, params) {
-        Ok(results) if !results.is_empty() => {
-            let latest = results.last().unwrap();
-            (Some(latest.is_squeeze), Some(latest.squeeze_count as i32))
-        }
-        Ok(_) => (None, None),
-        Err(e) => {
-            debug!(error = %e, "TTM Squeeze 계산 실패");
-            (None, None)
-        }
-    }
-}
+// to_screaming_snake_case, calculate_ttm_squeeze는 utils.rs로 이동됨
 
 /// 특정 티커로 심볼 조회.
 async fn get_symbols_by_tickers(
@@ -300,30 +266,17 @@ async fn get_symbols_by_tickers(
     Ok(results)
 }
 
-/// 지표가 오래된 심볼 조회.
-#[allow(dead_code)]
-async fn get_stale_indicator_symbols(
-    pool: &PgPool,
-    older_than: chrono::DateTime<Utc>,
-    limit: i64,
-) -> Result<Vec<(Uuid, String, String, Option<String>)>> {
-    get_stale_indicator_symbols_with_resume(pool, older_than, limit, None).await
-}
+
 
 /// 지표가 오래된 심볼 조회 (resume 지원).
+/// QueryBuilder 사용으로 SQL 주입 방지.
 async fn get_stale_indicator_symbols_with_resume(
     pool: &PgPool,
     older_than: chrono::DateTime<Utc>,
     limit: i64,
     resume_ticker: Option<&str>,
 ) -> Result<Vec<(Uuid, String, String, Option<String>)>> {
-    let resume_condition = if let Some(t) = resume_ticker {
-        format!("AND si.ticker > '{}'", t)
-    } else {
-        String::new()
-    };
-
-    let query = format!(
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"
         SELECT si.id, si.ticker, si.market, si.yahoo_symbol
         FROM symbol_info si
@@ -334,18 +287,22 @@ async fn get_stale_indicator_symbols_with_resume(
               sf.route_state IS NULL
               OR sf.regime IS NULL
               OR sf.updated_at IS NULL
-              OR sf.updated_at < $1
-          )
-          {}
-        ORDER BY si.ticker
-        LIMIT $2
-        "#,
-        resume_condition
+              OR sf.updated_at < "#,
     );
+    qb.push_bind(older_than);
+    qb.push(")");
 
-    let results = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(&query)
-        .bind(older_than)
-        .bind(limit)
+    // resume_ticker 조건 (파라미터 바인딩으로 SQL 주입 방지)
+    if let Some(t) = resume_ticker {
+        qb.push(" AND si.ticker > ");
+        qb.push_bind(t.to_string());
+    }
+
+    qb.push(" ORDER BY si.ticker LIMIT ");
+    qb.push_bind(limit);
+
+    let results = qb
+        .build_query_as::<(Uuid, String, String, Option<String>)>()
         .fetch_all(pool)
         .await
         .map_err(CollectorError::Database)?;

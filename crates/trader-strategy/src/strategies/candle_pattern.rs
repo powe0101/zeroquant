@@ -117,42 +117,42 @@ struct CandleData {
 pub struct CandlePatternConfig {
     /// 대상 심볼
     #[serde(default = "default_ticker", deserialize_with = "deserialize_ticker")]
-    #[schema(label = "대상 종목", field_type = "symbol", default = "005930")]
+    #[schema(label = "대상 종목", field_type = "symbol", default = "005930", section = "asset")]
     pub ticker: String,
 
     /// 거래 금액
     #[serde(default = "default_trade_amount")]
-    #[schema(label = "거래 금액", min = 10000, max = 100000000, default = 1000000)]
+    #[schema(label = "거래 금액", min = 10000, max = 100000000, default = 1000000, section = "asset")]
     pub trade_amount: Decimal,
 
     /// 최소 패턴 강도 (0-1)
     #[serde(default = "default_min_strength")]
-    #[schema(label = "최소 패턴 강도", min = 0.1, max = 1.0, default = 0.6)]
+    #[schema(label = "최소 패턴 강도", min = 0.1, max = 1.0, default = 0.6, section = "indicator")]
     pub min_pattern_strength: Decimal,
 
     /// 볼륨 확인 사용
     #[serde(default = "default_use_volume")]
-    #[schema(label = "볼륨 확인 사용", default = true)]
+    #[schema(label = "볼륨 확인 사용", default = true, section = "filter")]
     pub use_volume_confirmation: bool,
 
     /// 트렌드 확인 사용
     #[serde(default = "default_use_trend")]
-    #[schema(label = "트렌드 확인 사용", default = true)]
+    #[schema(label = "트렌드 확인 사용", default = true, section = "filter")]
     pub use_trend_confirmation: bool,
 
     /// 트렌드 확인 기간
     #[serde(default = "default_trend_period")]
-    #[schema(label = "트렌드 확인 기간", min = 5, max = 100, default = 20)]
+    #[schema(label = "트렌드 확인 기간", min = 5, max = 100, default = 20, section = "indicator")]
     pub trend_period: usize,
 
     /// 손절 비율 (%)
     #[serde(default = "default_stop_loss")]
-    #[schema(label = "손절 비율 (%)", min = 0.5, max = 20.0, default = 3)]
+    #[schema(label = "손절 비율 (%)", min = 0.5, max = 20.0, default = 3, section = "sizing")]
     pub stop_loss_pct: Decimal,
 
     /// 익절 비율 (%)
     #[serde(default = "default_take_profit")]
-    #[schema(label = "익절 비율 (%)", min = 1.0, max = 50.0, default = 6)]
+    #[schema(label = "익절 비율 (%)", min = 1.0, max = 50.0, default = 6, section = "sizing")]
     pub take_profit_pct: Decimal,
 
     /// 활성화할 패턴 타입 (빈 경우 모두 활성화)
@@ -162,7 +162,7 @@ pub struct CandlePatternConfig {
 
     /// 최소 GlobalScore (기본값: 50)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -212,7 +212,7 @@ impl Default for CandlePatternConfig {
             take_profit_pct: default_take_profit(),
             enabled_patterns: Vec::new(),
             min_global_score: default_min_global_score(),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_mean_reversion(),
         }
     }
 }

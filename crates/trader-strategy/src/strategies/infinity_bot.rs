@@ -24,13 +24,13 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::{
     domain::{MarketRegime, RouteState, StrategyContext},
-    MarketData, MarketDataType, Order, Position, Side, Signal, SignalType,
+    types::Timeframe,
+    Kline, MarketData, Order, Position, Side, Signal, SignalType,
 };
 use trader_strategy_macro::StrategyConfig;
 
@@ -51,42 +51,42 @@ use crate::strategies::common::ExitConfig;
 pub struct InfinityBotConfig {
     /// 대상 티커
     #[serde(default = "default_ticker")]
-    #[schema(label = "대상 티커", field_type = "symbol", default = "005930")]
+    #[schema(label = "대상 티커", field_type = "symbol", default = "005930", section = "asset")]
     pub ticker: String,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "총 투자 금액", min = 100000, max = 1000000000, default = 10000000)]
+    #[schema(label = "총 투자 금액", min = 100000, max = 1000000000, default = 10000000, section = "asset")]
     pub total_amount: Decimal,
 
     /// 최대 라운드 수
     #[serde(default = "default_max_rounds")]
-    #[schema(label = "최대 라운드 수", min = 1, max = 100, default = 50)]
+    #[schema(label = "최대 라운드 수", min = 1, max = 100, default = 50, section = "sizing")]
     pub max_rounds: usize,
 
     /// 라운드당 투자 비율 (%)
     #[serde(default = "default_round_pct")]
-    #[schema(label = "라운드당 투자 비율 (%)", min = 0.5, max = 20, default = 2)]
+    #[schema(label = "라운드당 투자 비율 (%)", min = 0.5, max = 20, default = 2, section = "sizing")]
     pub round_pct: Decimal,
 
     /// 추가 매수 트리거 하락률 (%)
     #[serde(default = "default_dip_trigger")]
-    #[schema(label = "추가 매수 트리거 하락률 (%)", min = 0.5, max = 20, default = 2)]
+    #[schema(label = "추가 매수 트리거 하락률 (%)", min = 0.5, max = 20, default = 2, section = "indicator")]
     pub dip_trigger_pct: Decimal,
 
     /// 익절 목표 수익률 (%)
     #[serde(default = "default_take_profit")]
-    #[schema(label = "익절 목표 수익률 (%)", min = 0.5, max = 50, default = 3)]
+    #[schema(label = "익절 목표 수익률 (%)", min = 0.5, max = 50, default = 3, section = "indicator")]
     pub take_profit_pct: Decimal,
 
     /// 이동평균 기간
     #[serde(default = "default_ma_period")]
-    #[schema(label = "이동평균 기간", min = 5, max = 200, default = 20)]
+    #[schema(label = "이동평균 기간", min = 5, max = 200, default = 20, section = "indicator")]
     pub ma_period: usize,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -131,7 +131,7 @@ impl Default for InfinityBotConfig {
             take_profit_pct: default_take_profit(),
             ma_period: default_ma_period(),
             min_global_score: default_min_global_score(),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_grid_trading(),
         }
     }
 }
@@ -196,11 +196,8 @@ pub struct InfinityBotStrategy {
     config: Option<InfinityBotConfig>,
     state: InfinityBotState,
     context: Option<Arc<RwLock<StrategyContext>>>,
-    /// 가격 히스토리
-    prices: VecDeque<Decimal>,
     /// 마지막 진입 가격 (물타기용)
     last_entry_price: Option<Decimal>,
-    initialized: bool,
 }
 
 impl InfinityBotStrategy {
@@ -209,10 +206,30 @@ impl InfinityBotStrategy {
             config: None,
             state: InfinityBotState::default(),
             context: None,
-            prices: VecDeque::new(),
             last_entry_price: None,
-            initialized: false,
         }
+    }
+
+    // ========================================================================
+    // StrategyContext 헬퍼
+    // ========================================================================
+
+    /// StrategyContext에서 klines 가져오기
+    fn get_klines(&self) -> Option<Vec<Kline>> {
+        let config = self.config.as_ref()?;
+        let ctx = self.context.as_ref()?;
+        let ctx_lock = ctx.try_read().ok()?;
+        let klines = ctx_lock.get_klines(&config.ticker, Timeframe::D1);
+        if klines.is_empty() {
+            return None;
+        }
+        Some(klines.to_vec())
+    }
+
+    /// 현재 가격 가져오기 (klines의 마지막 종가)
+    fn get_current_price(&self) -> Option<Decimal> {
+        let klines = self.get_klines()?;
+        klines.last().map(|k| k.close)
     }
 
     // ========================================================================
@@ -270,17 +287,23 @@ impl InfinityBotStrategy {
     // 핵심 로직
     // ========================================================================
 
-    /// 이동평균 계산
+    /// 이동평균 계산 (StrategyContext에서 klines 사용)
     fn calculate_ma(&self) -> Option<Decimal> {
         let config = self.config.as_ref()?;
-        let period = config.ma_period;
+        let klines = self.get_klines()?;
 
-        if self.prices.len() < period {
+        if klines.len() < config.ma_period {
             return None;
         }
 
-        let sum: Decimal = self.prices.iter().take(period).sum();
-        Some(sum / Decimal::from(period))
+        // 최신 데이터부터 ma_period개의 종가 합계
+        let sum: Decimal = klines
+            .iter()
+            .rev()
+            .take(config.ma_period)
+            .map(|k| k.close)
+            .sum();
+        Some(sum / Decimal::from(config.ma_period))
     }
 
     /// 현재 가격이 MA 위인지
@@ -288,14 +311,20 @@ impl InfinityBotStrategy {
         self.calculate_ma().map(|ma| price > ma).unwrap_or(false)
     }
 
-    /// 모멘텀 확인 (최근 5일 수익률)
+    /// 모멘텀 확인 (최근 5일 수익률) - StrategyContext에서 klines 사용
     fn has_positive_momentum(&self) -> bool {
-        if self.prices.len() < 6 {
+        let klines = match self.get_klines() {
+            Some(k) => k,
+            None => return false,
+        };
+
+        if klines.len() < 6 {
             return false;
         }
 
-        let current = self.prices.front().copied().unwrap_or(Decimal::ZERO);
-        let past = self.prices.get(5).copied().unwrap_or(Decimal::ZERO);
+        let len = klines.len();
+        let current = klines[len - 1].close;
+        let past = klines[len - 6].close;
 
         if past.is_zero() {
             return false;
@@ -433,9 +462,7 @@ impl Strategy for InfinityBotStrategy {
 
         self.config = Some(cfg);
         self.state = InfinityBotState::default();
-        self.prices.clear();
         self.last_entry_price = None;
-        self.initialized = false;
 
         Ok(())
     }
@@ -454,29 +481,24 @@ impl Strategy for InfinityBotStrategy {
             return Ok(vec![]);
         }
 
-        // 가격 추출
-        let price = match &data.data {
-            MarketDataType::Kline(k) => k.close,
-            MarketDataType::Ticker(t) => t.last,
-            MarketDataType::Trade(t) => t.price,
-            _ => return Ok(vec![]),
+        // StrategyContext에서 가격 가져오기
+        let price = match self.get_current_price() {
+            Some(p) => p,
+            None => {
+                debug!(ticker = %config.ticker, "StrategyContext에서 가격 데이터 없음");
+                return Ok(vec![]);
+            }
         };
 
-        // 가격 히스토리 업데이트
-        self.prices.push_front(price);
-        if self.prices.len() > 250 {
-            self.prices.pop_back();
-        }
-
-        // 초기화 체크
-        if !self.initialized && self.prices.len() >= config.ma_period {
-            self.initialized = true;
-            info!("InfinityBot 초기화 완료");
-        }
-
-        if !self.initialized {
-            return Ok(vec![]);
-        }
+        // klines 데이터 충분한지 확인
+        let klines = match self.get_klines() {
+            Some(k) if k.len() >= config.ma_period => k,
+            _ => {
+                debug!(ticker = %config.ticker, ma_period = config.ma_period, "klines 데이터 부족");
+                return Ok(vec![]);
+            }
+        };
+        drop(klines); // 사용하지 않으므로 해제
 
         let mut signals = vec![];
         let timestamp = data.timestamp.timestamp();
@@ -599,7 +621,6 @@ impl Strategy for InfinityBotStrategy {
             total_qty = %self.state.total_quantity,
             "InfinityBot 종료"
         );
-        self.initialized = false;
         Ok(())
     }
 
@@ -609,11 +630,11 @@ impl Strategy for InfinityBotStrategy {
     }
 
     fn get_state(&self) -> Value {
+        let klines_count = self.get_klines().map(|k| k.len()).unwrap_or(0);
         json!({
             "config": self.config,
             "state": self.state,
-            "initialized": self.initialized,
-            "prices_count": self.prices.len(),
+            "klines_count": klines_count,
             "last_entry_price": self.last_entry_price.map(|d| d.to_string()),
         })
     }

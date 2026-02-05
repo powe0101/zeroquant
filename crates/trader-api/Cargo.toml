@@ -17,7 +17,7 @@ trader-strategy = { path = "../trader-strategy" }
 trader-risk = { path = "../trader-risk" }
 trader-execution = { path = "../trader-execution" }
 trader-data = { path = "../trader-data" }
-trader-analytics = { path = "../trader-analytics", features = ["ml"] }
+trader-analytics = { path = "../trader-analytics", features = ["backtest", "ml", "utoipa-support"] }
 
 # Optional dependencies (Feature Flags)
 trader-notification = { path = "../trader-notification", optional = true }

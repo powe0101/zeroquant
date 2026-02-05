@@ -26,12 +26,11 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
+use trader_core::{Kline, MarketData, MarketDataType, Order, Position, Side, Signal, Timeframe};
 use trader_strategy_macro::StrategyConfig;
 
 use crate::strategies::common::ExitConfig;
@@ -47,77 +46,77 @@ use crate::strategies::common::ExitConfig;
 pub struct MarketBothSideConfig {
     /// 레버리지 ETF 티커 (기본값: 122630)
     #[serde(default = "default_leverage_ticker")]
-    #[schema(label = "레버리지 ETF 티커")]
+    #[schema(label = "레버리지 ETF 티커", section = "asset")]
     pub leverage_ticker: String,
 
     /// 인버스 ETF 티커 (기본값: 252670)
     #[serde(default = "default_inverse_ticker")]
-    #[schema(label = "인버스 ETF 티커")]
+    #[schema(label = "인버스 ETF 티커", section = "asset")]
     pub inverse_ticker: String,
 
     /// 레버리지 목표 비율 (기본값: 0.7)
     #[serde(default = "default_leverage_ratio")]
-    #[schema(label = "레버리지 비율", min = 0.1, max = 1)]
+    #[schema(label = "레버리지 비율", min = 0.1, max = 1, section = "sizing")]
     pub leverage_ratio: f64,
 
     /// 인버스 목표 비율 (기본값: 0.3)
     #[serde(default = "default_inverse_ratio")]
-    #[schema(label = "인버스 비율", min = 0, max = 0.9)]
+    #[schema(label = "인버스 비율", min = 0, max = 0.9, section = "sizing")]
     pub inverse_ratio: f64,
 
     /// MA3 기간 (기본값: 3)
     #[serde(default = "default_ma3")]
-    #[schema(label = "MA3 기간", min = 2, max = 10)]
+    #[schema(label = "MA3 기간", min = 2, max = 10, section = "indicator")]
     pub ma3_period: usize,
 
     /// MA6 기간 (기본값: 6)
     #[serde(default = "default_ma6")]
-    #[schema(label = "MA6 기간", min = 3, max = 15)]
+    #[schema(label = "MA6 기간", min = 3, max = 15, section = "indicator")]
     pub ma6_period: usize,
 
     /// MA19 기간 (기본값: 19)
     #[serde(default = "default_ma19")]
-    #[schema(label = "MA19 기간", min = 10, max = 30)]
+    #[schema(label = "MA19 기간", min = 10, max = 30, section = "indicator")]
     pub ma19_period: usize,
 
     /// MA60 기간 (기본값: 60)
     #[serde(default = "default_ma60")]
-    #[schema(label = "MA60 기간", min = 30, max = 120)]
+    #[schema(label = "MA60 기간", min = 30, max = 120, section = "indicator")]
     pub ma60_period: usize,
 
     /// 이격도 상한 (기본값: 106%)
     #[serde(default = "default_disparity_upper")]
-    #[schema(label = "이격도 상한 (%)", min = 100, max = 130)]
+    #[schema(label = "이격도 상한 (%)", min = 100, max = 130, section = "indicator")]
     pub disparity_upper: f64,
 
     /// 이격도 하한 (기본값: 94%)
     #[serde(default = "default_disparity_lower")]
-    #[schema(label = "이격도 하한 (%)", min = 70, max = 100)]
+    #[schema(label = "이격도 하한 (%)", min = 70, max = 100, section = "indicator")]
     pub disparity_lower: f64,
 
     /// RSI 기간 (기본값: 14)
     #[serde(default = "default_rsi_period")]
-    #[schema(label = "RSI 기간", min = 7, max = 30)]
+    #[schema(label = "RSI 기간", min = 7, max = 30, section = "indicator")]
     pub rsi_period: usize,
 
     /// RSI 과매도 (기본값: 30)
     #[serde(default = "default_rsi_oversold")]
-    #[schema(label = "RSI 과매도", min = 10, max = 40)]
+    #[schema(label = "RSI 과매도", min = 10, max = 40, section = "indicator")]
     pub rsi_oversold: f64,
 
     /// RSI 과매수 (기본값: 70)
     #[serde(default = "default_rsi_overbought")]
-    #[schema(label = "RSI 과매수", min = 60, max = 90)]
+    #[schema(label = "RSI 과매수", min = 60, max = 90, section = "indicator")]
     pub rsi_overbought: f64,
 
     /// 손절 비율 (기본값: 5%)
     #[serde(default = "default_stop_loss")]
-    #[schema(label = "손절 비율 (%)", min = 1, max = 15)]
+    #[schema(label = "손절 비율 (%)", min = 1, max = 15, section = "sizing")]
     pub stop_loss_pct: f64,
 
     /// 최소 글로벌 스코어 (기본값: 60)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -191,7 +190,7 @@ impl Default for MarketBothSideConfig {
             rsi_overbought: 70.0,
             stop_loss_pct: 5.0,
             min_global_score: dec!(60),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_leverage(),
         }
     }
 }
@@ -206,88 +205,7 @@ struct EtfPosition {
     current_price: Decimal,
 }
 
-/// 기술적 지표 계산기.
-#[derive(Debug, Clone)]
-struct TechnicalIndicators {
-    prices: VecDeque<Decimal>,
-    gains: VecDeque<Decimal>,
-    losses: VecDeque<Decimal>,
-    max_len: usize,
-}
-
-impl TechnicalIndicators {
-    fn new(max_len: usize) -> Self {
-        Self {
-            prices: VecDeque::new(),
-            gains: VecDeque::new(),
-            losses: VecDeque::new(),
-            max_len,
-        }
-    }
-
-    fn update(&mut self, price: Decimal) {
-        if let Some(&prev) = self.prices.front() {
-            let change = price - prev;
-            if change > Decimal::ZERO {
-                self.gains.push_front(change);
-                self.losses.push_front(Decimal::ZERO);
-            } else {
-                self.gains.push_front(Decimal::ZERO);
-                self.losses.push_front(change.abs());
-            }
-
-            while self.gains.len() > self.max_len {
-                self.gains.pop_back();
-            }
-            while self.losses.len() > self.max_len {
-                self.losses.pop_back();
-            }
-        }
-
-        self.prices.push_front(price);
-        while self.prices.len() > self.max_len {
-            self.prices.pop_back();
-        }
-    }
-
-    fn calculate_ma(&self, period: usize) -> Option<Decimal> {
-        if self.prices.len() < period {
-            return None;
-        }
-
-        let sum: Decimal = self.prices.iter().take(period).sum();
-        Some(sum / Decimal::from(period))
-    }
-
-    fn calculate_rsi(&self, period: usize) -> Option<Decimal> {
-        if self.gains.len() < period {
-            return None;
-        }
-
-        let avg_gain: Decimal =
-            self.gains.iter().take(period).sum::<Decimal>() / Decimal::from(period);
-        let avg_loss: Decimal =
-            self.losses.iter().take(period).sum::<Decimal>() / Decimal::from(period);
-
-        if avg_loss == Decimal::ZERO {
-            return Some(dec!(100));
-        }
-
-        let rs = avg_gain / avg_loss;
-        Some(dec!(100) - (dec!(100) / (dec!(1) + rs)))
-    }
-
-    fn calculate_disparity(&self, period: usize) -> Option<Decimal> {
-        let ma = self.calculate_ma(period)?;
-        let current = self.prices.front()?;
-
-        if ma == Decimal::ZERO {
-            return None;
-        }
-
-        Some(*current / ma * dec!(100))
-    }
-}
+// TechnicalIndicators 레거시 코드 제거됨 - StrategyContext 기반으로 지표 계산
 
 /// Market Both Side 전략.
 pub struct MarketBothSideStrategy {
@@ -301,12 +219,6 @@ pub struct MarketBothSideStrategy {
 
     /// 인버스 포지션
     inverse_position: Option<EtfPosition>,
-
-    /// 레버리지 기술적 지표
-    leverage_indicators: TechnicalIndicators,
-
-    /// 인버스 기술적 지표
-    inverse_indicators: TechnicalIndicators,
 
     /// 현재 날짜
     current_date: Option<chrono::NaiveDate>,
@@ -331,8 +243,6 @@ impl MarketBothSideStrategy {
             context: None,
             leverage_position: None,
             inverse_position: None,
-            leverage_indicators: TechnicalIndicators::new(70),
-            inverse_indicators: TechnicalIndicators::new(70),
             current_date: None,
             started: false,
             trades_count: 0,
@@ -340,6 +250,86 @@ impl MarketBothSideStrategy {
             total_pnl: Decimal::ZERO,
             initialized: false,
         }
+    }
+
+    // ========================================================================
+    // StrategyContext 연동 헬퍼 (가격 데이터는 StrategyContext에서 가져옴)
+    // ========================================================================
+
+    /// StrategyContext에서 klines 가져오기
+    fn get_klines(&self, ticker: &str) -> Vec<Kline> {
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return vec![],
+        };
+        ctx_lock.get_klines(ticker, Timeframe::D1).to_vec()
+    }
+
+    /// klines에서 MA 계산
+    fn calculate_ma(klines: &[Kline], period: usize) -> Option<Decimal> {
+        if klines.len() < period {
+            return None;
+        }
+        let sum: Decimal = klines.iter().rev().take(period).map(|k| k.close).sum();
+        Some(sum / Decimal::from(period))
+    }
+
+    /// klines에서 RSI 계산
+    fn calculate_rsi(klines: &[Kline], period: usize) -> Option<Decimal> {
+        if klines.len() < period + 1 {
+            return None;
+        }
+
+        let closes: Vec<_> = klines.iter().rev().take(period + 1).map(|k| k.close).collect();
+        let mut gains = Vec::new();
+        let mut losses = Vec::new();
+
+        for i in 1..closes.len() {
+            let change = closes[i] - closes[i - 1];
+            if change > Decimal::ZERO {
+                gains.push(change);
+                losses.push(Decimal::ZERO);
+            } else {
+                gains.push(Decimal::ZERO);
+                losses.push(change.abs());
+            }
+        }
+
+        if gains.len() < period {
+            return None;
+        }
+
+        let avg_gain: Decimal = gains.iter().take(period).sum::<Decimal>() / Decimal::from(period);
+        let avg_loss: Decimal = losses.iter().take(period).sum::<Decimal>() / Decimal::from(period);
+
+        if avg_loss == Decimal::ZERO {
+            return Some(dec!(100));
+        }
+
+        let rs = avg_gain / avg_loss;
+        Some(dec!(100) - (dec!(100) / (dec!(1) + rs)))
+    }
+
+    /// klines에서 이격도 계산
+    fn calculate_disparity(klines: &[Kline], period: usize) -> Option<Decimal> {
+        let ma = Self::calculate_ma(klines, period)?;
+        let current = klines.last()?.close;
+
+        if ma == Decimal::ZERO {
+            return None;
+        }
+
+        Some(current / ma * dec!(100))
+    }
+
+    /// 데이터가 충분한지 확인
+    fn has_sufficient_data(&self, ticker: &str) -> bool {
+        let klines = self.get_klines(ticker);
+        klines.len() >= 60
     }
 
     /// 새로운 날인지 확인.
@@ -403,33 +393,31 @@ impl MarketBothSideStrategy {
             None => return false,
         };
 
-        // MA60 상향 돌파 체크
-        let ma60 = match self.leverage_indicators.calculate_ma(config.ma60_period) {
+        let klines = self.get_klines(&config.leverage_ticker);
+        if klines.len() < config.ma60_period + 1 {
+            return false;
+        }
+
+        // MA60 계산
+        let ma60 = match Self::calculate_ma(&klines, config.ma60_period) {
             Some(v) => v,
             None => return false,
         };
-        let ma60_prev = match self
-            .leverage_indicators
-            .calculate_ma(config.ma60_period + 1)
-        {
+        // 이전 MA60 (마지막 kline 제외)
+        let klines_prev = &klines[..klines.len() - 1];
+        let ma60_prev = match Self::calculate_ma(klines_prev, config.ma60_period) {
             Some(v) => v,
             None => return false,
         };
 
-        let current = match self.leverage_indicators.prices.front() {
-            Some(&v) => v,
-            None => return false,
-        };
-        let prev_close = match self.leverage_indicators.prices.get(1) {
-            Some(&v) => v,
-            None => return false,
-        };
+        let current = klines.last().map(|k| k.close).unwrap_or(Decimal::ZERO);
+        let prev_close = klines.get(klines.len().saturating_sub(2)).map(|k| k.close).unwrap_or(Decimal::ZERO);
 
         // MA60 상향 돌파 (이전 MA60 < 이전 종가, 현재 MA60 <= 현재가)
         let ma60_breakout = ma60_prev > prev_close && ma60 <= current;
 
         // 이격도 체크 (11일)
-        let disparity11 = match self.leverage_indicators.calculate_disparity(11) {
+        let disparity11 = match Self::calculate_disparity(&klines, 11) {
             Some(v) => v.to_f64().unwrap_or(100.0),
             None => return false,
         };
@@ -438,7 +426,7 @@ impl MarketBothSideStrategy {
         let disparity_ok = disparity11 < config.disparity_upper;
 
         // RSI 체크
-        let rsi = match self.leverage_indicators.calculate_rsi(config.rsi_period) {
+        let rsi = match Self::calculate_rsi(&klines, config.rsi_period) {
             Some(v) => v.to_f64().unwrap_or(50.0),
             None => return false,
         };
@@ -479,16 +467,18 @@ impl MarketBothSideStrategy {
             }
         }
 
+        let klines = self.get_klines(&config.leverage_ticker);
+
         // MA 데드 크로스 체크 (MA3 < MA6 < MA19)
-        let ma3 = match self.leverage_indicators.calculate_ma(config.ma3_period) {
+        let ma3 = match Self::calculate_ma(&klines, config.ma3_period) {
             Some(v) => v,
             None => return false,
         };
-        let ma6 = match self.leverage_indicators.calculate_ma(config.ma6_period) {
+        let ma6 = match Self::calculate_ma(&klines, config.ma6_period) {
             Some(v) => v,
             None => return false,
         };
-        let ma19 = match self.leverage_indicators.calculate_ma(config.ma19_period) {
+        let ma19 = match Self::calculate_ma(&klines, config.ma19_period) {
             Some(v) => v,
             None => return false,
         };
@@ -496,7 +486,7 @@ impl MarketBothSideStrategy {
         let dead_cross = ma3 < ma6 && ma6 < ma19;
 
         // 이격도 하한 체크
-        let disparity20 = match self.leverage_indicators.calculate_disparity(20) {
+        let disparity20 = match Self::calculate_disparity(&klines, 20) {
             Some(v) => v.to_f64().unwrap_or(100.0),
             None => return false,
         };
@@ -518,16 +508,19 @@ impl MarketBothSideStrategy {
             None => return false,
         };
 
+        // 레버리지 티커의 klines로 MA/RSI 계산
+        let klines = self.get_klines(&config.leverage_ticker);
+
         // MA 데드 크로스 (MA3 < MA6 < MA19)
-        let ma3 = match self.leverage_indicators.calculate_ma(config.ma3_period) {
+        let ma3 = match Self::calculate_ma(&klines, config.ma3_period) {
             Some(v) => v,
             None => return false,
         };
-        let ma6 = match self.leverage_indicators.calculate_ma(config.ma6_period) {
+        let ma6 = match Self::calculate_ma(&klines, config.ma6_period) {
             Some(v) => v,
             None => return false,
         };
-        let ma19 = match self.leverage_indicators.calculate_ma(config.ma19_period) {
+        let ma19 = match Self::calculate_ma(&klines, config.ma19_period) {
             Some(v) => v,
             None => return false,
         };
@@ -535,7 +528,7 @@ impl MarketBothSideStrategy {
         let dead_cross = ma3 < ma6 && ma6 < ma19;
 
         // RSI 과매도
-        let rsi = match self.leverage_indicators.calculate_rsi(config.rsi_period) {
+        let rsi = match Self::calculate_rsi(&klines, config.rsi_period) {
             Some(v) => v.to_f64().unwrap_or(50.0),
             None => return false,
         };
@@ -577,16 +570,19 @@ impl MarketBothSideStrategy {
             }
         }
 
+        // 레버리지 티커의 klines로 MA/RSI 계산
+        let klines = self.get_klines(&config.leverage_ticker);
+
         // MA 골든 크로스 (MA3 > MA6 > MA19)
-        let ma3 = match self.leverage_indicators.calculate_ma(config.ma3_period) {
+        let ma3 = match Self::calculate_ma(&klines, config.ma3_period) {
             Some(v) => v,
             None => return false,
         };
-        let ma6 = match self.leverage_indicators.calculate_ma(config.ma6_period) {
+        let ma6 = match Self::calculate_ma(&klines, config.ma6_period) {
             Some(v) => v,
             None => return false,
         };
-        let ma19 = match self.leverage_indicators.calculate_ma(config.ma19_period) {
+        let ma19 = match Self::calculate_ma(&klines, config.ma19_period) {
             Some(v) => v,
             None => return false,
         };
@@ -594,7 +590,7 @@ impl MarketBothSideStrategy {
         let golden_cross = ma3 > ma6 && ma6 > ma19;
 
         // RSI 과매도 회복
-        let rsi = match self.leverage_indicators.calculate_rsi(config.rsi_period) {
+        let rsi = match Self::calculate_rsi(&klines, config.rsi_period) {
             Some(v) => v.to_f64().unwrap_or(50.0),
             None => return false,
         };
@@ -614,11 +610,10 @@ impl MarketBothSideStrategy {
 
         // 레버리지 신호
         if let Some(sym) = &self.leverage_ticker {
-            let price = self
-                .leverage_indicators
-                .prices
-                .front()
-                .copied()
+            let leverage_klines = self.get_klines(&config.leverage_ticker);
+            let price = leverage_klines
+                .last()
+                .map(|k| k.close)
                 .unwrap_or(Decimal::ZERO);
 
             // 가격이 0인 경우 신호 생성 방지
@@ -652,11 +647,10 @@ impl MarketBothSideStrategy {
 
         // 인버스 신호
         if let Some(sym) = &self.inverse_ticker {
-            let price = self
-                .inverse_indicators
-                .prices
-                .front()
-                .copied()
+            let inverse_klines = self.get_klines(&config.inverse_ticker);
+            let price = inverse_klines
+                .last()
+                .map(|k| k.close)
                 .unwrap_or(Decimal::ZERO);
 
             // 가격이 0인 경우 신호 생성 방지
@@ -767,21 +761,17 @@ impl Strategy for MarketBothSideStrategy {
             self.current_date = Some(timestamp.date_naive());
         }
 
-        // 지표 업데이트
+        // 포지션 가격 업데이트 (StrategyContext의 klines는 자동 업데이트됨)
         if is_leverage {
-            self.leverage_indicators.update(close);
             if let Some(pos) = &mut self.leverage_position {
                 pos.current_price = close;
             }
-        } else {
-            self.inverse_indicators.update(close);
-            if let Some(pos) = &mut self.inverse_position {
-                pos.current_price = close;
-            }
+        } else if let Some(pos) = &mut self.inverse_position {
+            pos.current_price = close;
         }
 
-        // 충분한 데이터가 있는지 확인
-        if self.leverage_indicators.prices.len() < 60 {
+        // 충분한 데이터가 있는지 확인 (StrategyContext 기반)
+        if !self.has_sufficient_data(&config.leverage_ticker) {
             return Ok(vec![]);
         }
 
@@ -964,24 +954,6 @@ mod tests {
         assert!(strategy.inverse_ticker.is_some());
     }
 
-    #[test]
-    fn test_technical_indicators() {
-        let mut indicators = TechnicalIndicators::new(20);
-
-        // 데이터 추가
-        for i in 1..=20 {
-            indicators.update(Decimal::from(100 + i));
-        }
-
-        // MA 계산 확인
-        let ma5 = indicators.calculate_ma(5);
-        assert!(ma5.is_some());
-
-        // RSI 계산 확인 (상승 추세이므로 높은 값)
-        let rsi = indicators.calculate_rsi(14);
-        assert!(rsi.is_some());
-        assert!(rsi.unwrap() > dec!(50));
-    }
 }
 
 // 전략 레지스트리에 자동 등록

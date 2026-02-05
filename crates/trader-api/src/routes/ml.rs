@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -22,7 +23,7 @@ use crate::state::AppState;
 // ============================================================================
 
 /// ML 모델 타입.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelType {
     Xgboost,
@@ -43,7 +44,7 @@ impl std::fmt::Display for ModelType {
 }
 
 /// 훈련 작업 상태.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TrainingStatus {
     Pending,
@@ -53,7 +54,7 @@ pub enum TrainingStatus {
 }
 
 /// 모델 성능 지표 (프론트엔드 TrainingMetrics와 일치).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelMetrics {
     pub accuracy: f64,
@@ -66,7 +67,7 @@ pub struct ModelMetrics {
 }
 
 /// 훈련된 모델 정보.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrainedModel {
     pub id: String,
@@ -82,7 +83,7 @@ pub struct TrainedModel {
 }
 
 /// 훈련 작업 메트릭 (프론트엔드 호환).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrainingJobMetrics {
     pub accuracy: f64,
@@ -95,7 +96,7 @@ pub struct TrainingJobMetrics {
 }
 
 /// 훈련 작업 정보.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrainingJob {
     pub id: String,
@@ -117,7 +118,7 @@ pub struct TrainingJob {
 // ============================================================================
 
 /// 훈련 시작 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StartTrainingRequest {
     pub model_type: ModelType,
@@ -128,7 +129,7 @@ pub struct StartTrainingRequest {
 }
 
 /// 훈련 시작 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StartTrainingResponse {
     pub success: bool,
@@ -137,7 +138,7 @@ pub struct StartTrainingResponse {
 }
 
 /// 훈련 작업 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TrainingJobsResponse {
     pub jobs: Vec<TrainingJob>,
@@ -145,7 +146,7 @@ pub struct TrainingJobsResponse {
 }
 
 /// 모델 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelsResponse {
     pub models: Vec<TrainedModel>,
@@ -153,7 +154,7 @@ pub struct ModelsResponse {
 }
 
 /// 모델 배포 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployResponse {
     pub success: bool,
@@ -161,7 +162,7 @@ pub struct DeployResponse {
 }
 
 /// 에러 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
     pub error: String,
@@ -169,7 +170,7 @@ pub struct ErrorResponse {
 }
 
 /// 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ListQuery {
     pub status: Option<String>,
     pub limit: Option<usize>,
@@ -678,7 +679,7 @@ pub async fn download_model(
 }
 
 /// 외부 모델 등록 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterModelRequest {
     pub name: String,

@@ -26,11 +26,25 @@ use utoipa_swagger_ui::SwaggerUi;
 use trader_core::types::{MarketType, Symbol};
 use trader_core::{OrderStatusType, OrderType, Side, SignalIndicators, TimeInForce};
 
+// trader-analytics ML 타입
+use trader_analytics::ml::{CandlestickPatternInfo, ChartPatternInfo, PatternDetectionResult};
+
 // ==================== 각 모듈에서 스키마 Import ====================
 
 use crate::error::ApiErrorResponse;
 use crate::repository::{RankedSymbol, SevenFactorData, SevenFactorResponse};
 use crate::routes::{
+    // Analytics 모듈
+    analytics::types::{
+        AvailableIndicatorsResponse, ChartQuery, ChartResponse, CorrelationResponse,
+        EquityCurveResponse, IndicatorDataResponse, IndicatorQuery, KeltnerResponse,
+        MonthlyReturnsResponse, ObvResponse, PerformanceResponse, PeriodQuery, SuperTrendResponse,
+        VolumeProfileQuery, VolumeProfileResponse, VwapResponse,
+    },
+    // Patterns 모듈
+    patterns::{
+        CandlestickPatternsResponse, ChartPatternsResponse, PatternTypeInfo, PatternTypesResponse,
+    },
     // Ranking 모듈
     ranking::{
         CalculateResponse, FilterInfo, RankingQuery, RankingResponse, SevenFactorBatchRequest,
@@ -67,7 +81,7 @@ use crate::routes::{
 #[openapi(
     info(
         title = "ZeroQuant Trading API",
-        version = "0.4.4",
+        version = "0.6.0",
         description = r#"
 # ZeroQuant 트레이딩 봇 REST API
 
@@ -121,7 +135,8 @@ use crate::routes::{
         (name = "simulation", description = "시뮬레이션 - 모의 거래"),
         (name = "monitoring", description = "모니터링 - 에러 추적 및 시스템 상태"),
         (name = "signals", description = "신호 마커 - 백테스트/실거래 신호 조회 및 검색"),
-        (name = "ranking", description = "랭킹 - GlobalScore 기반 종목 랭킹 및 7Factor 분석")
+        (name = "ranking", description = "랭킹 - GlobalScore 기반 종목 랭킹 및 7Factor 분석"),
+        (name = "reality_check", description = "실제 검증 - 백테스트와 실거래 비교")
     ),
     // ==================== 스키마 등록 ====================
     components(
@@ -176,6 +191,33 @@ use crate::routes::{
             SevenFactorBatchResponse,
             SevenFactorResponse,
             SevenFactorData,
+
+            // ===== Patterns =====
+            CandlestickPatternsResponse,
+            ChartPatternsResponse,
+            PatternTypeInfo,
+            PatternTypesResponse,
+            PatternDetectionResult,
+            CandlestickPatternInfo,
+            ChartPatternInfo,
+
+            // ===== Analytics =====
+            PerformanceResponse,
+            PeriodQuery,
+            ChartQuery,
+            ChartResponse,
+            EquityCurveResponse,
+            MonthlyReturnsResponse,
+            IndicatorQuery,
+            IndicatorDataResponse,
+            AvailableIndicatorsResponse,
+            VolumeProfileQuery,
+            VolumeProfileResponse,
+            CorrelationResponse,
+            VwapResponse,
+            KeltnerResponse,
+            ObvResponse,
+            SuperTrendResponse,
         )
     ),
     // ==================== 경로 등록 ====================
@@ -186,6 +228,18 @@ use crate::routes::{
 
         // ===== Strategies =====
         crate::routes::strategies::list_strategies,
+        crate::routes::strategies::create_strategy,
+        crate::routes::strategies::delete_strategy,
+        crate::routes::strategies::get_strategy,
+        crate::routes::strategies::start_strategy,
+        crate::routes::strategies::stop_strategy,
+        crate::routes::strategies::update_config,
+        crate::routes::strategies::update_risk_settings,
+        crate::routes::strategies::update_symbols,
+        crate::routes::strategies::clone_strategy,
+        crate::routes::strategies::get_engine_stats,
+        crate::routes::strategies::get_strategy_timeframes,
+        crate::routes::strategies::update_strategy_timeframes,
 
         // ===== Monitoring =====
         crate::routes::monitoring::list_errors,
@@ -201,17 +255,81 @@ use crate::routes::{
         crate::routes::screening::list_presets,
         crate::routes::screening::run_preset_screening,
         crate::routes::screening::run_momentum_screening,
+        crate::routes::screening::get_sector_ranking,
 
         // ===== Signals =====
         crate::routes::signals::search_signals,
         crate::routes::signals::get_signals_by_symbol,
         crate::routes::signals::get_signals_by_strategy,
+        crate::routes::signals::get_backtest_signals,
 
         // ===== Ranking =====
         crate::routes::ranking::calculate_global,
         crate::routes::ranking::get_top_ranked,
         crate::routes::ranking::get_seven_factor,
         crate::routes::ranking::get_seven_factor_batch,
+        crate::routes::ranking::get_score_history,
+
+        // ===== Patterns =====
+        crate::routes::patterns::get_candlestick_patterns,
+        crate::routes::patterns::get_chart_patterns,
+        crate::routes::patterns::detect_all_patterns,
+        crate::routes::patterns::get_pattern_types,
+
+        // ===== Analytics =====
+        // NOTE: analytics 하위 모듈들은 private이므로 경로 등록은 별도 처리 필요
+
+        // ===== Backtest =====
+        crate::routes::backtest::list_backtest_strategies,
+        crate::routes::backtest::run_backtest,
+        crate::routes::backtest::get_backtest_result,
+        crate::routes::backtest::run_multi_backtest,
+        crate::routes::backtest::run_batch_backtest,
+
+        // ===== Orders =====
+        crate::routes::orders::create_order,
+        crate::routes::orders::list_orders,
+        crate::routes::orders::get_order,
+        crate::routes::orders::cancel_order,
+        crate::routes::orders::get_order_stats,
+
+        // ===== Positions =====
+        crate::routes::positions::list_positions,
+        crate::routes::positions::get_positions_summary,
+        crate::routes::positions::get_position,
+
+        // ===== Portfolio =====
+        crate::routes::portfolio::get_portfolio_summary,
+        crate::routes::portfolio::get_balance,
+        crate::routes::portfolio::get_holdings,
+        crate::routes::portfolio::get_order_history,
+
+        // ===== Journal =====
+        crate::routes::journal::get_journal_positions,
+        crate::routes::journal::list_executions,
+        crate::routes::journal::get_pnl_summary,
+        crate::routes::journal::get_daily_pnl,
+        crate::routes::journal::get_symbol_pnl,
+        crate::routes::journal::get_weekly_pnl,
+        crate::routes::journal::get_monthly_pnl,
+        crate::routes::journal::get_yearly_pnl,
+        crate::routes::journal::get_cumulative_pnl,
+        crate::routes::journal::get_trading_insights,
+        crate::routes::journal::get_strategy_performance,
+        crate::routes::journal::update_execution,
+        crate::routes::journal::sync_executions,
+        crate::routes::journal::get_cost_basis,
+        crate::routes::journal::clear_execution_cache,
+
+        // ===== Dataset =====
+        crate::routes::dataset::list_datasets,
+        crate::routes::dataset::fetch_dataset,
+        crate::routes::dataset::get_candles,
+        crate::routes::dataset::delete_dataset,
+        crate::routes::dataset::search_symbols,
+        crate::routes::dataset::get_symbols_batch,
+
+        // NOTE: reality_check 핸들러들은 private이므로 경로 등록은 별도 처리 필요
     )
 )]
 pub struct ApiDoc;
@@ -245,7 +363,7 @@ mod tests {
 
         // 기본 정보 확인
         assert!(json.contains("ZeroQuant Trading API"));
-        assert!(json.contains("0.4.4"));
+        assert!(json.contains("0.6.0"));
 
         // 태그 확인
         assert!(json.contains("health"));

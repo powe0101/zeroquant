@@ -15,10 +15,9 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 // 구조적 피처 계산을 위한 import
-use crate::cache::StructuralFeaturesCache;
 use trader_analytics::indicators::{IndicatorEngine, StructuralFeatures};
 use trader_core::{types::Timeframe, Kline};
-use trader_data::cache::{CachedHistoricalDataProvider, RedisCache, RedisConfig};
+use trader_data::cache::CachedHistoricalDataProvider;
 
 /// 스크리닝 결과 레코드
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -448,39 +447,27 @@ impl ScreeningRepository {
         }
     }
 
-    /// 구조적 피처 기반 필터링 적용 (7단계)
+    /// 구조적 피처 계산 및 필터링 적용
     ///
-    /// 구조적 필터가 있는 경우에만 캔들 데이터를 조회하고
-    /// StructuralFeatures를 계산하여 필터링합니다.
+    /// 모든 스크리닝 결과에 대해 기술적 지표(RSI, MACD 등)를 계산하고,
+    /// 구조적 필터가 있으면 필터링도 적용합니다.
     async fn apply_structural_filter(
         pool: &PgPool,
         candidates: Vec<ScreeningResult>,
         filter: &ScreeningFilter,
     ) -> Result<Vec<ScreeningResult>, sqlx::Error> {
-        // 구조적 필터가 없으면 원본 그대로 반환
-        // 참고: route_state, regime, ttm_squeeze 필터는 이제 SQL 레벨에서 처리됨 (DB 캐시 사용)
+        // 구조적 필터 여부 확인 (필터링은 선택, 피처 계산은 항상 수행)
+        // 참고: route_state, regime, ttm_squeeze 필터는 SQL 레벨에서 처리됨 (DB 캐시 사용)
         let has_structural_filter = filter.min_low_trend.is_some()
             || filter.min_vol_quality.is_some()
             || filter.min_breakout_score.is_some()
             || filter.only_alive_consolidation.unwrap_or(false);
 
-        if !has_structural_filter {
-            return Ok(candidates);
-        }
+        debug!("구조적 피처 계산: {} 종목 (필터 적용: {})", candidates.len(), has_structural_filter);
 
-        debug!("구조적 피처 필터 적용: {} 종목", candidates.len());
-
-        // Redis와 Historical Data Provider 초기화
-        let redis_config = RedisConfig::default();
-        let redis = match RedisCache::connect(&redis_config).await {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("Redis 연결 실패, 캐시 없이 진행: {}", e);
-                return Ok(candidates); // 캐시 실패 시 원본 반환
-            }
-        };
-
-        let features_cache = StructuralFeaturesCache::new(redis.clone());
+        // Historical Data Provider 초기화
+        // Note: Redis 캐시는 매 요청마다 새 연결을 만들면 블로킹될 수 있어 제거함
+        // 향후 AppState에서 캐시를 전달받는 방식으로 개선 필요
         let data_provider = CachedHistoricalDataProvider::new(pool.clone());
         let indicator_engine = IndicatorEngine::new();
 
@@ -488,44 +475,32 @@ impl ScreeningRepository {
         let total_count = candidates.len(); // 루프 전에 저장
 
         for mut candidate in candidates {
-            // yahoo_symbol 또는 ticker 사용
-            let symbol = candidate
-                .yahoo_symbol
-                .as_ref()
-                .unwrap_or(&candidate.ticker)
-                .clone();
+            // ohlcv 테이블은 plain ticker (005930)로 저장됨, yahoo_symbol (005930.KS) 사용 금지
+            let symbol = candidate.ticker.clone();
 
-            // 캐시에서 피처 조회 (candles도 함께 저장)
-            let (features, candles_opt) = match features_cache.get(&symbol, "1d").await {
-                Ok(Some(cached)) => {
-                    debug!("캐시 히트: {}", symbol);
-                    (cached, None) // 캐시 히트 시 candles 없음
-                }
-                _ => {
-                    // 캐시 미스: 캔들 데이터 조회 후 계산
-                    match data_provider.get_klines(&symbol, Timeframe::D1, 50).await {
-                        Ok(candles) if candles.len() >= 40 => {
-                            match StructuralFeatures::from_candles(&candles, &indicator_engine) {
-                                Ok(calculated) => {
-                                    // 캐시에 저장
-                                    let _ = features_cache.set(&symbol, "1d", &calculated).await;
-                                    debug!("피처 계산 완료: {}", symbol);
-                                    (calculated, Some(candles)) // candles 저장하여 재사용
-                                }
-                                Err(e) => {
-                                    debug!("피처 계산 실패 ({}): {}", symbol, e);
-                                    continue; // 계산 실패 시 스킵
-                                }
+            // 피처 직접 계산 (캐시 없이 - Redis 연결 블로킹 방지)
+            let (features, candles_opt) = {
+                // 캔들 데이터 조회 후 피처 계산
+                match data_provider.get_klines_readonly(&symbol, Timeframe::D1, 50).await {
+                    Ok(candles) if candles.len() >= 40 => {
+                        match StructuralFeatures::from_candles(&candles, &indicator_engine) {
+                            Ok(calculated) => {
+                                debug!("피처 계산 완료: {}", symbol);
+                                (calculated, Some(candles))
+                            }
+                            Err(e) => {
+                                debug!("피처 계산 실패 ({}): {}", symbol, e);
+                                continue; // 계산 실패 시 스킵
                             }
                         }
-                        Ok(_) => {
-                            debug!("데이터 부족 ({}): 40개 미만", symbol);
-                            continue; // 데이터 부족 시 스킵
-                        }
-                        Err(e) => {
-                            debug!("캔들 조회 실패 ({}): {}", symbol, e);
-                            continue; // 조회 실패 시 스킵
-                        }
+                    }
+                    Ok(_) => {
+                        debug!("데이터 부족 ({}): 40개 미만", symbol);
+                        continue; // 데이터 부족 시 스킵
+                    }
+                    Err(e) => {
+                        debug!("캔들 조회 실패 ({}): {}", symbol, e);
+                        continue; // 조회 실패 시 스킵
                     }
                 }
             };
@@ -580,7 +555,7 @@ impl ScreeningRepository {
                 // MACD 계산 (candles가 있을 때만)
                 let macd_candles = candles_for_calc.as_ref().cloned().or_else(|| {
                     data_provider
-                        .get_klines(&symbol, Timeframe::D1, 50)
+                        .get_klines_readonly(&symbol, Timeframe::D1, 50)
                         .now_or_never()?
                         .ok()
                 });
@@ -625,23 +600,25 @@ impl ScreeningRepository {
                     }
                 }
 
-                // TRIGGER 계산 (candles가 있을 때만)
-                let trigger_calculator = trader_analytics::TriggerCalculator::new();
-                let trigger_result = if let Some(ref candles) = candles_for_calc {
-                    trigger_calculator.calculate(candles).ok()
-                } else {
-                    // candles가 없으면 다시 조회 시도
-                    if let Ok(candles) = data_provider.get_klines(&symbol, Timeframe::D1, 50).await
-                    {
-                        trigger_calculator.calculate(&candles).ok()
-                    } else {
-                        None
-                    }
-                };
+                // TRIGGER 계산 (캔들 데이터 필요)
+                // 캐시 히트 시에도 Trigger 계산을 위해 캔들 조회
+                let trigger_candles = candles_for_calc.clone().or_else(|| {
+                    // candles_for_calc가 None이면 (캐시 히트) 캔들 조회
+                    futures::executor::block_on(async {
+                        data_provider.get_klines_readonly(&symbol, Timeframe::D1, 50).await.ok()
+                    })
+                });
 
-                if let Some(trigger) = trigger_result {
-                    candidate.trigger_score = Some(trigger.score);
-                    candidate.trigger_label = Some(trigger.label);
+                let trigger_calculator = trader_analytics::TriggerCalculator::new();
+                if let Some(candles) = trigger_candles {
+                    if let Ok(trigger) = trigger_calculator.calculate(&candles) {
+                        candidate.trigger_score = Some(trigger.score);
+                        candidate.trigger_label = Some(trigger.label);
+                    } else {
+                        // 계산 실패 시 (데이터 부족 등)
+                        candidate.trigger_score = None;
+                        candidate.trigger_label = None;
+                    }
                 } else {
                     candidate.trigger_score = None;
                     candidate.trigger_label = None;
@@ -764,17 +741,18 @@ impl ScreeningRepository {
                 s.symbol_count,
                 s.avg_return_pct,
                 m.market_return,
-                CASE
+                -- ROUND: PostgreSQL NUMERIC의 긴 소수점을 rust_decimal이 처리 가능한 범위로 제한
+                ROUND(CASE
                     WHEN m.market_return > 0
                     THEN s.avg_return_pct / m.market_return
                     ELSE 1.0
-                END as relative_strength,
+                END, 8) as relative_strength,
                 -- 종합 점수 = RS * 0.6 + 단순수익 * 0.4
-                CASE
+                ROUND(CASE
                     WHEN m.market_return > 0
                     THEN (s.avg_return_pct / m.market_return) * 0.6 + (s.avg_return_pct / 10.0) * 0.4
                     ELSE s.avg_return_pct / 10.0
-                END as composite_score,
+                END, 8) as composite_score,
                 -- 추가 필드 (시각화 컴포넌트용)
                 NULL::DECIMAL as avg_return_5d_pct,  -- collector에서 제공 예정
                 s.total_market_cap

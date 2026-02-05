@@ -29,12 +29,12 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
+use trader_core::{Kline, MarketData, MarketDataType, Order, Position, Side, Signal, Timeframe};
 use trader_strategy_macro::StrategyConfig;
 
 /// Momentum Surge 전략 설정.
@@ -53,72 +53,72 @@ pub struct MomentumSurgeConfig {
 
     /// 코스피 레버리지 티커
     #[serde(default = "default_kospi_leverage")]
-    #[schema(label = "코스피 레버리지 티커", field_type = "symbol", default = "122630")]
+    #[schema(label = "코스피 레버리지 티커", field_type = "symbol", default = "122630", section = "asset")]
     pub kospi_leverage: String,
 
     /// 코스닥 레버리지 티커
     #[serde(default = "default_kosdaq_leverage")]
-    #[schema(label = "코스닥 레버리지 티커", field_type = "symbol", default = "233740")]
+    #[schema(label = "코스닥 레버리지 티커", field_type = "symbol", default = "233740", section = "asset")]
     pub kosdaq_leverage: String,
 
     /// 코스피 인버스 티커
     #[serde(default = "default_kospi_inverse")]
-    #[schema(label = "코스피 인버스 티커", field_type = "symbol", default = "252670")]
+    #[schema(label = "코스피 인버스 티커", field_type = "symbol", default = "252670", section = "asset")]
     pub kospi_inverse: String,
 
     /// 코스닥 인버스 티커
     #[serde(default = "default_kosdaq_inverse")]
-    #[schema(label = "코스닥 인버스 티커", field_type = "symbol", default = "251340")]
+    #[schema(label = "코스닥 인버스 티커", field_type = "symbol", default = "251340", section = "asset")]
     pub kosdaq_inverse: String,
 
     /// 최대 동시 투자 종목 수 (기본값: 2)
     #[serde(default = "default_max_positions")]
-    #[schema(label = "최대 동시 포지션 수", min = 1, max = 4, default = 2)]
+    #[schema(label = "최대 동시 포지션 수", min = 1, max = 4, default = 2, section = "filter")]
     pub max_positions: usize,
 
     /// 종목당 투자 비율 (기본값: 0.5)
     #[serde(default = "default_position_ratio")]
-    #[schema(label = "종목당 투자 비율", min = 0.1, max = 1.0, default = 0.5)]
+    #[schema(label = "종목당 투자 비율", min = 0.1, max = 1.0, default = 0.5, section = "sizing")]
     pub position_ratio: f64,
 
     /// OBV 기간 (기본값: 10)
     #[serde(default = "default_obv_period")]
-    #[schema(label = "OBV 기간", min = 5, max = 30, default = 10)]
+    #[schema(label = "OBV 기간", min = 5, max = 30, default = 10, section = "indicator")]
     pub obv_period: usize,
 
     /// MA 단기 (기본값: 5)
     #[serde(default = "default_ma_short")]
-    #[schema(label = "MA 단기", min = 3, max = 20, default = 5)]
+    #[schema(label = "MA 단기", min = 3, max = 20, default = 5, section = "indicator")]
     pub ma_short: usize,
 
     /// MA 중기 (기본값: 20)
     #[serde(default = "default_ma_medium")]
-    #[schema(label = "MA 중기", min = 10, max = 60, default = 20)]
+    #[schema(label = "MA 중기", min = 10, max = 60, default = 20, section = "indicator")]
     pub ma_medium: usize,
 
     /// MA 장기 (기본값: 60)
     #[serde(default = "default_ma_long")]
-    #[schema(label = "MA 장기", min = 30, max = 200, default = 60)]
+    #[schema(label = "MA 장기", min = 30, max = 200, default = 60, section = "indicator")]
     pub ma_long: usize,
 
     /// RSI 기간 (기본값: 14)
     #[serde(default = "default_rsi_period")]
-    #[schema(label = "RSI 기간", min = 7, max = 30, default = 14)]
+    #[schema(label = "RSI 기간", min = 7, max = 30, default = 14, section = "indicator")]
     pub rsi_period: usize,
 
     /// 손절 비율 (기본값: 3%)
     #[serde(default = "default_stop_loss")]
-    #[schema(label = "손절 비율 (%)", min = 0.5, max = 10.0, default = 3.0)]
+    #[schema(label = "손절 비율 (%)", min = 0.5, max = 10.0, default = 3.0, section = "sizing")]
     pub stop_loss_pct: f64,
 
     /// 익절 비율 (기본값: 10%)
     #[serde(default = "default_take_profit")]
-    #[schema(label = "익절 비율 (%)", min = 1, max = 30, default = 10.0)]
+    #[schema(label = "익절 비율 (%)", min = 1, max = 30, default = 10.0, section = "sizing")]
     pub take_profit_pct: f64,
 
     /// 최소 글로벌 스코어 (기본값: 60)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 60)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 60, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -198,7 +198,7 @@ impl Default for MomentumSurgeConfig {
             stop_loss_pct: 3.0,
             take_profit_pct: 10.0,
             min_global_score: default_min_global_score(),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_day_trading(),
         }
     }
 }
@@ -212,16 +212,11 @@ enum EtfType {
     KosdaqInverse,
 }
 
-/// ETF 데이터와 지표.
+/// ETF 데이터 (가격 히스토리는 StrategyContext에서 가져옴).
 #[derive(Debug, Clone)]
 struct EtfData {
     ticker: String,
     etf_type: EtfType,
-    prices: VecDeque<Decimal>,
-    volumes: VecDeque<Decimal>,
-    obv: VecDeque<Decimal>,
-    gains: VecDeque<Decimal>,
-    losses: VecDeque<Decimal>,
     current_price: Decimal,
     holdings: Decimal,
     entry_price: Decimal,
@@ -232,123 +227,14 @@ impl EtfData {
         Self {
             ticker,
             etf_type,
-            prices: VecDeque::new(),
-            volumes: VecDeque::new(),
-            obv: VecDeque::new(),
-            gains: VecDeque::new(),
-            losses: VecDeque::new(),
             current_price: Decimal::ZERO,
             holdings: Decimal::ZERO,
             entry_price: Decimal::ZERO,
         }
     }
 
-    fn update(&mut self, price: Decimal, volume: Decimal) {
-        // RSI용 gain/loss 계산
-        if let Some(&prev) = self.prices.front() {
-            let change = price - prev;
-            if change > Decimal::ZERO {
-                self.gains.push_front(change);
-                self.losses.push_front(Decimal::ZERO);
-            } else {
-                self.gains.push_front(Decimal::ZERO);
-                self.losses.push_front(change.abs());
-            }
-
-            // OBV 계산
-            let prev_obv = self.obv.front().copied().unwrap_or(Decimal::ZERO);
-            let new_obv = if price > prev {
-                prev_obv + volume
-            } else if price < prev {
-                prev_obv - volume
-            } else {
-                prev_obv
-            };
-            self.obv.push_front(new_obv);
-        } else {
-            self.obv.push_front(volume);
-        }
-
-        self.prices.push_front(price);
-        self.volumes.push_front(volume);
+    fn update_price(&mut self, price: Decimal) {
         self.current_price = price;
-
-        // 버퍼 크기 제한
-        let max_len = 70;
-        while self.prices.len() > max_len {
-            self.prices.pop_back();
-        }
-        while self.volumes.len() > max_len {
-            self.volumes.pop_back();
-        }
-        while self.obv.len() > max_len {
-            self.obv.pop_back();
-        }
-        while self.gains.len() > max_len {
-            self.gains.pop_back();
-        }
-        while self.losses.len() > max_len {
-            self.losses.pop_back();
-        }
-    }
-
-    fn calculate_ma(&self, period: usize) -> Option<Decimal> {
-        if self.prices.len() < period {
-            return None;
-        }
-        let sum: Decimal = self.prices.iter().take(period).sum();
-        Some(sum / Decimal::from(period))
-    }
-
-    fn calculate_rsi(&self, period: usize) -> Option<Decimal> {
-        if self.gains.len() < period {
-            return None;
-        }
-
-        let avg_gain: Decimal =
-            self.gains.iter().take(period).sum::<Decimal>() / Decimal::from(period);
-        let avg_loss: Decimal =
-            self.losses.iter().take(period).sum::<Decimal>() / Decimal::from(period);
-
-        if avg_loss == Decimal::ZERO {
-            return Some(dec!(100));
-        }
-
-        let rs = avg_gain / avg_loss;
-        Some(dec!(100) - (dec!(100) / (dec!(1) + rs)))
-    }
-
-    fn obv_trend(&self, period: usize) -> Option<bool> {
-        if self.obv.len() < period {
-            return None;
-        }
-
-        let current = *self.obv.front()?;
-        let past = *self.obv.get(period - 1)?;
-
-        Some(current > past)
-    }
-
-    fn is_ma_aligned_bullish(&self, short: usize, medium: usize, long: usize) -> bool {
-        let ma_s = self.calculate_ma(short);
-        let ma_m = self.calculate_ma(medium);
-        let ma_l = self.calculate_ma(long);
-
-        match (ma_s, ma_m, ma_l) {
-            (Some(s), Some(m), Some(l)) => s > m && m > l,
-            _ => false,
-        }
-    }
-
-    fn is_ma_aligned_bearish(&self, short: usize, medium: usize, long: usize) -> bool {
-        let ma_s = self.calculate_ma(short);
-        let ma_m = self.calculate_ma(medium);
-        let ma_l = self.calculate_ma(long);
-
-        match (ma_s, ma_m, ma_l) {
-            (Some(s), Some(m), Some(l)) => s < m && m < l,
-            _ => false,
-        }
     }
 }
 
@@ -391,6 +277,133 @@ impl MomentumSurgeStrategy {
             initialized: false,
             context: None,
         }
+    }
+
+    // ========================================================================
+    // StrategyContext 연동 헬퍼
+    // ========================================================================
+
+    /// StrategyContext에서 klines 가져오기
+    fn get_etf_klines(&self, ticker: &str) -> Vec<Kline> {
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return vec![],
+        };
+        ctx_lock.get_klines(ticker, Timeframe::D1).to_vec()
+    }
+
+    /// klines에서 MA 계산
+    fn calculate_ma(klines: &[Kline], period: usize) -> Option<Decimal> {
+        if klines.len() < period {
+            return None;
+        }
+        let sum: Decimal = klines.iter().rev().take(period).map(|k| k.close).sum();
+        Some(sum / Decimal::from(period))
+    }
+
+    /// klines에서 RSI 계산
+    fn calculate_rsi(klines: &[Kline], period: usize) -> Option<Decimal> {
+        if klines.len() < period + 1 {
+            return None;
+        }
+
+        let closes: Vec<_> = klines.iter().rev().take(period + 1).map(|k| k.close).collect();
+        let mut gains = Vec::new();
+        let mut losses = Vec::new();
+
+        for i in 1..closes.len() {
+            let change = closes[i] - closes[i - 1];
+            if change > Decimal::ZERO {
+                gains.push(change);
+                losses.push(Decimal::ZERO);
+            } else {
+                gains.push(Decimal::ZERO);
+                losses.push(change.abs());
+            }
+        }
+
+        if gains.len() < period {
+            return None;
+        }
+
+        let avg_gain: Decimal = gains.iter().take(period).sum::<Decimal>() / Decimal::from(period);
+        let avg_loss: Decimal = losses.iter().take(period).sum::<Decimal>() / Decimal::from(period);
+
+        if avg_loss == Decimal::ZERO {
+            return Some(dec!(100));
+        }
+
+        let rs = avg_gain / avg_loss;
+        Some(dec!(100) - (dec!(100) / (dec!(1) + rs)))
+    }
+
+    /// klines에서 OBV 계산
+    fn calculate_obv(klines: &[Kline]) -> Vec<Decimal> {
+        let mut obv_values = Vec::new();
+        let mut current_obv = Decimal::ZERO;
+
+        for (i, kline) in klines.iter().enumerate() {
+            if i == 0 {
+                current_obv = kline.volume;
+            } else {
+                let prev = &klines[i - 1];
+                if kline.close > prev.close {
+                    current_obv += kline.volume;
+                } else if kline.close < prev.close {
+                    current_obv -= kline.volume;
+                }
+            }
+            obv_values.push(current_obv);
+        }
+
+        obv_values
+    }
+
+    /// OBV 추세 확인 (상승세인지)
+    fn obv_trend(klines: &[Kline], period: usize) -> Option<bool> {
+        let obv = Self::calculate_obv(klines);
+        if obv.len() < period {
+            return None;
+        }
+
+        let current = *obv.last()?;
+        let past = *obv.get(obv.len().saturating_sub(period))?;
+
+        Some(current > past)
+    }
+
+    /// MA 정렬 확인 (상승 추세: short > medium > long)
+    fn is_ma_aligned_bullish(klines: &[Kline], short: usize, medium: usize, long: usize) -> bool {
+        let ma_s = Self::calculate_ma(klines, short);
+        let ma_m = Self::calculate_ma(klines, medium);
+        let ma_l = Self::calculate_ma(klines, long);
+
+        match (ma_s, ma_m, ma_l) {
+            (Some(s), Some(m), Some(l)) => s > m && m > l,
+            _ => false,
+        }
+    }
+
+    /// MA 정렬 확인 (하락 추세: short < medium < long)
+    fn is_ma_aligned_bearish(klines: &[Kline], short: usize, medium: usize, long: usize) -> bool {
+        let ma_s = Self::calculate_ma(klines, short);
+        let ma_m = Self::calculate_ma(klines, medium);
+        let ma_l = Self::calculate_ma(klines, long);
+
+        match (ma_s, ma_m, ma_l) {
+            (Some(s), Some(m), Some(l)) => s < m && m < l,
+            _ => false,
+        }
+    }
+
+    /// 충분한 데이터가 있는지 확인
+    fn has_sufficient_data(&self, ticker: &str) -> bool {
+        let klines = self.get_etf_klines(ticker);
+        klines.len() >= 60
     }
 
     /// RouteState와 GlobalScore 기반 진입 조건 체크
@@ -472,8 +485,14 @@ impl MomentumSurgeStrategy {
             return false;
         }
 
+        // StrategyContext에서 klines 가져오기
+        let klines = self.get_etf_klines(&data.ticker);
+        if klines.len() < 60 {
+            return false;
+        }
+
         // OBV 상승 추세
-        let obv_up = match data.obv_trend(config.obv_period) {
+        let obv_up = match Self::obv_trend(&klines, config.obv_period) {
             Some(v) => v,
             None => return false,
         };
@@ -483,15 +502,14 @@ impl MomentumSurgeStrategy {
         }
 
         // MA 정배열
-        let ma_bullish =
-            data.is_ma_aligned_bullish(config.ma_short, config.ma_medium, config.ma_long);
+        let ma_bullish = Self::is_ma_aligned_bullish(&klines, config.ma_short, config.ma_medium, config.ma_long);
 
         if !ma_bullish {
             return false;
         }
 
         // RSI 조건 (과매수 아닐 때)
-        let rsi = match data.calculate_rsi(config.rsi_period) {
+        let rsi = match Self::calculate_rsi(&klines, config.rsi_period) {
             Some(v) => v.to_f64().unwrap_or(50.0),
             None => return false,
         };
@@ -540,13 +558,19 @@ impl MomentumSurgeStrategy {
             .find(|t| t.starts_with(&format!("{}/", pair_ticker_base)))
             .cloned();
 
-        let pair_data = match pair_ticker_full.as_ref().and_then(|t| self.etf_data.get(t)) {
-            Some(d) => d,
+        let pair_ticker = match pair_ticker_full {
+            Some(t) => t,
             None => return false,
         };
 
+        // StrategyContext에서 페어의 klines 가져오기
+        let pair_klines = self.get_etf_klines(&pair_ticker);
+        if pair_klines.len() < 60 {
+            return false;
+        }
+
         // 페어 레버리지의 OBV 하락 추세
-        let obv_down = match pair_data.obv_trend(config.obv_period) {
+        let obv_down = match Self::obv_trend(&pair_klines, config.obv_period) {
             Some(v) => !v, // 반대
             None => return false,
         };
@@ -556,15 +580,14 @@ impl MomentumSurgeStrategy {
         }
 
         // 페어 레버리지의 MA 역배열
-        let ma_bearish =
-            pair_data.is_ma_aligned_bearish(config.ma_short, config.ma_medium, config.ma_long);
+        let ma_bearish = Self::is_ma_aligned_bearish(&pair_klines, config.ma_short, config.ma_medium, config.ma_long);
 
         if !ma_bearish {
             return false;
         }
 
         // RSI 조건 (과매도 회복 구간)
-        let rsi = match pair_data.calculate_rsi(config.rsi_period) {
+        let rsi = match Self::calculate_rsi(&pair_klines, config.rsi_period) {
             Some(v) => v.to_f64().unwrap_or(50.0),
             None => return false,
         };
@@ -607,14 +630,17 @@ impl MomentumSurgeStrategy {
             }
         }
 
+        // StrategyContext에서 klines 가져오기
+        let klines = self.get_etf_klines(&data.ticker);
+
         // 레버리지는 MA 역배열 시 매도
         if data.etf_type == EtfType::KospiLeverage || data.etf_type == EtfType::KosdaqLeverage {
-            if data.is_ma_aligned_bearish(config.ma_short, config.ma_medium, config.ma_long) {
+            if Self::is_ma_aligned_bearish(&klines, config.ma_short, config.ma_medium, config.ma_long) {
                 return Some("ma_bearish".to_string());
             }
 
             // OBV 하락 전환
-            if let Some(false) = data.obv_trend(config.obv_period) {
+            if let Some(false) = Self::obv_trend(&klines, config.obv_period) {
                 return Some("obv_down".to_string());
             }
         }
@@ -633,12 +659,9 @@ impl MomentumSurgeStrategy {
                 .iter()
                 .find(|t| t.starts_with(&format!("{}/", pair_ticker_base)));
 
-            if let Some(pair_data) = pair_ticker_full.and_then(|t| self.etf_data.get(t)) {
-                if pair_data.is_ma_aligned_bullish(
-                    config.ma_short,
-                    config.ma_medium,
-                    config.ma_long,
-                ) {
+            if let Some(pair_ticker) = pair_ticker_full {
+                let pair_klines = self.get_etf_klines(pair_ticker);
+                if Self::is_ma_aligned_bullish(&pair_klines, config.ma_short, config.ma_medium, config.ma_long) {
                     return Some("ma_bullish".to_string());
                 }
             }
@@ -802,9 +825,9 @@ impl Strategy for MomentumSurgeStrategy {
             return Ok(vec![]);
         }
 
-        // kline에서 데이터 추출
-        let (close, volume, timestamp) = match &data.data {
-            MarketDataType::Kline(kline) => (kline.close, kline.volume, kline.open_time),
+        // kline에서 데이터 추출 (volume은 StrategyContext의 klines에서 사용)
+        let (close, timestamp) = match &data.data {
+            MarketDataType::Kline(kline) => (kline.close, kline.open_time),
             _ => return Ok(vec![]),
         };
 
@@ -813,13 +836,13 @@ impl Strategy for MomentumSurgeStrategy {
             self.current_date = Some(timestamp.date_naive());
         }
 
-        // ETF 데이터 업데이트
+        // ETF 데이터 업데이트 (StrategyContext에서 klines 조회하므로 현재가만 저장)
         if let Some(etf) = self.etf_data.get_mut(&ticker_str) {
-            etf.update(close, volume);
+            etf.update_price(close);
         }
 
-        // 충분한 데이터가 있는지 확인
-        let all_have_data = self.etf_data.values().all(|d| d.prices.len() >= 60);
+        // 충분한 데이터가 있는지 확인 (StrategyContext 기반)
+        let all_have_data = self.etf_data.keys().all(|ticker| self.has_sufficient_data(ticker));
 
         if !all_have_data {
             return Ok(vec![]);
@@ -966,22 +989,6 @@ mod tests {
         assert_eq!(strategy.etf_data.len(), 4);
     }
 
-    #[test]
-    fn test_etf_data_update() {
-        let mut data = EtfData::new("122630".to_string(), EtfType::KospiLeverage);
-
-        // 데이터 추가
-        for i in 1..=20 {
-            data.update(Decimal::from(100 + i), Decimal::from(10000));
-        }
-
-        assert_eq!(data.prices.len(), 20);
-        assert!(data.obv.front().unwrap() > &Decimal::ZERO);
-
-        // MA 계산 확인
-        let ma5 = data.calculate_ma(5);
-        assert!(ma5.is_some());
-    }
 }
 
 // 전략 레지스트리에 자동 등록

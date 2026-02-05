@@ -11,7 +11,7 @@ KRX OPEN API는 한국거래소(KRX)에서 제공하는 공식 데이터 API 서
 
 | 항목 | 값 |
 |------|-----|
-| Base URL | `https://data-dbg.krx.co.kr/svc/sample/apis/` |
+| Base URL | `https://data-dbg.krx.co.kr/svc/apis/` |
 | 인증 방식 | HTTP Header에 `AUTH_KEY` 필드로 전달 |
 | 응답 형식 | JSON, XML |
 | 요청 방식 | GET |
@@ -19,7 +19,7 @@ KRX OPEN API는 한국거래소(KRX)에서 제공하는 공식 데이터 API 서
 ### HTTP Request 예시
 
 ```http
-GET /svc/sample/apis/idx/krx_dd_trd?basDd=20200414 HTTP/1.1
+GET /svc/apis/idx/krx_dd_trd?basDd=20200414 HTTP/1.1
 Host: openapi.krx.co.kr
 AUTH_KEY: [YOUR_AUTH_KEY]
 ```
@@ -44,7 +44,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `krx_dd_trd` |
-| URL | `/svc/sample/apis/idx/krx_dd_trd` |
+| URL | `/svc/apis/idx/krx_dd_trd` |
 | 설명 | KRX 시리즈 지수의 시세정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -77,7 +77,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `kospi_dd_trd` |
-| URL | `/svc/sample/apis/idx/kospi_dd_trd` |
+| URL | `/svc/apis/idx/kospi_dd_trd` |
 | 설명 | KOSPI 시리즈 지수의 시세정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -110,7 +110,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `kosdaq_dd_trd` |
-| URL | `/svc/sample/apis/idx/kosdaq_dd_trd` |
+| URL | `/svc/apis/idx/kosdaq_dd_trd` |
 | 설명 | KOSDAQ 시리즈 지수의 시세정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -143,7 +143,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `bon_dd_trd` |
-| URL | `/svc/sample/apis/idx/bon_dd_trd` |
+| URL | `/svc/apis/idx/bon_dd_trd` |
 | 설명 | 채권지수의 시세정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -179,7 +179,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `drvprod_dd_trd` |
-| URL | `/svc/sample/apis/idx/drvprod_dd_trd` |
+| URL | `/svc/apis/idx/drvprod_dd_trd` |
 | 설명 | 파생상품지수의 시세정보를 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -211,7 +211,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `stk_bydd_trd` |
-| URL | `/svc/sample/apis/stk/stk_bydd_trd` |
+| URL | `/svc/apis/sto/stk_bydd_trd` |
 | 설명 | 유가증권시장에 상장되어 있는 주권의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -247,7 +247,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `ksq_bydd_trd` |
-| URL | `/svc/sample/apis/stk/ksq_bydd_trd` |
+| URL | `/svc/apis/sto/ksq_bydd_trd` |
 | 설명 | 코스닥시장에 상장되어 있는 주권의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -265,7 +265,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `knx_bydd_trd` |
-| URL | `/svc/sample/apis/stk/knx_bydd_trd` |
+| URL | `/svc/apis/sto/knx_bydd_trd` |
 | 설명 | 코넥스시장에 상장되어 있는 주권의 매매정보 제공 ('13년07월01일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -283,7 +283,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `sw_bydd_trd` |
-| URL | `/svc/sample/apis/stk/sw_bydd_trd` |
+| URL | `/svc/apis/sto/sw_bydd_trd` |
 | 설명 | 유가증권/코스닥시장에 상장되어 있는 신주인수권증권의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -324,7 +324,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `sr_bydd_trd` |
-| URL | `/svc/sample/apis/stk/sr_bydd_trd` |
+| URL | `/svc/apis/sto/sr_bydd_trd` |
 | 설명 | 유가증권/코스닥시장에 상장되어 있는 신주인수권증서의 매매정보 제공 ('10년02월12일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -364,7 +364,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `stk_isu_base_info` |
-| URL | `/svc/sample/apis/stk/stk_isu_base_info` |
+| URL | `/svc/apis/sto/stk_isu_base_info` |
 | 설명 | 유가증권 종목기본정보 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -397,7 +397,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `ksq_isu_base_info` |
-| URL | `/svc/sample/apis/stk/ksq_isu_base_info` |
+| URL | `/svc/apis/sto/ksq_isu_base_info` |
 | 설명 | 코스닥 종목기본정보 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -415,7 +415,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `knx_isu_base_info` |
-| URL | `/svc/sample/apis/stk/knx_isu_base_info` |
+| URL | `/svc/apis/sto/knx_isu_base_info` |
 | 설명 | 코넥스 종목기본정보 ('13년07월01일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -435,7 +435,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `etf_bydd_trd` |
-| URL | `/svc/sample/apis/etp/etf_bydd_trd` |
+| URL | `/svc/apis/etp/etf_bydd_trd` |
 | 설명 | ETF(상장지수펀드)의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -475,7 +475,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `etn_bydd_trd` |
-| URL | `/svc/sample/apis/etp/etn_bydd_trd` |
+| URL | `/svc/apis/etp/etn_bydd_trd` |
 | 설명 | ETN(상장지수증권)의 매매정보 제공 ('14년11월17일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -515,7 +515,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `elw_bydd_trd` |
-| URL | `/svc/sample/apis/etp/elw_bydd_trd` |
+| URL | `/svc/apis/etp/elw_bydd_trd` |
 | 설명 | ELW(주식위런트증권)의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -554,7 +554,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `kts_bydd_trd` |
-| URL | `/svc/sample/apis/bnd/kts_bydd_trd` |
+| URL | `/svc/apis/bnd/kts_bydd_trd` |
 | 설명 | 국채전문유통시장에 상장되어있는 채권의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -592,7 +592,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `bnd_bydd_trd` |
-| URL | `/svc/sample/apis/bnd/bnd_bydd_trd` |
+| URL | `/svc/apis/bnd/bnd_bydd_trd` |
 | 설명 | 일반채권시장에 상장되어있는 채권의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -628,7 +628,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `smb_bydd_trd` |
-| URL | `/svc/sample/apis/bnd/smb_bydd_trd` |
+| URL | `/svc/apis/bnd/smb_bydd_trd` |
 | 설명 | 소액채권시장에 상장되어있는 채권의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -648,7 +648,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `fut_bydd_trd` |
-| URL | `/svc/sample/apis/drv/fut_bydd_trd` |
+| URL | `/svc/apis/drv/fut_bydd_trd` |
 | 설명 | 파생상품시장의 선물 중 주식선물을 제외한 선물의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -684,7 +684,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `eqsfu_stk_bydd_trd` |
-| URL | `/svc/sample/apis/drv/eqsfu_stk_bydd_trd` |
+| URL | `/svc/apis/drv/eqsfu_stk_bydd_trd` |
 | 설명 | 파생상품시장의 주식선물 중 기초자산이 유가증권시장에 속하는 주식선물의 거래정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -702,7 +702,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `eqkfu_ksq_bydd_trd` |
-| URL | `/svc/sample/apis/drv/eqkfu_ksq_bydd_trd` |
+| URL | `/svc/apis/drv/eqkfu_ksq_bydd_trd` |
 | 설명 | 파생상품시장의 주식선물 중 기초자산이 코스닥시장에 속하는 주식선물의 거래정보 제공 ('15년08월03일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -720,7 +720,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `opt_bydd_trd` |
-| URL | `/svc/sample/apis/drv/opt_bydd_trd` |
+| URL | `/svc/apis/drv/opt_bydd_trd` |
 | 설명 | 파생상품시장의 옵션 중 주식옵션을 제외한 옵션의 매매정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -756,7 +756,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `eqsop_bydd_trd` |
-| URL | `/svc/sample/apis/drv/eqsop_bydd_trd` |
+| URL | `/svc/apis/drv/eqsop_bydd_trd` |
 | 설명 | 파생상품시장의 주식옵션 중 기초자산이 유가증권시장에 속하는 주식옵션의 거래정보 제공 ('10년01월04일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -774,7 +774,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `eqkop_bydd_trd` |
-| URL | `/svc/sample/apis/drv/eqkop_bydd_trd` |
+| URL | `/svc/apis/drv/eqkop_bydd_trd` |
 | 설명 | 파생상품시장의 주식옵션 중 기초자산이 코스닥시장에 속하는 주식옵션의 거래정보 제공 ('17년06월26일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -794,7 +794,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `oil_bydd_trd` |
-| URL | `/svc/sample/apis/gen/oil_bydd_trd` |
+| URL | `/svc/apis/gen/oil_bydd_trd` |
 | 설명 | KRX 석유시장의 매매정보 제공 ('12년03월30일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -821,7 +821,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `gold_bydd_trd` |
-| URL | `/svc/sample/apis/gen/gold_bydd_trd` |
+| URL | `/svc/apis/gen/gold_bydd_trd` |
 | 설명 | KRX 금시장 매매정보 제공 ('14년03월24일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -853,7 +853,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `ets_bydd_trd` |
-| URL | `/svc/sample/apis/gen/ets_bydd_trd` |
+| URL | `/svc/apis/gen/ets_bydd_trd` |
 | 설명 | KRX 탄소배출권 시장의 매매정보 제공 ('15년01월12일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -873,7 +873,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `sri_bond_info` |
-| URL | `/svc/sample/apis/esg/sri_bond_info` |
+| URL | `/svc/apis/esg/sri_bond_info` |
 | 설명 | 사회책임투자채권 정보를 제공 ('19년01월01일 데이터부터 제공) |
 
 **입력 파라미터**
@@ -906,7 +906,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `esg_etp_info` |
-| URL | `/svc/sample/apis/esg/esg_etp_info` |
+| URL | `/svc/apis/esg/esg_etp_info` |
 | 설명 | ESG 증권상품 정보를 제공 ('20년01월02일 데이터부터 제공) |
 
 **입력 파라미터**: 없음
@@ -931,7 +931,7 @@ AUTH_KEY: [YOUR_AUTH_KEY]
 | 항목 | 값 |
 |------|-----|
 | API ID | `esg_index_info` |
-| URL | `/svc/sample/apis/esg/esg_index_info` |
+| URL | `/svc/apis/esg/esg_index_info` |
 | 설명 | ESG 지수 정보를 제공 ('20년01월02일 데이터부터 제공) |
 
 **입력 파라미터**: 없음

@@ -1,0 +1,231 @@
+{
+  "description": "기타 전략 회귀 테스트 파라미터",
+  "strategies": [
+    {
+      "strategy_id": "candle_pattern",
+      "name": "캔들 패턴",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "trade_amount": "10000000",
+        "min_pattern_strength": "0.3",
+        "exit_config": {
+          "stop_loss_pct": "3.0",
+          "take_profit_pct": "2.0"
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 3
+      }
+    },
+    {
+      "strategy_id": "rsi_multi_tf",
+      "name": "다중 타임프레임 RSI",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "trade_amount": "10000000",
+        "daily_rsi_period": 7,
+        "weekly_rsi_period": 7,
+        "daily_oversold": 45,
+        "daily_overbought": 55,
+        "weekly_oversold": 45,
+        "weekly_overbought": 55,
+        "exit_config": {
+          "stop_loss_pct": "3.0",
+          "take_profit_pct": "2.0"
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 3
+      }
+    },
+    {
+      "strategy_id": "infinity_bot",
+      "name": "인피니티봇",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "total_amount": "10000000",
+        "max_rounds": 10,
+        "round_pct": "10.0",
+        "dip_trigger_pct": "1.0",
+        "take_profit_pct": "2.0",
+        "ma_period": 10
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 10
+      }
+    },
+    {
+      "strategy_id": "pension_bot",
+      "name": "연금 자동화",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "rebalance_period": "weekly",
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "range_trading",
+      "name": "Range Trading",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "div_num": 15,
+        "target_period": 20,
+        "use_ma_filter": false,
+        "buy_ma_period": 5,
+        "sell_ma_period": 5
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 10
+      }
+    },
+    {
+      "strategy_id": "small_cap_quant",
+      "name": "소형주 퀀트",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "ma_period": 10,
+        "rebalance_period": "weekly",
+        "top_n": 1
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "market_bothside",
+      "name": "Market Both Side",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "ticker": "005930",
+        "trade_amount": "10000000",
+        "long_ma_period": 10,
+        "short_ma_period": 3,
+        "exit_config": {
+          "stop_loss_pct": "3.0",
+          "take_profit_pct": "2.0"
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 5
+      }
+    },
+    {
+      "strategy_id": "sector_vb",
+      "name": "섹터 변동성 돌파",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "k_factor": "0.3",
+        "lookback_period": 5,
+        "exit_config": {
+          "stop_loss_pct": "3.0",
+          "take_profit_pct": "2.0"
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 5
+      }
+    },
+    {
+      "strategy_id": "momentum_surge",
+      "name": "Momentum Surge",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "momentum_period": 5,
+        "volume_multiplier": "1.3",
+        "exit_config": {
+          "stop_loss_pct": "3.0",
+          "take_profit_pct": "2.0"
+        }
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 3
+      }
+    },
+    {
+      "strategy_id": "us_3x_leverage",
+      "name": "미국 3배 레버리지",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "ma_period": 10,
+        "rebalance_period": "weekly"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "compound_momentum",
+      "name": "Compound Momentum",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "lookback_period": 5,
+        "rebalance_period": "weekly",
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "momentum_power",
+      "name": "Momentum Power",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "lookback_period": 5,
+        "rebalance_period": "weekly",
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    }
+  ]
+}

@@ -20,9 +20,18 @@ use super::types::{SyncEquityCurveRequest, SyncEquityCurveResponse};
 
 /// 거래소 체결 내역으로 자산 곡선 동기화.
 ///
-/// POST /api/v1/analytics/sync-equity
-///
 /// KIS API에서 체결 내역을 가져와 자산 곡선 데이터를 재구성합니다.
+#[utoipa::path(
+    post,
+    path = "/api/v1/analytics/sync-equity",
+    tag = "analytics",
+    request_body = SyncEquityCurveRequest,
+    responses(
+        (status = 200, description = "동기화 성공", body = SyncEquityCurveResponse),
+        (status = 400, description = "잘못된 요청"),
+        (status = 500, description = "서버 오류")
+    )
+)]
 pub async fn sync_equity_curve(
     State(state): State<Arc<AppState>>,
     Json(request): Json<SyncEquityCurveRequest>,
@@ -661,14 +670,14 @@ pub async fn sync_equity_curve(
 }
 
 /// 자산 곡선 캐시 삭제 요청.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 pub struct ClearEquityCacheRequest {
     /// 자격증명 ID
     pub credential_id: String,
 }
 
 /// 자산 곡선 캐시 삭제 응답.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct ClearEquityCacheResponse {
     pub success: bool,
     pub deleted_count: u64,
@@ -677,9 +686,18 @@ pub struct ClearEquityCacheResponse {
 
 /// 자산 곡선 캐시 삭제.
 ///
-/// DELETE /api/v1/analytics/equity-cache
-///
 /// 특정 credential의 자산 곡선 데이터를 삭제합니다.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/analytics/equity-cache",
+    tag = "analytics",
+    request_body = ClearEquityCacheRequest,
+    responses(
+        (status = 200, description = "캐시 삭제 성공", body = ClearEquityCacheResponse),
+        (status = 400, description = "잘못된 요청"),
+        (status = 500, description = "서버 오류")
+    )
+)]
 pub async fn clear_equity_cache(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ClearEquityCacheRequest>,

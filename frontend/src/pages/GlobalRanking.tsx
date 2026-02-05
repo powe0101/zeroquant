@@ -233,7 +233,7 @@ const GlobalRanking: Component = () => {
   // 선택된 종목 (점수 분석용)
   const [selectedSymbol, setSelectedSymbol] = createSignal<RankedSymbol | null>(null)
 
-  // 선택된 종목의 워터폴 데이터 생성
+  // 선택된 종목의 워터폴 데이터 생성 (7팩터 시스템)
   const waterfallData = createMemo((): WaterfallDataItem[] => {
     const symbol = selectedSymbol()
     if (!symbol) return []
@@ -241,12 +241,17 @@ const GlobalRanking: Component = () => {
     const scores = symbol.component_scores
     const items: WaterfallDataItem[] = []
 
-    // 구성 점수를 워터폴 데이터로 변환
-    if (scores.technical !== undefined) items.push({ name: '기술적', value: scores.technical, color: '#3b82f6' })
-    if (scores.momentum !== undefined) items.push({ name: '모멘텀', value: scores.momentum, color: '#8b5cf6' })
-    if (scores.trend !== undefined) items.push({ name: '추세', value: scores.trend, color: '#22c55e' })
-    if (scores.volume !== undefined) items.push({ name: '거래량', value: scores.volume, color: '#f59e0b' })
-    if (scores.volatility !== undefined) items.push({ name: '변동성', value: scores.volatility, color: '#ef4444' })
+    // 7팩터 구성 점수를 워터폴 데이터로 변환 (가중치 순)
+    // risk_reward(25%), target_room(18%), liquidity(13%), stop_room(12%), entry_proximity(12%), momentum(10%), technical_balance(10%)
+    if (scores.risk_reward !== undefined) items.push({ name: '리스크보상', value: scores.risk_reward, color: '#3b82f6' })
+    if (scores.target_room !== undefined) items.push({ name: '목표여력', value: scores.target_room, color: '#22c55e' })
+    if (scores.liquidity !== undefined) items.push({ name: '유동성', value: scores.liquidity, color: '#f59e0b' })
+    if (scores.stop_room !== undefined) items.push({ name: '손절여력', value: scores.stop_room, color: '#ef4444' })
+    if (scores.entry_proximity !== undefined) items.push({ name: '진입근접', value: scores.entry_proximity, color: '#8b5cf6' })
+    if (scores.momentum !== undefined) items.push({ name: '모멘텀', value: scores.momentum, color: '#06b6d4' })
+    if (scores.technical_balance !== undefined) items.push({ name: '기술균형', value: scores.technical_balance, color: '#84cc16' })
+    // penalties는 마이너스 값이므로 별도 처리 (표시 안함 or 음수로 표시)
+    // if (scores.penalties !== undefined) items.push({ name: '패널티', value: scores.penalties, color: '#dc2626' })
 
     return items
   })
@@ -295,7 +300,7 @@ const GlobalRanking: Component = () => {
       key: 'favorite',
       header: '★',
       width: '40px',
-      render: (row) => row && (
+      render: (_, row) => row && (
         <FavoriteButton ticker={row.ticker} size="xs" onChange={handleFavoriteChange} />
       ),
     },
@@ -311,47 +316,64 @@ const GlobalRanking: Component = () => {
       key: 'rank_change',
       header: '변동',
       width: '60px',
-      render: (row) => row && <RankChangeIndicator change={row.rank_change} size="xs" />,
+      render: (_, row) => {
+        if (!row) return null
+        // rank_change가 없는 경우 0 (변동 없음)으로 처리
+        return <RankChangeIndicator change={row.rank_change ?? 0} size="xs" />
+      },
     },
     {
       key: 'ticker',
       header: '종목코드',
       sortable: true,
-      render: (row) => row && (
-        <div>
-          <div class="font-medium text-gray-900 dark:text-white">{row.ticker}</div>
-          <div class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[150px]">
-            {row.name}
+      render: (_, row) => {
+        if (!row || !row.ticker) return <span class="text-gray-400">-</span>
+        return (
+          <div>
+            <div class="font-medium text-gray-900 dark:text-white">{row.ticker}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[150px]">
+              {row.name || '-'}
+            </div>
           </div>
-        </div>
-      ),
+        )
+      },
     },
     {
       key: 'market',
       header: '시장',
       width: '100px',
       sortable: true,
-      render: (row) => row && <MarketBadge market={row.market} size="xs" />,
+      render: (_, row) => row && <MarketBadge market={row.market} size="xs" />,
     },
     {
       key: 'overall_score',
       header: '점수',
       width: '120px',
       sortable: true,
-      render: (row) => row && <GlobalScoreBar score={row.overall_score} showLabel height={6} />,
+      render: (_, row) => {
+        if (!row || row.overall_score === undefined || row.overall_score === null) {
+          return <span class="text-gray-400">-</span>
+        }
+        return <GlobalScoreBar score={row.overall_score} showLabel height={6} />
+      },
     },
     {
       key: 'grade',
       header: '등급',
       width: '110px',
       sortable: true,
-      render: (row) => row && <GlobalScoreBadge score={row.overall_score} size="sm" />,
+      render: (_, row) => {
+        if (!row || row.overall_score === undefined || row.overall_score === null) {
+          return <span class="text-gray-400">-</span>
+        }
+        return <GlobalScoreBadge score={row.overall_score} size="sm" />
+      },
     },
     {
       key: 'confidence',
       header: '신뢰도',
       width: '80px',
-      render: (row) => {
+      render: (_, row) => {
         if (!row?.confidence) return <span class="text-gray-400">-</span>
         return <ConfidenceBadge level={row.confidence as BadgeConfLevel} size="xs" />
       },
@@ -359,15 +381,16 @@ const GlobalRanking: Component = () => {
     {
       key: 'component_scores',
       header: '구성 점수',
-      render: (row) => row && <ComponentScoreDisplay scores={row.component_scores} />,
+      render: (_, row) => row && <ComponentScoreDisplay scores={row.component_scores} />,
     },
     {
       key: 'calculated_at',
       header: '계산 시간',
       width: '140px',
-      render: (row) => {
-        if (!row) return null
+      render: (_, row) => {
+        if (!row || !row.calculated_at) return <span class="text-gray-400">-</span>
         const date = new Date(row.calculated_at)
+        if (isNaN(date.getTime())) return <span class="text-gray-400">-</span>
         return (
           <span class="text-xs text-gray-500 dark:text-gray-400">
             {date.toLocaleDateString('ko-KR')} {date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
@@ -377,7 +400,7 @@ const GlobalRanking: Component = () => {
     },
   ]
 
-  // Excel 내보내기 컬럼 정의
+  // Excel 내보내기 컬럼 정의 (7팩터 시스템)
   const exportColumns: ExportColumn<RankedSymbol>[] = [
     { header: '순위', accessor: (_, i) => (i ?? 0) + 1 },
     { header: '티커', accessor: 'ticker' },
@@ -386,10 +409,13 @@ const GlobalRanking: Component = () => {
     { header: '점수', accessor: (row) => row.overall_score.toFixed(1) },
     { header: '등급', accessor: 'grade' },
     { header: '신뢰도', accessor: (row) => row.confidence || '-' },
-    { header: '기술점수', accessor: (row) => row.component_scores.technical?.toFixed(0) || '-' },
+    { header: '리스크보상', accessor: (row) => row.component_scores.risk_reward?.toFixed(0) || '-' },
+    { header: '목표여력', accessor: (row) => row.component_scores.target_room?.toFixed(0) || '-' },
+    { header: '손절여력', accessor: (row) => row.component_scores.stop_room?.toFixed(0) || '-' },
+    { header: '진입근접', accessor: (row) => row.component_scores.entry_proximity?.toFixed(0) || '-' },
     { header: '모멘텀', accessor: (row) => row.component_scores.momentum?.toFixed(0) || '-' },
-    { header: '트렌드', accessor: (row) => row.component_scores.trend?.toFixed(0) || '-' },
-    { header: '거래량', accessor: (row) => row.component_scores.volume?.toFixed(0) || '-' },
+    { header: '유동성', accessor: (row) => row.component_scores.liquidity?.toFixed(0) || '-' },
+    { header: '기술균형', accessor: (row) => row.component_scores.technical_balance?.toFixed(0) || '-' },
     { header: '계산일시', accessor: (row) => new Date(row.calculated_at).toLocaleString('ko-KR') },
   ]
 
@@ -426,7 +452,7 @@ const GlobalRanking: Component = () => {
       <PageHeader
         title="Global Ranking"
         icon="🏆"
-        description="GlobalScore 기반 종목 랭킹 - 기술적 분석, 모멘텀, 트렌드, 거래량 등을 종합 평가합니다."
+        description="GlobalScore 7팩터 랭킹 - 리스크보상, 목표여력, 손절여력, 진입근접, 모멘텀, 유동성, 기술균형을 종합 평가합니다."
         actions={<HeaderActions />}
       />
 

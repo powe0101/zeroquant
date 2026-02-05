@@ -78,11 +78,17 @@ use loader::{
 
 // ==================== 핸들러 ====================
 
-/// 백테스트 가능한 전략 목록 조회
-///
-/// GET /api/v1/backtest/strategies
+/// 백테스트 가능한 전략 목록 조회.
 ///
 /// 현재 등록된 모든 전략 중 백테스트가 가능한 전략 목록을 반환합니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/backtest/strategies",
+    tag = "backtest",
+    responses(
+        (status = 200, description = "전략 목록 조회 성공", body = BacktestStrategiesResponse)
+    )
+)]
 pub async fn list_backtest_strategies(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // 최소 락 홀드: 데이터만 빠르게 복사하고 즉시 락 해제
     let all_statuses = {
@@ -135,11 +141,21 @@ pub async fn list_backtest_strategies(State(state): State<Arc<AppState>>) -> imp
     })
 }
 
-/// 백테스트 실행
-///
-/// POST /api/v1/backtest/run
+/// 백테스트 실행.
 ///
 /// 주어진 설정으로 백테스트를 실행하고 결과를 반환합니다.
+#[utoipa::path(
+    post,
+    path = "/api/v1/backtest/run",
+    tag = "backtest",
+    request_body = BacktestRunRequest,
+    responses(
+        (status = 200, description = "백테스트 실행 성공", body = BacktestRunResponse),
+        (status = 400, description = "잘못된 요청", body = BacktestApiError),
+        (status = 404, description = "전략 없음", body = BacktestApiError),
+        (status = 500, description = "서버 오류", body = BacktestApiError)
+    )
+)]
 pub async fn run_backtest(
     State(state): State<Arc<AppState>>,
     Json(request): Json<BacktestRunRequest>,
@@ -349,11 +365,21 @@ pub async fn run_backtest(
     Ok(Json(response))
 }
 
-/// 백테스트 결과 조회
-///
-/// GET /api/v1/backtest/results/{id}
+/// 백테스트 결과 조회.
 ///
 /// 저장된 백테스트 결과를 조회합니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/backtest/results/{id}",
+    tag = "backtest",
+    params(
+        ("id" = String, Path, description = "백테스트 결과 ID")
+    ),
+    responses(
+        (status = 200, description = "결과 조회 성공"),
+        (status = 404, description = "결과 없음", body = BacktestApiError)
+    )
+)]
 pub async fn get_backtest_result(
     State(_state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -369,12 +395,20 @@ pub async fn get_backtest_result(
     ))
 }
 
-/// 다중 자산 백테스트 실행
-///
-/// POST /api/v1/backtest/run-multi
+/// 다중 자산 백테스트 실행.
 ///
 /// 여러 심볼을 사용하는 자산배분 전략의 백테스트를 실행합니다.
-/// 지원 전략: simple_power, haa, xaa, stock_rotation
+#[utoipa::path(
+    post,
+    path = "/api/v1/backtest/run-multi",
+    tag = "backtest",
+    request_body = BacktestMultiRunRequest,
+    responses(
+        (status = 200, description = "다중 자산 백테스트 성공", body = BacktestMultiRunResponse),
+        (status = 400, description = "잘못된 요청", body = BacktestApiError),
+        (status = 500, description = "서버 오류", body = BacktestApiError)
+    )
+)]
 pub async fn run_multi_backtest(
     State(state): State<Arc<AppState>>,
     Json(request): Json<BacktestMultiRunRequest>,
@@ -578,10 +612,18 @@ pub fn backtest_router() -> Router<Arc<AppState>> {
 
 /// 배치 백테스트 실행 (병렬).
 ///
-/// POST /api/v1/backtest/run-batch
-///
-/// 여러 전략을 병렬로 백테스트합니다.
-/// 최대 10개 전략을 동시에 실행할 수 있습니다.
+/// 여러 전략을 병렬로 백테스트합니다. 최대 10개 전략을 동시에 실행할 수 있습니다.
+#[utoipa::path(
+    post,
+    path = "/api/v1/backtest/run-batch",
+    tag = "backtest",
+    request_body = BatchBacktestRequest,
+    responses(
+        (status = 200, description = "배치 백테스트 성공", body = BatchBacktestResponse),
+        (status = 400, description = "잘못된 요청", body = BacktestApiError),
+        (status = 500, description = "서버 오류", body = BacktestApiError)
+    )
+)]
 pub async fn run_batch_backtest(
     State(state): State<Arc<AppState>>,
     Json(request): Json<BatchBacktestRequest>,

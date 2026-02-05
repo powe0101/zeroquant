@@ -11,9 +11,11 @@
 //!
 //! - [`performance`]: 성과 지표 계산 (PerformanceMetrics, RollingMetrics 등)
 //! - [`portfolio`]: 포트폴리오 분석 (EquityCurve, PortfolioCharts 등)
+//! - [`backtest`]: 백테스팅 엔진 - `backtest` feature 필요
 //! - [`ml`]: ML/AI 기능 (패턴 인식, 피처 추출, 예측) - `ml` feature 필요
 
 pub mod analytics_provider_impl;
+#[cfg(feature = "backtest")]
 pub mod backtest;
 pub mod correlation;
 pub mod global_scorer;

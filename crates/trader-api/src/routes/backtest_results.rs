@@ -25,6 +25,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::repository::{
@@ -35,7 +36,7 @@ use crate::state::AppState;
 // ==================== 요청/응답 타입 (API용) ====================
 
 /// 결과 저장 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SaveBacktestResultRequest {
     /// 전략 ID (등록된 전략의 고유 ID)
     pub strategy_id: String,
@@ -71,7 +72,7 @@ pub struct SaveBacktestResultRequest {
 pub type BacktestResultResponse = BacktestResultDto;
 
 /// 결과 목록 조회 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ListResultsQuery {
     /// 전략 ID 필터
     #[serde(default)]
@@ -92,14 +93,14 @@ fn default_limit() -> i64 {
 }
 
 /// 결과 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListResultsResponse {
     pub results: Vec<BacktestResultResponse>,
     pub total: i64,
 }
 
 /// 저장 성공 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SaveResultResponse {
     pub id: String,
     pub message: String,

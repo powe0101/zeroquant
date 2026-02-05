@@ -104,6 +104,7 @@ pub struct FeatureSummary {
 
 /// 패턴 감지 결과 (API 응답용).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa-support", derive(utoipa::ToSchema))]
 pub struct PatternDetectionResult {
     /// 심볼
     pub symbol: String,
@@ -123,6 +124,7 @@ pub struct PatternDetectionResult {
 
 /// 캔들스틱 패턴 정보 (API 응답용).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa-support", derive(utoipa::ToSchema))]
 pub struct CandlestickPatternInfo {
     /// 패턴 타입
     pub pattern_type: String,
@@ -140,6 +142,7 @@ pub struct CandlestickPatternInfo {
 
 /// 차트 패턴 정보 (API 응답용).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa-support", derive(utoipa::ToSchema))]
 pub struct ChartPatternInfo {
     /// 패턴 타입
     pub pattern_type: String,

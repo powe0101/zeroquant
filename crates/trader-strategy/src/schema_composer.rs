@@ -76,7 +76,10 @@ impl SchemaComposer {
     }
 
     /// Fragment를 섹션으로 변환합니다.
-    fn fragment_to_section(&self, fragment: &SchemaFragment, required: bool) -> Value {
+    ///
+    /// FragmentRegistry에서 Fragment를 조회하여 섹션 JSON으로 변환합니다.
+    /// 향후 compose 메서드에서 Fragment 확장 시 사용됩니다.
+    pub fn fragment_to_section(&self, fragment: &SchemaFragment, required: bool) -> Value {
         json!({
             "id": fragment.id,
             "name": fragment.name,
@@ -89,7 +92,9 @@ impl SchemaComposer {
     }
 
     /// 커스텀 필드를 섹션으로 변환합니다.
-    fn custom_fields_section(&self, fields: &[FieldSchema]) -> Value {
+    ///
+    /// 전략별 고유 필드들을 커스텀 섹션으로 그룹화합니다.
+    pub fn custom_fields_section(&self, fields: &[FieldSchema]) -> Value {
         json!({
             "id": "custom",
             "name": "커스텀 설정",

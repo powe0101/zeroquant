@@ -5,11 +5,12 @@
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use trader_analytics::portfolio::{ChartPoint, MonthlyReturnCell, PerformanceSummary};
+use utoipa::{IntoParams, ToSchema};
 
 // ==================== 쿼리 파라미터 ====================
 
 /// 기간 필터 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct PeriodQuery {
     /// 기간 (1w, 1m, 3m, 6m, 1y, ytd, all)
     #[serde(default = "default_period")]
@@ -30,7 +31,7 @@ pub(crate) fn default_period() -> String {
 }
 
 /// 차트 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct ChartQuery {
     /// 기간 (1w, 1m, 3m, 6m, 1y, ytd, all)
     #[serde(default = "default_period")]
@@ -48,7 +49,7 @@ pub(crate) fn default_window() -> i64 {
 // ==================== 응답 타입 ====================
 
 /// 성과 요약 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct PerformanceResponse {
     /// 현재 자산 가치
     pub current_equity: String,
@@ -98,7 +99,7 @@ pub struct PerformanceResponse {
 }
 
 /// 기간별 수익률 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct PeriodReturnResponse {
     /// 기간 이름 (1W, 1M, 3M, etc.)
     pub period: String,
@@ -130,7 +131,7 @@ impl From<&PerformanceSummary> for PerformanceResponse {
 }
 
 /// 자산 곡선 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct EquityCurveResponse {
     /// 차트 데이터 포인트
     pub data: Vec<ChartPointResponse>,
@@ -149,7 +150,7 @@ pub struct EquityCurveResponse {
 }
 
 /// 차트 데이터 포인트 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ChartPointResponse {
     /// 타임스탬프 (밀리초)
     pub x: i64,
@@ -173,7 +174,7 @@ impl From<&ChartPoint> for ChartPointResponse {
 }
 
 /// 차트 데이터 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ChartResponse {
     /// 차트 이름
     pub name: String,
@@ -189,7 +190,7 @@ pub struct ChartResponse {
 }
 
 /// 월별 수익률 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct MonthlyReturnsResponse {
     /// 월별 데이터
     pub data: Vec<MonthlyReturnCellResponse>,
@@ -202,7 +203,7 @@ pub struct MonthlyReturnsResponse {
 }
 
 /// 월별 수익률 셀 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct MonthlyReturnCellResponse {
     /// 연도
     pub year: i32,
@@ -231,7 +232,7 @@ impl From<&MonthlyReturnCell> for MonthlyReturnCellResponse {
 // ==================== 기술적 지표 쿼리 타입 ====================
 
 /// 지표 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct IndicatorQuery {
     /// 심볼 (예: 005930, AAPL)
     pub symbol: String,
@@ -249,7 +250,7 @@ pub(crate) fn default_indicator_period() -> String {
 }
 
 /// SMA 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct SmaQuery {
     /// 심볼
     pub symbol: String,
@@ -266,7 +267,7 @@ pub(crate) fn default_sma_period() -> usize {
 }
 
 /// EMA 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct EmaQuery {
     /// 심볼
     pub symbol: String,
@@ -283,7 +284,7 @@ pub(crate) fn default_ema_period() -> usize {
 }
 
 /// RSI 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct RsiQuery {
     /// 심볼
     pub symbol: String,
@@ -300,7 +301,7 @@ pub(crate) fn default_rsi_period() -> usize {
 }
 
 /// MACD 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct MacdQuery {
     /// 심볼
     pub symbol: String,
@@ -331,7 +332,7 @@ pub(crate) fn default_macd_signal() -> usize {
 }
 
 /// 볼린저 밴드 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct BollingerQuery {
     /// 심볼
     pub symbol: String,
@@ -355,7 +356,7 @@ pub(crate) fn default_bollinger_std() -> f64 {
 }
 
 /// 스토캐스틱 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct StochasticQuery {
     /// 심볼
     pub symbol: String,
@@ -379,7 +380,7 @@ pub(crate) fn default_stochastic_d() -> usize {
 }
 
 /// ATR 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct AtrQuery {
     /// 심볼
     pub symbol: String,
@@ -398,7 +399,7 @@ pub(crate) fn default_atr_period() -> usize {
 // ==================== 기술적 지표 응답 타입 ====================
 
 /// 다중 지표 계산 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CalculateIndicatorsRequest {
     /// 심볼
     pub symbol: String,
@@ -410,7 +411,7 @@ pub struct CalculateIndicatorsRequest {
 }
 
 /// 지표 설정.
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, ToSchema)]
 pub struct IndicatorConfig {
     /// 지표 타입
     #[serde(rename = "type")]
@@ -424,14 +425,14 @@ pub struct IndicatorConfig {
 }
 
 /// 사용 가능한 지표 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AvailableIndicatorsResponse {
     /// 지표 목록
     pub indicators: Vec<IndicatorInfo>,
 }
 
 /// 지표 정보.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IndicatorInfo {
     /// 지표 ID
     pub id: String,
@@ -448,7 +449,7 @@ pub struct IndicatorInfo {
 }
 
 /// 단일 지표 데이터 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IndicatorDataResponse {
     /// 지표 ID
     pub indicator: String,
@@ -463,7 +464,7 @@ pub struct IndicatorDataResponse {
 }
 
 /// 지표 시리즈 데이터.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IndicatorSeries {
     /// 시리즈 이름 (예: "macd", "signal", "histogram")
     pub name: String,
@@ -476,7 +477,7 @@ pub struct IndicatorSeries {
 }
 
 /// 지표 데이터 포인트.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IndicatorPoint {
     /// 타임스탬프 (밀리초)
     pub x: i64,
@@ -485,7 +486,7 @@ pub struct IndicatorPoint {
 }
 
 /// 다중 지표 계산 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CalculateIndicatorsResponse {
     /// 심볼
     pub symbol: String,
@@ -498,7 +499,7 @@ pub struct CalculateIndicatorsResponse {
 // ==================== 동기화 타입 ====================
 
 /// 동기화 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SyncEquityCurveRequest {
     /// 자격증명 ID
     pub credential_id: String,
@@ -514,7 +515,7 @@ pub struct SyncEquityCurveRequest {
 }
 
 /// 동기화 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SyncEquityCurveResponse {
     /// 성공 여부
     pub success: bool,
@@ -533,7 +534,7 @@ pub struct SyncEquityCurveResponse {
 // ==================== Volume Profile 타입 ====================
 
 /// Volume Profile 요청 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct VolumeProfileQuery {
     /// 종목 코드 (필수)
     pub symbol: String,
@@ -556,7 +557,7 @@ fn default_vp_levels() -> usize {
 }
 
 /// 가격대별 거래량 레벨.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct PriceLevelResponse {
     /// 가격 (레벨 중심 가격)
     pub price: f64,
@@ -567,7 +568,7 @@ pub struct PriceLevelResponse {
 }
 
 /// Volume Profile 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct VolumeProfileResponse {
     /// 종목 코드
     pub symbol: String,
@@ -594,7 +595,7 @@ pub struct VolumeProfileResponse {
 // ==================== Correlation (상관관계) 타입 ====================
 
 /// 상관행렬 요청 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct CorrelationQuery {
     /// 분석할 종목 코드들 (쉼표 구분)
     pub symbols: String,
@@ -608,7 +609,7 @@ fn default_corr_period() -> i32 {
 }
 
 /// 상관행렬 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CorrelationResponse {
     /// 종목 목록 (행/열 순서)
     pub symbols: Vec<String>,
@@ -621,7 +622,7 @@ pub struct CorrelationResponse {
 // ==================== VWAP (거래량 가중 평균가격) 타입 ====================
 
 /// VWAP 요청 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct VwapQuery {
     /// 종목 코드 (필수)
     pub symbol: String,
@@ -641,7 +642,7 @@ fn default_vwap_band() -> f64 {
 }
 
 /// VWAP 데이터 포인트.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct VwapPointResponse {
     /// 타임스탬프 (밀리초)
     pub x: i64,
@@ -659,7 +660,7 @@ pub struct VwapPointResponse {
 }
 
 /// VWAP 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct VwapResponse {
     /// 종목 코드
     pub symbol: String,
@@ -679,7 +680,7 @@ pub struct VwapResponse {
 }
 
 /// VWAP 파라미터 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct VwapParamsResponse {
     /// 밴드 배수
     pub band_multiplier: f64,
@@ -690,7 +691,7 @@ pub struct VwapParamsResponse {
 // ==================== Keltner Channel 타입 ====================
 
 /// Keltner Channel 요청 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct KeltnerQuery {
     /// 종목 코드 (필수)
     pub symbol: String,
@@ -714,7 +715,7 @@ fn default_keltner_mult() -> f64 {
 }
 
 /// Keltner Channel 데이터 포인트.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct KeltnerPointResponse {
     /// 타임스탬프 (밀리초)
     pub x: i64,
@@ -730,7 +731,7 @@ pub struct KeltnerPointResponse {
 }
 
 /// Keltner Channel 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct KeltnerResponse {
     /// 종목 코드
     pub symbol: String,
@@ -751,7 +752,7 @@ pub struct KeltnerResponse {
 }
 
 /// Keltner Channel 파라미터 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct KeltnerParamsResponse {
     /// EMA/ATR 기간 (EMA와 ATR 모두 동일한 기간 사용)
     pub ema_period: usize,
@@ -762,7 +763,7 @@ pub struct KeltnerParamsResponse {
 // ==================== OBV (On-Balance Volume) 타입 ====================
 
 /// OBV 요청 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct ObvQuery {
     /// 종목 코드 (필수)
     pub symbol: String,
@@ -772,7 +773,7 @@ pub struct ObvQuery {
 }
 
 /// OBV 데이터 포인트.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ObvPointResponse {
     /// 타임스탬프 (밀리초)
     pub x: i64,
@@ -783,7 +784,7 @@ pub struct ObvPointResponse {
 }
 
 /// OBV 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ObvResponse {
     /// 종목 코드
     pub symbol: String,
@@ -802,7 +803,7 @@ pub struct ObvResponse {
 // ==================== SuperTrend 타입 ====================
 
 /// SuperTrend 요청 쿼리.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct SuperTrendQuery {
     /// 종목 코드 (필수)
     pub symbol: String,
@@ -826,7 +827,7 @@ fn default_supertrend_multiplier() -> f64 {
 }
 
 /// SuperTrend 데이터 포인트.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SuperTrendPointResponse {
     /// 타임스탬프 (밀리초)
     pub x: i64,
@@ -842,7 +843,7 @@ pub struct SuperTrendPointResponse {
 }
 
 /// SuperTrend 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SuperTrendResponse {
     /// 종목 코드
     pub symbol: String,
@@ -865,7 +866,7 @@ pub struct SuperTrendResponse {
 }
 
 /// SuperTrend 파라미터 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SuperTrendParamsResponse {
     /// ATR 기간
     pub atr_period: usize,

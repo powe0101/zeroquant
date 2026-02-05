@@ -154,6 +154,12 @@ pub struct StructuralFeatures {
     pub dist_ma20: Decimal,
     /// 볼린저 밴드 폭 (%, 0 ~ 50)
     pub bb_width: Decimal,
+    /// 볼린저 밴드 상단
+    pub bb_upper: Decimal,
+    /// 볼린저 밴드 중간 (SMA20)
+    pub bb_middle: Decimal,
+    /// 볼린저 밴드 하단
+    pub bb_lower: Decimal,
     /// RSI 14일 (0 ~ 100)
     pub rsi: Decimal,
     /// 계산 시각

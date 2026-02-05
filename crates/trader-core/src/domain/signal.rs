@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 /// 수행할 액션의 종류를 나타내는 신호 유형.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa-support", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SignalType {
     /// 새 포지션 진입
@@ -199,6 +200,7 @@ impl SignalValidation {
 /// Signal과 달리 SignalMarker는 백테스트와 실거래에서 발생한
 /// 신호를 저장하고 분석하기 위한 확장된 정보를 포함합니다.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa-support", derive(utoipa::ToSchema))]
 pub struct SignalMarker {
     /// 고유 ID
     pub id: Uuid,

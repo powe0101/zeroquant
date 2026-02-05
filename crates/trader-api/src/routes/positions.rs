@@ -18,6 +18,7 @@ use axum::{
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use crate::routes::strategies::ApiError;
 use crate::state::AppState;
@@ -26,7 +27,7 @@ use trader_core::{Position, Side};
 // ==================== 응답 타입 ====================
 
 /// 포지션 목록 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct PositionsListResponse {
     /// 포지션 목록
     pub positions: Vec<PositionResponse>,
@@ -37,7 +38,7 @@ pub struct PositionsListResponse {
 }
 
 /// 포지션 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct PositionResponse {
     /// 포지션 ID
     pub id: String,
@@ -104,7 +105,7 @@ impl PositionResponse {
 }
 
 /// 포지션 요약 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct PositionSummaryResponse {
     /// 전체 오픈 포지션 수
     pub total_positions: usize,
@@ -145,8 +146,14 @@ impl PositionSummaryResponse {
 // ==================== handler ====================
 
 /// 열린 포지션 목록 조회.
-///
-/// GET /api/v1/positions
+#[utoipa::path(
+    get,
+    path = "/api/v1/positions",
+    tag = "positions",
+    responses(
+        (status = 200, description = "포지션 목록 조회 성공", body = PositionsListResponse)
+    )
+)]
 pub async fn list_positions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let executor = state.executor.read().await;
     let positions = executor.get_open_positions().await;
@@ -180,8 +187,14 @@ pub async fn list_positions(State(state): State<Arc<AppState>>) -> impl IntoResp
 }
 
 /// 포지션 요약 통계 조회.
-///
-/// GET /api/v1/positions/summary
+#[utoipa::path(
+    get,
+    path = "/api/v1/positions/summary",
+    tag = "positions",
+    responses(
+        (status = 200, description = "포지션 요약 조회 성공", body = PositionSummaryResponse)
+    )
+)]
 pub async fn get_positions_summary(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let executor = state.executor.read().await;
     let positions = executor.get_open_positions().await;
@@ -190,8 +203,18 @@ pub async fn get_positions_summary(State(state): State<Arc<AppState>>) -> impl I
 }
 
 /// 특정 심볼 포지션 조회.
-///
-/// GET /api/v1/positions/{symbol}
+#[utoipa::path(
+    get,
+    path = "/api/v1/positions/{symbol}",
+    tag = "positions",
+    params(
+        ("symbol" = String, Path, description = "심볼 (예: BTC/USDT)")
+    ),
+    responses(
+        (status = 200, description = "포지션 조회 성공", body = PositionResponse),
+        (status = 404, description = "포지션 없음", body = ApiError)
+    )
+)]
 pub async fn get_position(
     State(state): State<Arc<AppState>>,
     Path(symbol): Path<String>,

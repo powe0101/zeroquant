@@ -9,6 +9,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use tracing::{debug, info, warn};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::symbol_fundamental::{NewSymbolFundamental, SymbolFundamentalRepository};
@@ -34,7 +35,7 @@ pub struct SymbolInfo {
 }
 
 /// 검색 결과용 간소화된 심볼 정보.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SymbolSearchResult {
     pub ticker: String,
     pub name: String,

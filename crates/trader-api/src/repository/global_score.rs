@@ -238,21 +238,105 @@ impl GlobalScoreRepository {
 
         let symbol = Symbol::new(ticker, "", market_type);
 
-        // 2. OHLCV 데이터 조회 (60일치) - SymbolResolver가 자동으로 원천 심볼 변환
+        // 2. OHLCV 데이터 조회 (60일치) - 읽기 전용 (외부 API 호출 없음)
         let candles = data_provider
-            .get_klines(ticker, Timeframe::D1, 60)
+            .get_klines_readonly(ticker, Timeframe::D1, 60)
             .await
             .map_err(|e| sqlx::Error::Protocol(format!("OHLCV 조회 실패: {}", e)))?;
 
         if candles.len() < 30 {
-            warn!("{}: 데이터 부족 ({}개)", ticker, candles.len());
-            return Ok(()); // 스킵
+            debug!("{}: 캔들 부족으로 스킵 ({}/60)", ticker, candles.len());
+            return Ok(()); // 스킵 (데이터 없는 심볼)
         }
 
-        // 3. GlobalScore 계산
+        // 3. Fundamental 데이터 조회 (volume_percentile, 52주 고저 계산용)
+        let fundamental: Option<(Option<i64>, Option<Decimal>, Option<Decimal>)> = sqlx::query_as(
+            r#"
+            SELECT avg_volume_10d, week_52_high, week_52_low
+            FROM symbol_fundamental
+            WHERE symbol_info_id = $1
+            "#,
+        )
+        .bind(symbol_info_id)
+        .fetch_optional(pool)
+        .await?;
+
+        // 4. 파라미터 계산
+        let current_price = candles.last().unwrap().close;
+
+        // 4-1. Volume Percentile 계산 (시장 전체 대비)
+        let volume_percentile = if let Some((Some(avg_vol), _, _)) = fundamental {
+            // 시장별 거래대금 퍼센타일 조회
+            let percentile: Option<(f64,)> = sqlx::query_as(
+                r#"
+                SELECT COALESCE(
+                    PERCENT_RANK() OVER (ORDER BY sf.avg_volume_10d),
+                    0.5
+                ) as percentile
+                FROM symbol_fundamental sf
+                JOIN symbol_info si ON sf.symbol_info_id = si.id
+                WHERE si.market = $1 AND sf.avg_volume_10d IS NOT NULL AND sf.avg_volume_10d = $2
+                LIMIT 1
+                "#,
+            )
+            .bind(market)
+            .bind(avg_vol)
+            .fetch_optional(pool)
+            .await?;
+
+            percentile.map(|(p,)| p as f32)
+        } else {
+            None
+        };
+
+        // 4-2. 기술적 지표 기반 목표가/손절가 계산
+        let highs: Vec<Decimal> = candles.iter().map(|c| c.high).collect();
+        let lows: Vec<Decimal> = candles.iter().map(|c| c.low).collect();
+
+        // 20일 최고/최저를 목표가/손절가로 사용
+        let recent_high = highs.iter().rev().take(20).max().copied().unwrap_or(current_price);
+        let recent_low = lows.iter().rev().take(20).min().copied().unwrap_or(current_price);
+
+        // 52주 고저가 있으면 목표가/손절가에 반영
+        let (target_price, stop_price) = if let Some((_, w52_high, w52_low)) = fundamental {
+            let target = w52_high.unwrap_or(recent_high);
+            let stop = w52_low.unwrap_or(recent_low);
+            // 목표가는 현재가보다 높아야 함, 손절가는 현재가보다 낮아야 함
+            (
+                if target > current_price { Some(target) } else { Some(recent_high) },
+                if stop < current_price { Some(stop) } else { Some(recent_low) },
+            )
+        } else {
+            (Some(recent_high), Some(recent_low))
+        };
+
+        // 4-3. StructuralFeatures 계산 (trader_core -> trader_analytics 변환)
+        let structural_features = trader_analytics::StructuralFeaturesCalculator::from_candles(ticker, &candles)
+            .ok()
+            .map(|sf| {
+                // trader_core::domain::StructuralFeatures → trader_analytics::indicators::StructuralFeatures
+                trader_analytics::indicators::StructuralFeatures {
+                    low_trend: sf.low_trend.to_string().parse::<f64>().unwrap_or(0.0),
+                    vol_quality: sf.vol_quality.to_string().parse::<f64>().unwrap_or(0.0),
+                    range_pos: sf.range_pos.to_string().parse::<f64>().unwrap_or(0.5),
+                    dist_ma20: sf.dist_ma20.to_string().parse::<f64>().unwrap_or(0.0),
+                    bb_width: sf.bb_width.to_string().parse::<f64>().unwrap_or(2.0),
+                    bb_upper: sf.bb_upper.to_string().parse::<f64>().unwrap_or(0.0),
+                    bb_middle: sf.bb_middle.to_string().parse::<f64>().unwrap_or(0.0),
+                    bb_lower: sf.bb_lower.to_string().parse::<f64>().unwrap_or(0.0),
+                    rsi: sf.rsi.to_string().parse::<f64>().unwrap_or(50.0),
+                }
+            });
+
+        // 5. GlobalScore 계산
         let params = GlobalScorerParams {
             symbol: Some(symbol.to_string()),
             market_type: Some(market_type),
+            entry_price: Some(current_price), // 현재가 = 진입가
+            target_price,
+            stop_price,
+            volume_percentile,
+            structural_features,
             ..Default::default()
         };
 
@@ -398,9 +482,9 @@ impl GlobalScoreRepository {
                     break;
                 }
 
-                // 캔들 데이터 조회 (ticker를 symbol로 사용)
+                // 캔들 데이터 조회 (읽기 전용 - 외부 API 호출 없음)
                 match data_provider
-                    .get_klines(&symbol.ticker, Timeframe::D1, 100)
+                    .get_klines_readonly(&symbol.ticker, Timeframe::D1, 100)
                     .await
                 {
                     Ok(candles) if candles.len() >= 40 => {
@@ -533,10 +617,10 @@ impl GlobalScoreRepository {
             return Ok(None);
         };
 
-        // 2. OHLCV 데이터에서 기술 지표 계산
+        // 2. OHLCV 데이터에서 기술 지표 계산 (읽기 전용 - 외부 API 호출 없음)
         let data_provider = CachedHistoricalDataProvider::new(pool.clone());
         let candles = data_provider
-            .get_klines(ticker, Timeframe::D1, 60)
+            .get_klines_readonly(ticker, Timeframe::D1, 60)
             .await
             .map_err(|e| sqlx::Error::Protocol(format!("OHLCV 조회 실패: {}", e)))?;
 

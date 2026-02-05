@@ -251,6 +251,54 @@ impl CachedHistoricalDataProvider {
         Ok(klines)
     }
 
+    /// 캔들 데이터 조회 (읽기 전용 - 외부 API 호출 없음).
+    ///
+    /// ohlcv 테이블에서만 데이터를 조회합니다.
+    /// 데이터가 없거나 부족해도 외부 API를 호출하지 않습니다.
+    /// API 서버에서 사용하며, 데이터 수집은 Collector에서만 수행합니다.
+    ///
+    /// # 인자
+    /// - `symbol`: canonical 심볼 (예: "005930", "AAPL")
+    /// - `timeframe`: 타임프레임
+    /// - `limit`: 최대 캔들 수
+    ///
+    /// # 반환
+    /// 캐시에 있는 캔들 데이터 (없으면 빈 Vec)
+    #[instrument(skip(self))]
+    pub async fn get_klines_readonly(
+        &self,
+        symbol: &str,
+        timeframe: Timeframe,
+        limit: usize,
+    ) -> Result<Vec<Kline>> {
+        // SymbolResolver를 통해 ticker 조회
+        let (ticker, _yahoo_symbol, _market) = self.resolve_symbol(symbol).await?;
+
+        // ohlcv 테이블에서만 조회 (외부 API 호출 없음)
+        let records = self
+            .cache
+            .get_cached_klines(&ticker, timeframe, limit)
+            .await?;
+
+        // canonical 심볼로 Kline 변환
+        let klines: Vec<Kline> = records
+            .into_iter()
+            .map(|kline| Kline {
+                ticker: symbol.to_string(),
+                ..kline
+            })
+            .collect();
+
+        debug!(
+            canonical = %symbol,
+            ticker = %ticker,
+            returned = klines.len(),
+            "캔들 데이터 반환 (읽기 전용)"
+        );
+
+        Ok(klines)
+    }
+
     /// 심볼 정보 조회.
     ///
     /// DB의 symbol_info 테이블에서 조회:

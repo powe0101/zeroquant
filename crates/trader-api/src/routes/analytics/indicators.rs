@@ -21,8 +21,14 @@ use super::types::{
 };
 
 /// 사용 가능한 지표 목록 조회.
-///
-/// GET /api/v1/analytics/indicators
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators",
+    tag = "analytics",
+    responses(
+        (status = 200, description = "지표 목록 조회 성공", body = AvailableIndicatorsResponse)
+    )
+)]
 pub async fn get_available_indicators() -> impl IntoResponse {
     let indicators = vec![
         IndicatorInfo {
@@ -214,8 +220,15 @@ fn parse_period_to_days(period: &str) -> i64 {
 }
 
 /// SMA 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/sma
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/sma",
+    tag = "analytics",
+    params(SmaQuery),
+    responses(
+        (status = 200, description = "SMA 데이터 조회 성공", body = IndicatorDataResponse)
+    )
+)]
 pub async fn get_sma_indicator(Query(query): Query<SmaQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, _, _, closes, _) = generate_sample_ohlcv(days);
@@ -260,8 +273,15 @@ pub async fn get_sma_indicator(Query(query): Query<SmaQuery>) -> impl IntoRespon
 }
 
 /// EMA 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/ema
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/ema",
+    tag = "analytics",
+    params(EmaQuery),
+    responses(
+        (status = 200, description = "EMA 데이터 조회 성공", body = IndicatorDataResponse)
+    )
+)]
 pub async fn get_ema_indicator(Query(query): Query<EmaQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, _, _, closes, _) = generate_sample_ohlcv(days);
@@ -306,8 +326,15 @@ pub async fn get_ema_indicator(Query(query): Query<EmaQuery>) -> impl IntoRespon
 }
 
 /// RSI 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/rsi
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/rsi",
+    tag = "analytics",
+    params(RsiQuery),
+    responses(
+        (status = 200, description = "RSI 데이터 조회 성공", body = IndicatorDataResponse)
+    )
+)]
 pub async fn get_rsi_indicator(Query(query): Query<RsiQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, _, _, closes, _) = generate_sample_ohlcv(days);
@@ -352,8 +379,15 @@ pub async fn get_rsi_indicator(Query(query): Query<RsiQuery>) -> impl IntoRespon
 }
 
 /// MACD 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/macd
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/macd",
+    tag = "analytics",
+    params(MacdQuery),
+    responses(
+        (status = 200, description = "MACD 데이터 조회 성공", body = IndicatorDataResponse)
+    )
+)]
 pub async fn get_macd_indicator(Query(query): Query<MacdQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, _, _, closes, _) = generate_sample_ohlcv(days);
@@ -439,8 +473,15 @@ pub async fn get_macd_indicator(Query(query): Query<MacdQuery>) -> impl IntoResp
 }
 
 /// 볼린저 밴드 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/bollinger
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/bollinger",
+    tag = "analytics",
+    params(BollingerQuery),
+    responses(
+        (status = 200, description = "볼린저 밴드 데이터 조회 성공", body = IndicatorDataResponse)
+    )
+)]
 pub async fn get_bollinger_indicator(Query(query): Query<BollingerQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, _, _, closes, _) = generate_sample_ohlcv(days);
@@ -521,8 +562,15 @@ pub async fn get_bollinger_indicator(Query(query): Query<BollingerQuery>) -> imp
 }
 
 /// 스토캐스틱 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/stochastic
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/stochastic",
+    tag = "analytics",
+    params(StochasticQuery),
+    responses(
+        (status = 200, description = "스토캐스틱 데이터 조회 성공", body = IndicatorDataResponse)
+    )
+)]
 pub async fn get_stochastic_indicator(Query(query): Query<StochasticQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, highs, lows, closes, _) = generate_sample_ohlcv(days);
@@ -588,8 +636,15 @@ pub async fn get_stochastic_indicator(Query(query): Query<StochasticQuery>) -> i
 }
 
 /// ATR 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/atr
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/atr",
+    tag = "analytics",
+    params(AtrQuery),
+    responses(
+        (status = 200, description = "ATR 데이터 조회 성공", body = IndicatorDataResponse)
+    )
+)]
 pub async fn get_atr_indicator(Query(query): Query<AtrQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, highs, lows, closes, _) = generate_sample_ohlcv(days);
@@ -634,8 +689,15 @@ pub async fn get_atr_indicator(Query(query): Query<AtrQuery>) -> impl IntoRespon
 }
 
 /// 다중 지표 계산.
-///
-/// POST /api/v1/analytics/indicators/calculate
+#[utoipa::path(
+    post,
+    path = "/api/v1/analytics/indicators/calculate",
+    tag = "analytics",
+    request_body = CalculateIndicatorsRequest,
+    responses(
+        (status = 200, description = "지표 계산 성공", body = CalculateIndicatorsResponse)
+    )
+)]
 pub async fn calculate_indicators(
     Json(request): Json<CalculateIndicatorsRequest>,
 ) -> impl IntoResponse {
@@ -1029,8 +1091,15 @@ pub async fn calculate_indicators(
 }
 
 /// Volume Profile 계산.
-///
-/// GET /api/v1/analytics/indicators/volume-profile?symbol=005930&period=60&num_levels=20
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/volume-profile",
+    tag = "analytics",
+    params(super::types::VolumeProfileQuery),
+    responses(
+        (status = 200, description = "Volume Profile 계산 성공", body = super::types::VolumeProfileResponse)
+    )
+)]
 pub async fn get_volume_profile(
     Query(query): Query<super::types::VolumeProfileQuery>,
 ) -> impl IntoResponse {
@@ -1120,14 +1189,15 @@ pub async fn get_volume_profile(
 }
 
 /// 상관행렬 계산 핸들러.
-///
-/// # 요청
-///
-/// `GET /api/v1/analytics/correlation?symbols=005930,000660,035720&period=60`
-///
-/// # 응답
-///
-/// 종목 간 상관계수 행렬
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/correlation",
+    tag = "analytics",
+    params(super::types::CorrelationQuery),
+    responses(
+        (status = 200, description = "상관행렬 계산 성공", body = super::types::CorrelationResponse)
+    )
+)]
 pub async fn get_correlation(
     Query(query): Query<super::types::CorrelationQuery>,
 ) -> impl IntoResponse {
@@ -1212,8 +1282,15 @@ pub async fn get_correlation(
 }
 
 /// VWAP 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/vwap?symbol=005930&period=3m&band_multiplier=2.0
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/vwap",
+    tag = "analytics",
+    params(VwapQuery),
+    responses(
+        (status = 200, description = "VWAP 데이터 조회 성공", body = VwapResponse)
+    )
+)]
 pub async fn get_vwap_indicator(Query(query): Query<VwapQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, highs, lows, closes, volumes) = generate_sample_ohlcv(days);
@@ -1279,9 +1356,15 @@ pub async fn get_vwap_indicator(Query(query): Query<VwapQuery>) -> impl IntoResp
 }
 
 /// Keltner Channel 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/keltner?symbol=005930&period=3m&ema_period=20&atr_multiplier=2.0
-/// 참고: EMA와 ATR 계산 모두 ema_period를 사용합니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/keltner",
+    tag = "analytics",
+    params(KeltnerQuery),
+    responses(
+        (status = 200, description = "Keltner Channel 데이터 조회 성공", body = KeltnerResponse)
+    )
+)]
 pub async fn get_keltner_indicator(Query(query): Query<KeltnerQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, highs, lows, closes, _) = generate_sample_ohlcv(days);
@@ -1364,8 +1447,15 @@ pub async fn get_keltner_indicator(Query(query): Query<KeltnerQuery>) -> impl In
 }
 
 /// OBV (On-Balance Volume) 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/obv?symbol=005930&period=3m
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/obv",
+    tag = "analytics",
+    params(ObvQuery),
+    responses(
+        (status = 200, description = "OBV 데이터 조회 성공", body = ObvResponse)
+    )
+)]
 pub async fn get_obv_indicator(Query(query): Query<ObvQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, _, _, closes, volumes) = generate_sample_ohlcv(days);
@@ -1415,8 +1505,15 @@ pub async fn get_obv_indicator(Query(query): Query<ObvQuery>) -> impl IntoRespon
 }
 
 /// SuperTrend 지표 데이터 조회.
-///
-/// GET /api/v1/analytics/indicators/supertrend?symbol=005930&period=3m&atr_period=10&multiplier=3.0
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/indicators/supertrend",
+    tag = "analytics",
+    params(SuperTrendQuery),
+    responses(
+        (status = 200, description = "SuperTrend 데이터 조회 성공", body = SuperTrendResponse)
+    )
+)]
 pub async fn get_supertrend_indicator(Query(query): Query<SuperTrendQuery>) -> impl IntoResponse {
     let days = parse_period_to_days(&query.period);
     let (timestamps, _, highs, lows, closes, _) = generate_sample_ohlcv(days);

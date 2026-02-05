@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use trader_core::Side;
 use ts_rs::TS;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 // ==================== 날짜 파싱 헬퍼 ====================
@@ -136,7 +136,7 @@ use tracing::{error, info, warn};
 // ==================== 요청 타입 ====================
 
 /// 체결 내역 조회 쿼리 파라미터.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, TS, ToSchema, IntoParams)]
 #[ts(export, export_to = "journal/")]
 pub struct ListExecutionsQuery {
     /// 종목 필터
@@ -156,7 +156,7 @@ pub struct ListExecutionsQuery {
 }
 
 /// 일별 손익 조회 쿼리 파라미터.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, TS, ToSchema, IntoParams)]
 #[ts(export, export_to = "journal/")]
 pub struct DailyPnLQuery {
     /// 시작 날짜 (YYYY-MM-DD)
@@ -166,7 +166,7 @@ pub struct DailyPnLQuery {
 }
 
 /// 체결 내역 수정 요청.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct UpdateExecutionRequest {
     /// 메모
@@ -176,7 +176,7 @@ pub struct UpdateExecutionRequest {
 }
 
 /// 동기화 요청.
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Deserialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct SyncRequest {
     /// 동기화할 거래소 (선택적, 기본값은 활성 계정의 거래소)
@@ -191,7 +191,7 @@ pub struct SyncRequest {
 // ==================== 응답 타입 ====================
 
 /// 포지션 목록 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct JournalPositionsResponse {
     /// 포지션 목록
@@ -203,7 +203,7 @@ pub struct JournalPositionsResponse {
 }
 
 /// 포지션 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct JournalPositionResponse {
     pub id: String,
@@ -254,7 +254,7 @@ impl From<RepoCurrentPosition> for JournalPositionResponse {
 }
 
 /// 포지션 요약.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct PositionsSummary {
     pub total_positions: usize,
@@ -265,7 +265,7 @@ pub struct PositionsSummary {
 }
 
 /// 체결 내역 목록 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct ExecutionsListResponse {
     pub executions: Vec<ExecutionResponse>,
@@ -275,7 +275,7 @@ pub struct ExecutionsListResponse {
 }
 
 /// 체결 내역 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct ExecutionResponse {
     pub id: String,
@@ -326,7 +326,7 @@ impl From<TradeExecutionRecord> for ExecutionResponse {
 }
 
 /// PnL 요약 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct PnLSummaryResponse {
     pub total_realized_pnl: String,
@@ -373,7 +373,7 @@ impl From<PnLSummary> for PnLSummaryResponse {
 }
 
 /// 일별 손익 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct DailyPnLResponse {
     pub daily: Vec<DailyPnLItem>,
@@ -381,7 +381,7 @@ pub struct DailyPnLResponse {
 }
 
 /// 일별 손익 항목.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct DailyPnLItem {
     pub date: String,
@@ -410,7 +410,7 @@ impl From<DailySummary> for DailyPnLItem {
 }
 
 /// 종목별 손익 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct SymbolPnLResponse {
     pub symbols: Vec<SymbolPnLItem>,
@@ -418,7 +418,7 @@ pub struct SymbolPnLResponse {
 }
 
 /// 종목별 손익 항목.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct SymbolPnLItem {
     pub symbol: String,
@@ -453,7 +453,7 @@ impl From<SymbolPnL> for SymbolPnLItem {
 }
 
 /// 동기화 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct SyncResponse {
     pub success: bool,
@@ -466,10 +466,17 @@ pub struct SyncResponse {
 
 /// 보유 현황(포지션) 조회.
 ///
-/// GET /api/v1/journal/positions
-///
 /// positions 테이블에서 현재 열린 포지션을 조회합니다.
 /// Dashboard의 holdings API 호출 시 자동으로 동기화됩니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/positions",
+    tag = "journal",
+    responses(
+        (status = 200, description = "포지션 조회 성공", body = JournalPositionsResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_journal_positions(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<JournalPositionsResponse>, (StatusCode, Json<ApiError>)> {
@@ -557,8 +564,17 @@ pub async fn get_journal_positions(
 }
 
 /// 체결 내역 조회.
-///
-/// GET /api/v1/journal/executions
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/executions",
+    tag = "journal",
+    params(ListExecutionsQuery),
+    responses(
+        (status = 200, description = "체결 내역 조회 성공", body = ExecutionsListResponse),
+        (status = 400, description = "잘못된 요청", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn list_executions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ListExecutionsQuery>,
@@ -632,8 +648,15 @@ pub async fn list_executions(
 }
 
 /// PnL 요약 조회.
-///
-/// GET /api/v1/journal/pnl
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/pnl",
+    tag = "journal",
+    responses(
+        (status = 200, description = "손익 요약 조회 성공", body = PnLSummaryResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_pnl_summary(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<PnLSummaryResponse>, (StatusCode, Json<ApiError>)> {
@@ -656,8 +679,17 @@ pub async fn get_pnl_summary(
 }
 
 /// 일별 손익 조회.
-///
-/// GET /api/v1/journal/pnl/daily
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/pnl/daily",
+    tag = "journal",
+    params(DailyPnLQuery),
+    responses(
+        (status = 200, description = "일별 손익 조회 성공", body = DailyPnLResponse),
+        (status = 400, description = "잘못된 요청", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_daily_pnl(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DailyPnLQuery>,
@@ -704,8 +736,15 @@ pub async fn get_daily_pnl(
 }
 
 /// 종목별 손익 조회.
-///
-/// GET /api/v1/journal/pnl/symbol
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/pnl/symbol",
+    tag = "journal",
+    responses(
+        (status = 200, description = "종목별 손익 조회 성공", body = SymbolPnLResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_symbol_pnl(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SymbolPnLResponse>, (StatusCode, Json<ApiError>)> {
@@ -736,14 +775,14 @@ pub async fn get_symbol_pnl(
 // ==================== 기간별 손익 API ====================
 
 /// 주별 손익 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WeeklyPnLResponse {
     pub weekly: Vec<WeeklyPnLItem>,
     pub total_weeks: usize,
 }
 
 /// 주별 손익 항목.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct WeeklyPnLItem {
     pub week_start: String,
     pub total_trades: i64,
@@ -773,14 +812,14 @@ impl From<WeeklyPnL> for WeeklyPnLItem {
 }
 
 /// 월별 손익 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MonthlyPnLResponse {
     pub monthly: Vec<MonthlyPnLItem>,
     pub total_months: usize,
 }
 
 /// 월별 손익 항목.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MonthlyPnLItem {
     pub year: i32,
     pub month: i32,
@@ -812,14 +851,14 @@ impl From<MonthlyPnL> for MonthlyPnLItem {
 }
 
 /// 연도별 손익 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct YearlyPnLResponse {
     pub yearly: Vec<YearlyPnLItem>,
     pub total_years: usize,
 }
 
 /// 연도별 손익 항목.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct YearlyPnLItem {
     pub year: i32,
     pub total_trades: i64,
@@ -851,14 +890,14 @@ impl From<YearlyPnL> for YearlyPnLItem {
 }
 
 /// 누적 손익 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CumulativePnLResponse {
     pub curve: Vec<CumulativePnLPoint>,
     pub total_points: usize,
 }
 
 /// 누적 손익 포인트.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CumulativePnLPoint {
     pub date: String,
     pub cumulative_pnl: String,
@@ -880,7 +919,7 @@ impl From<CumulativePnL> for CumulativePnLPoint {
 }
 
 /// 투자 인사이트 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TradingInsightsResponse {
     /// 총 거래 통계
     pub total_trades: i64,
@@ -959,14 +998,14 @@ impl TradingInsightsResponse {
 }
 
 /// 전략별 성과 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct StrategyPerformanceResponse {
     pub strategies: Vec<StrategyPerformanceItem>,
     pub total: usize,
 }
 
 /// 전략별 성과 항목.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct StrategyPerformanceItem {
     pub strategy_id: String,
     pub strategy_name: String,
@@ -1018,8 +1057,15 @@ impl From<StrategyPerformance> for StrategyPerformanceItem {
 }
 
 /// 주별 손익 조회.
-///
-/// GET /api/v1/journal/pnl/weekly
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/pnl/weekly",
+    tag = "journal",
+    responses(
+        (status = 200, description = "주별 손익 조회 성공", body = WeeklyPnLResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_weekly_pnl(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WeeklyPnLResponse>, (StatusCode, Json<ApiError>)> {
@@ -1048,8 +1094,15 @@ pub async fn get_weekly_pnl(
 }
 
 /// 월별 손익 조회.
-///
-/// GET /api/v1/journal/pnl/monthly
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/pnl/monthly",
+    tag = "journal",
+    responses(
+        (status = 200, description = "월별 손익 조회 성공", body = MonthlyPnLResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_monthly_pnl(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<MonthlyPnLResponse>, (StatusCode, Json<ApiError>)> {
@@ -1078,8 +1131,15 @@ pub async fn get_monthly_pnl(
 }
 
 /// 연도별 손익 조회.
-///
-/// GET /api/v1/journal/pnl/yearly
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/pnl/yearly",
+    tag = "journal",
+    responses(
+        (status = 200, description = "연도별 손익 조회 성공", body = YearlyPnLResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_yearly_pnl(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<YearlyPnLResponse>, (StatusCode, Json<ApiError>)> {
@@ -1108,8 +1168,15 @@ pub async fn get_yearly_pnl(
 }
 
 /// 누적 손익 곡선 조회.
-///
-/// GET /api/v1/journal/pnl/cumulative
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/pnl/cumulative",
+    tag = "journal",
+    responses(
+        (status = 200, description = "누적 손익 조회 성공", body = CumulativePnLResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_cumulative_pnl(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CumulativePnLResponse>, (StatusCode, Json<ApiError>)> {
@@ -1139,9 +1206,16 @@ pub async fn get_cumulative_pnl(
 
 /// 투자 인사이트 조회.
 ///
-/// GET /api/v1/journal/insights
-///
 /// 기본 인사이트와 함께 고급 통계(연속 승/패, Max Drawdown)를 반환합니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/insights",
+    tag = "journal",
+    responses(
+        (status = 200, description = "투자 인사이트 조회 성공", body = TradingInsightsResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_trading_insights(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<TradingInsightsResponse>, (StatusCode, Json<ApiError>)> {
@@ -1206,8 +1280,15 @@ pub async fn get_trading_insights(
 }
 
 /// 전략별 성과 조회.
-///
-/// GET /api/v1/journal/strategies
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/strategies",
+    tag = "journal",
+    responses(
+        (status = 200, description = "전략별 성과 조회 성공", body = StrategyPerformanceResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn get_strategy_performance(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<StrategyPerformanceResponse>, (StatusCode, Json<ApiError>)> {
@@ -1236,8 +1317,21 @@ pub async fn get_strategy_performance(
 }
 
 /// 체결 내역 메모/태그 수정.
-///
-/// PATCH /api/v1/journal/executions/{id}
+#[utoipa::path(
+    patch,
+    path = "/api/v1/journal/executions/{id}",
+    tag = "journal",
+    params(
+        ("id" = Uuid, Path, description = "체결 ID")
+    ),
+    request_body = UpdateExecutionRequest,
+    responses(
+        (status = 200, description = "체결 내역 수정 성공", body = ExecutionResponse),
+        (status = 403, description = "접근 금지", body = ApiError),
+        (status = 404, description = "체결 내역 없음", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn update_execution(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
@@ -1293,10 +1387,18 @@ pub async fn update_execution(
 
 /// 거래소 체결 내역 동기화.
 ///
-/// POST /api/v1/journal/sync
-///
 /// KIS API에서 체결 내역을 가져와 execution_cache 테이블에 저장합니다.
 /// trade_executions는 메모/태그 등 추가 정보만 저장합니다.
+#[utoipa::path(
+    post,
+    path = "/api/v1/journal/sync",
+    tag = "journal",
+    request_body = SyncRequest,
+    responses(
+        (status = 200, description = "동기화 성공", body = SyncResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn sync_executions(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SyncRequest>,
@@ -1556,7 +1658,7 @@ async fn get_active_credential_id(
 // ==================== FIFO 원가 계산 ====================
 
 /// FIFO 원가 계산 쿼리.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema, IntoParams)]
 pub struct CostBasisQuery {
     /// 시장 (기본: KR)
     #[serde(default = "default_market_kr")]
@@ -1621,9 +1723,22 @@ impl From<CostBasisSummary> for CostBasisResponse {
     }
 }
 
-/// GET /api/v1/journal/cost-basis/{symbol} - FIFO 원가 계산
+/// FIFO 원가 계산.
 ///
 /// 특정 종목의 체결 내역을 기반으로 FIFO 원가와 실현/미실현 손익을 계산합니다.
+#[utoipa::path(
+    get,
+    path = "/api/v1/journal/cost-basis/{symbol}",
+    tag = "journal",
+    params(
+        ("symbol" = String, Path, description = "종목 심볼"),
+        CostBasisQuery
+    ),
+    responses(
+        (status = 200, description = "원가 계산 성공", body = CostBasisResponse),
+        (status = 500, description = "서버 오류")
+    )
+)]
 async fn get_cost_basis(
     State(state): State<Arc<AppState>>,
     Path(symbol): Path<String>,
@@ -1767,7 +1882,7 @@ async fn recalculate_pnl(
 // ==================== 캐시 관리 ====================
 
 /// 캐시 삭제 응답.
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, TS, ToSchema)]
 #[ts(export, export_to = "journal/")]
 pub struct ClearCacheResponse {
     pub success: bool,
@@ -1777,9 +1892,16 @@ pub struct ClearCacheResponse {
 
 /// 체결 내역 캐시 삭제.
 ///
-/// DELETE /api/v1/journal/cache
-///
 /// ISA 계좌 등 전체 내역 재동기화가 필요할 때 사용합니다.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/journal/cache",
+    tag = "journal",
+    responses(
+        (status = 200, description = "캐시 삭제 성공", body = ClearCacheResponse),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn clear_execution_cache(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ClearCacheResponse>, (StatusCode, Json<ApiError>)> {

@@ -32,13 +32,19 @@ impl StructuralFeaturesCalculator {
             return Err(format!("데이터 부족: {}개 (최소 20개 필요)", candles.len()));
         }
 
+        // 볼린저 밴드 계산 (상/중/하 + 폭)
+        let (bb_upper, bb_middle, bb_lower, bb_width) = Self::calculate_bollinger_bands(candles);
+
         Ok(StructuralFeatures {
             ticker: ticker.to_string(),
             low_trend: Self::calculate_low_trend(candles),
             vol_quality: Self::calculate_vol_quality(candles),
             range_pos: Self::calculate_range_pos(candles),
             dist_ma20: Self::calculate_dist_ma20(candles),
-            bb_width: Self::calculate_bb_width(candles),
+            bb_width,
+            bb_upper,
+            bb_middle,
+            bb_lower,
             rsi: Self::calculate_rsi(candles),
             timestamp: Utc::now(),
         })
@@ -173,25 +179,27 @@ impl StructuralFeaturesCalculator {
             .min(dec!(20))
     }
 
-    /// 볼린저 밴드 폭 계산.
+    /// 볼린저 밴드 계산 (상단, 중간, 하단, 폭).
     ///
     /// # 반환
     ///
-    /// % (0 ~ 50)
-    fn calculate_bb_width(candles: &[Kline]) -> Decimal {
+    /// (upper, middle, lower, width_pct)
+    fn calculate_bollinger_bands(candles: &[Kline]) -> (Decimal, Decimal, Decimal, Decimal) {
+        let zero = (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
+
         if candles.len() < 20 {
-            return Decimal::ZERO;
+            return zero;
         }
 
         let recent = &candles[candles.len() - 20..];
         let closes: Vec<Decimal> = recent.iter().map(|k| k.close).collect();
 
-        // SMA
+        // SMA (중간 밴드)
         let sum: Decimal = closes.iter().sum();
         let sma = sum / dec!(20);
 
         if sma.is_zero() {
-            return Decimal::ZERO;
+            return zero;
         }
 
         // 표준편차 (f64로 계산 후 Decimal 변환 - 제곱근 계산 위해)
@@ -205,10 +213,17 @@ impl StructuralFeaturesCalculator {
             .sum::<f64>()
             / 20.0;
         let std_dev = variance.sqrt();
+        let std_dev_dec = Decimal::from_f64_retain(std_dev).unwrap_or(Decimal::ZERO);
+
+        // 볼린저 밴드 (2표준편차)
+        let upper = sma + dec!(2) * std_dev_dec;
+        let lower = sma - dec!(2) * std_dev_dec;
 
         // 밴드 폭 (%)
         let width = (std_dev * 2.0 * 2.0) / sma_f64 * 100.0;
-        Decimal::from_f64_retain(width.clamp(0.0, 50.0)).unwrap_or(Decimal::ZERO)
+        let width_dec = Decimal::from_f64_retain(width.clamp(0.0, 50.0)).unwrap_or(Decimal::ZERO);
+
+        (upper, sma, lower, width_dec)
     }
 
     /// RSI 14일 계산.

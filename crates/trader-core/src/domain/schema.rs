@@ -107,6 +107,14 @@ pub struct FieldSchema {
     /// 표시 순서 (낮을수록 먼저 표시)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<i32>,
+
+    /// 섹션 ID (같은 섹션의 필드들을 UI에서 그룹화)
+    ///
+    /// 예: "indicator" → "기술적 지표" 섹션으로 그룹화
+    /// 예: "filter" → "필터 조건" 섹션으로 그룹화
+    /// 예: "asset" → "자산 선택" 섹션으로 그룹화
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 impl Default for FieldSchema {
@@ -124,6 +132,7 @@ impl Default for FieldSchema {
             required: false,
             hidden: false,
             order: None,
+            section: None,
         }
     }
 }

@@ -69,6 +69,15 @@ pub struct StructuralFeatures {
     /// 낮을수록 변동성 수축 (돌파 준비)
     pub bb_width: f64,
 
+    /// 볼린저 밴드 상단
+    pub bb_upper: f64,
+
+    /// 볼린저 밴드 중간 (SMA20)
+    pub bb_middle: f64,
+
+    /// 볼린저 밴드 하단
+    pub bb_lower: f64,
+
     /// RSI 14일 (0 ~ 100)
     pub rsi: f64,
 }
@@ -120,20 +129,24 @@ impl StructuralFeatures {
             0.0 // MA20이 0이면 이격도 0으로 처리
         };
 
-        // 2. 볼린저 밴드 폭 계산
+        // 2. 볼린저 밴드 계산 (상/중/하 + 폭)
         let bb = engine.bollinger_bands(&closes, BollingerBandsParams::default())?;
         let last_bb = bb
             .last()
             .ok_or_else(|| IndicatorError::CalculationError("볼린저 밴드 계산 실패".to_string()))?;
 
-        let bb_width = match (last_bb.upper, last_bb.lower, last_bb.middle) {
+        let (bb_width, bb_upper, bb_middle, bb_lower) = match (last_bb.upper, last_bb.lower, last_bb.middle) {
             (Some(upper), Some(lower), Some(middle)) if middle > Decimal::ZERO => {
-                ((upper - lower) / middle * Decimal::from(100))
+                let width = ((upper - lower) / middle * Decimal::from(100))
                     .to_string()
                     .parse::<f64>()
-                    .unwrap_or(0.0)
+                    .unwrap_or(0.0);
+                let upper_f = upper.to_string().parse::<f64>().unwrap_or(0.0);
+                let middle_f = middle.to_string().parse::<f64>().unwrap_or(0.0);
+                let lower_f = lower.to_string().parse::<f64>().unwrap_or(0.0);
+                (width, upper_f, middle_f, lower_f)
             }
-            _ => 0.0,
+            _ => (0.0, 0.0, 0.0, 0.0),
         };
 
         // 3. RSI 계산
@@ -157,6 +170,9 @@ impl StructuralFeatures {
             range_pos,
             dist_ma20,
             bb_width,
+            bb_upper,
+            bb_middle,
+            bb_lower,
             rsi,
         })
     }
@@ -412,6 +428,9 @@ mod tests {
             low_trend: 0.3,   // 조건 충족
             vol_quality: 0.2, // 조건 충족
             bb_width: 2.5,    // 조건 충족
+            bb_upper: 105.0,
+            bb_middle: 100.0,
+            bb_lower: 95.0,
             range_pos: 0.5,
             dist_ma20: 0.0,
             rsi: 50.0,
@@ -424,6 +443,9 @@ mod tests {
             low_trend: 0.1, // 조건 미충족 (< 0.2)
             vol_quality: 0.2,
             bb_width: 2.5,
+            bb_upper: 105.0,
+            bb_middle: 100.0,
+            bb_lower: 95.0,
             range_pos: 0.5,
             dist_ma20: 0.0,
             rsi: 50.0,

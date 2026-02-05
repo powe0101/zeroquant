@@ -8,17 +8,66 @@
 
 ### Added
 
-#### 🌐 네이버 금융 크롤러 (Naver Finance Crawler)
+#### 🌐 데이터 프로바이더 확장
+
+**네이버 금융 크롤러 (국내)**
 - **NaverFinanceFetcher** (`trader-data/src/provider/naver.rs`)
   - 국내 주식 펀더멘털 데이터 크롤링
   - 시가총액, PER, PBR, ROE, EPS, BPS, 배당수익률
   - 52주 최고/최저, 섹터 정보
   - scraper 크레이트 기반 HTML 파싱
   - Rate limiting (기본 300ms 딜레이)
-- **Collector 통합**
+
+**Yahoo Fundamental Provider (해외)** (신규)
+- **YahooFundamentalFetcher** (`trader-data/src/provider/yahoo_fundamental.rs` - 555줄)
+  - 글로벌 주식 펀더멘털 데이터 수집
+  - **밸류에이션**: PER(trailing/forward), PBR, PSR, EPS, BPS
+  - **시장 정보**: 시가총액, 52주 고저, 평균 거래량
+  - **수익성**: ROE, ROA, 영업이익률, 순이익률, 매출총이익률
+  - **성장성**: 매출성장률, 이익성장률
+  - **기타**: 섹터, 산업, 베타, 부채비율
+
+**Collector 통합**
   - `NAVER_FUNDAMENTAL_ENABLED` 환경변수 지원
   - `NAVER_REQUEST_DELAY_MS` 설정 (기본: 300ms)
   - Yahoo Finance 대비 수집 속도 개선 (3.5시간 → 2시간 예상)
+
+#### 🛠️ CLI 도구 확장
+
+**Strategy Test CLI** (`trader-cli/src/commands/strategy_test.rs` - 661줄)
+- UI와 동일한 환경에서 전략을 테스트하고 상세 진단 정보 출력
+- **UI 동일 흐름**: JSON config → StrategyContext 주입 → 전략 초기화 → 백테스트
+- **상세 진단**: 신호 발생 여부, 거래 내역, 조건 평가 결과
+- **거래 분석**: 진입/청산 시점, 가격, PnL 상세
+- **문제 원인 분석**: 신호 미발생 시 원인 추적
+- **다중 심볼 지원**: 로테이션/자산배분 전략 테스트
+- 사용 예시:
+  ```bash
+  # RSI 전략 테스트 (단일 심볼)
+  trader strategy-test --strategy rsi --symbol 005930 --market KR
+
+  # 다중 심볼 테스트 (로테이션 전략)
+  trader strategy-test --strategy rotation --symbols "SPY,QQQ,IWM" --market US
+
+  # JSON config로 테스트
+  trader strategy-test --strategy grid --config '{"ticker":"005930","grid_count":10}'
+  ```
+
+#### 🧩 전략 공통 모듈 확장
+
+**Exit Config 프리셋** (`strategies/common/exit_config.rs` - 130줄 추가)
+- 전략 유형별 표준화된 청산 설정 프리셋:
+  - `for_day_trading()`: 좁은 손절(2%), 익절(4%), 반대 신호 청산
+  - `for_mean_reversion()`: 중간 손절(3%), 넓은 익절(6%)
+  - `for_grid_trading()`: 손절 비활성화, 익절만(3%)
+  - `for_rebalancing()`: 손절/익절 비활성화 (리밸런싱으로 관리)
+  - `for_leverage_etf()`: 필수 손절(5%), 넓은 익절(10%), 트레일링 스탑
+
+**Global Score Utils** (`strategies/common/global_score_utils.rs` - 75줄)
+- `get_score()`: 종목별 글로벌 스코어 조회
+- `select_top_tickers()`: 스코어 기준 상위 종목 선택
+- `calculate_score_weight()`: 스코어 기반 포지션 가중치 계산
+- `adjust_strength_by_score()`: 스코어로 신호 강도 조정
 
 #### 🧪 전략 테스트 확장 (16개 신규)
 - **asset_allocation_test.rs** - 자산배분 전략 테스트
@@ -88,6 +137,35 @@
 - `06_user_settings.sql` - 관심종목, 스크리닝 프리셋, KIS 토큰 (기존 13~17 통합)
 - `migrations/README.md` - 마이그레이션 가이드 업데이트
 
+#### 📚 OpenAPI 문서화 대폭 확장
+
+**openapi.rs** (+124줄)
+- 모든 주요 API 라우트에 OpenAPI 3.0 어노테이션 추가
+- Swagger UI (`/swagger-ui`)에서 인터랙티브 API 문서 제공
+- 요청/응답 스키마 자동 문서화 (ToSchema derive)
+
+**라우트별 문서화**:
+- `analytics/` - 차트, 지표, 성과, 동기화 API
+- `backtest/` - 백테스트 실행 및 결과 조회
+- `journal.rs` - 매매일지 CRUD
+- `market.rs` - 시장 데이터 조회
+- `orders.rs` - 주문 관리
+- `portfolio.rs` - 포트폴리오 조회
+- `strategies.rs` - 전략 CRUD
+
+#### 🔄 전략 공통 모듈 적용
+
+**Exit Config 프리셋 적용** (16개 전략)
+- `day_trading.rs`, `sector_vb.rs`, `momentum_surge.rs` → `for_day_trading()`
+- `mean_reversion.rs`, `range_trading.rs`, `candle_pattern.rs` → `for_mean_reversion()`
+- `infinity_bot.rs` → `for_grid_trading()`
+- `asset_allocation.rs`, `rotation.rs`, `pension_bot.rs` → `for_rebalancing()`
+- `us_3x_leverage.rs` → `for_leverage_etf()`
+
+**Global Score Utils 통합**
+- 로테이션/자산배분 전략에서 GlobalScore 기반 종목 선택 적용
+- 스코어 가중치 기반 포지션 사이징 통합
+
 #### 🧹 Clippy 경고 전체 수정 (50+ → 0)
 - `manual_clamp` 패턴 수정: `.max(a).min(b)` → `.clamp(a, b)`
 - `should_implement_trait` 수정: `from_str` → `parse` 메서드 이름 변경
@@ -100,6 +178,8 @@
 - **CLAUDE.md** - v0.6.0 → v0.7.0 업데이트
 - **docs/todo.md** - 전략 리팩토링 진행 상황 반영
 - **docs/prd.md** - 네이버 크롤러 요구사항 추가
+- **CHANGELOG.md** - Yahoo Fundamental, Strategy Test CLI 추가
+- **README.md** - 전략 개발 예제 현행화
 
 ### Fixed
 
@@ -1388,12 +1468,12 @@
 
 ## 로드맵
 
-### [0.6.0] - 예정
+### [0.8.0] - 예정
 - 추가 거래소 통합 (Coinbase, 키움증권)
 - WebSocket 이벤트 브로드캐스트 완성
 - 성능 최적화 및 부하 테스트
 
-### [0.7.0] - 예정
+### [0.9.0] - 예정
 - 실시간 알림 대시보드
 - 포트폴리오 리밸런싱 자동화
 - 다중 계좌 지원

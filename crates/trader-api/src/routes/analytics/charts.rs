@@ -24,12 +24,15 @@ use super::types::{
 };
 
 /// 자산 곡선 데이터 조회.
-///
-/// GET /api/v1/analytics/equity-curve
-///
-/// # Query Parameters
-/// - `period`: 기간 (1w, 1m, 3m, 6m, 1y, ytd, all)
-/// - `credential_id`: 자격증명 ID (선택적, 특정 계좌만 조회)
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/equity-curve",
+    tag = "analytics",
+    params(PeriodQuery),
+    responses(
+        (status = 200, description = "자산 곡선 조회 성공", body = EquityCurveResponse)
+    )
+)]
 pub async fn get_equity_curve(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PeriodQuery>,
@@ -131,8 +134,15 @@ pub async fn get_equity_curve(
 }
 
 /// CAGR 차트 데이터 조회.
-///
-/// GET /api/v1/analytics/charts/cagr
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/charts/cagr",
+    tag = "analytics",
+    params(ChartQuery),
+    responses(
+        (status = 200, description = "CAGR 차트 조회 성공", body = ChartResponse)
+    )
+)]
 pub async fn get_cagr_chart(
     State(_state): State<Arc<AppState>>,
     Query(query): Query<ChartQuery>,
@@ -163,8 +173,15 @@ pub async fn get_cagr_chart(
 }
 
 /// MDD 차트 데이터 조회.
-///
-/// GET /api/v1/analytics/charts/mdd
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/charts/mdd",
+    tag = "analytics",
+    params(ChartQuery),
+    responses(
+        (status = 200, description = "MDD 차트 조회 성공", body = ChartResponse)
+    )
+)]
 pub async fn get_mdd_chart(
     State(_state): State<Arc<AppState>>,
     Query(query): Query<ChartQuery>,
@@ -195,8 +212,15 @@ pub async fn get_mdd_chart(
 }
 
 /// Drawdown 차트 데이터 조회.
-///
-/// GET /api/v1/analytics/charts/drawdown
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/charts/drawdown",
+    tag = "analytics",
+    params(ChartQuery),
+    responses(
+        (status = 200, description = "Drawdown 차트 조회 성공", body = ChartResponse)
+    )
+)]
 pub async fn get_drawdown_chart(
     State(_state): State<Arc<AppState>>,
     Query(query): Query<ChartQuery>,
@@ -227,8 +251,14 @@ pub async fn get_drawdown_chart(
 }
 
 /// 월별 수익률 히트맵 데이터 조회.
-///
-/// GET /api/v1/analytics/monthly-returns
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/monthly-returns",
+    tag = "analytics",
+    responses(
+        (status = 200, description = "월별 수익률 조회 성공", body = MonthlyReturnsResponse)
+    )
+)]
 pub async fn get_monthly_returns(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // DB에서 실제 데이터 조회 시도
     if let Some(db_pool) = &state.db_pool {

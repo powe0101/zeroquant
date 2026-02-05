@@ -47,12 +47,17 @@ export const Card: Component<CardProps> = (props) => {
 interface CardHeaderProps {
   children: JSX.Element
   className?: string
+  class?: string
   action?: JSX.Element
+  onClick?: () => void
 }
 
 export const CardHeader: Component<CardHeaderProps> = (props) => {
   return (
-    <div class={`flex items-center justify-between mb-4 ${props.className || ''}`}>
+    <div
+      class={`flex items-center justify-between mb-4 ${props.className || ''} ${props.class || ''}`}
+      onClick={props.onClick}
+    >
       <div class="flex-1">{props.children}</div>
       {props.action && <div class="ml-4">{props.action}</div>}
     </div>

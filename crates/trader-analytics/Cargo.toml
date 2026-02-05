@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 trader-core = { path = "../trader-core" }
-trader-strategy = { path = "../trader-strategy" }
+trader-strategy = { path = "../trader-strategy", optional = true }
 trader-data = { path = "../trader-data" }
 
 # Unique identifiers
@@ -48,9 +48,14 @@ async-trait = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
+# OpenAPI (optional)
+utoipa = { workspace = true, optional = true }
+
 [features]
 default = []
+backtest = ["trader-strategy"]  # Backtest 기능 (Strategy 의존성 필요)
 ml = ["ort"]  # ML 추론 기능 (ONNX Runtime 필요)
+utoipa-support = ["utoipa"]  # OpenAPI 스키마 생성
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

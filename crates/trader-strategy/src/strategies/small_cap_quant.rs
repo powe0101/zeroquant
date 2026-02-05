@@ -35,7 +35,7 @@ use tracing::{debug, info};
 
 use crate::traits::Strategy;
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
+use trader_core::{Kline, MarketData, MarketDataType, Order, Position, Side, Signal, Timeframe};
 use trader_strategy_macro::StrategyConfig;
 
 use crate::strategies::common::ExitConfig;
@@ -51,47 +51,47 @@ use crate::strategies::common::ExitConfig;
 pub struct SmallCapQuantConfig {
     /// 선택할 종목 수
     #[serde(default = "default_target_count")]
-    #[schema(label = "선택 종목 수", min = 5, max = 50)]
+    #[schema(label = "선택 종목 수", min = 5, max = 50, section = "sizing")]
     pub target_count: usize,
 
     /// 이동평균 기간
     #[serde(default = "default_ma_period")]
-    #[schema(label = "이동평균 기간", min = 5, max = 200)]
+    #[schema(label = "이동평균 기간", min = 5, max = 200, section = "indicator")]
     pub ma_period: usize,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "총 투자 금액", min = 1000000, max = 1000000000)]
+    #[schema(label = "총 투자 금액", min = 1000000, max = 1000000000, section = "asset")]
     pub total_amount: Decimal,
 
     /// 최소 시가총액 (억원)
     #[serde(default = "default_min_market_cap")]
-    #[schema(label = "최소 시가총액 (억원)", min = 10, max = 1000)]
+    #[schema(label = "최소 시가총액 (억원)", min = 10, max = 1000, section = "filter")]
     pub min_market_cap: f64,
 
     /// 최소 ROE (%)
     #[serde(default = "default_min_roe")]
-    #[schema(label = "최소 ROE (%)", min = 0, max = 50)]
+    #[schema(label = "최소 ROE (%)", min = 0, max = 50, section = "filter")]
     pub min_roe: f64,
 
     /// 최소 PBR
     #[serde(default = "default_min_pbr")]
-    #[schema(label = "최소 PBR", min = 0.1, max = 5)]
+    #[schema(label = "최소 PBR", min = 0.1, max = 5, section = "filter")]
     pub min_pbr: f64,
 
     /// 최소 PER
     #[serde(default = "default_min_per")]
-    #[schema(label = "최소 PER", min = 1, max = 50)]
+    #[schema(label = "최소 PER", min = 1, max = 50, section = "filter")]
     pub min_per: f64,
 
     /// 기준 지수 티커 (기본: 코스닥150 ETF)
     #[serde(default = "default_index_ticker")]
-    #[schema(label = "기준 지수 티커")]
+    #[schema(label = "기준 지수 티커", section = "asset")]
     pub index_ticker: String,
 
     /// 최소 글로벌 스코어 (기본값: 60)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -140,7 +140,7 @@ impl Default for SmallCapQuantConfig {
             min_per: default_min_per(),
             index_ticker: default_index_ticker(),
             min_global_score: default_min_global_score(),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_momentum(),
         }
     }
 }
@@ -210,41 +210,21 @@ struct StockData {
     current_holdings: Decimal,
 }
 
-/// 지수 데이터.
-#[derive(Debug, Clone)]
+/// 지수 데이터 (현재 가격만 저장, 히스토리는 StrategyContext에서 가져옴).
+#[derive(Debug, Clone, Default)]
 struct IndexData {
-    prices: Vec<Decimal>,
     current_price: Decimal,
 }
 
 impl IndexData {
     fn new() -> Self {
         Self {
-            prices: Vec::new(),
             current_price: Decimal::ZERO,
         }
     }
 
-    fn add_price(&mut self, price: Decimal) {
+    fn update_price(&mut self, price: Decimal) {
         self.current_price = price;
-        self.prices.push(price);
-        if self.prices.len() > 50 {
-            self.prices.remove(0);
-        }
-    }
-
-    fn calculate_ma(&self, period: usize) -> Option<Decimal> {
-        if self.prices.len() < period {
-            return None;
-        }
-
-        let sum: Decimal = self.prices.iter().rev().take(period).sum();
-
-        Some(sum / Decimal::from(period))
-    }
-
-    fn is_above_ma(&self, period: usize) -> Option<bool> {
-        self.calculate_ma(period).map(|ma| self.current_price > ma)
     }
 }
 
@@ -306,6 +286,41 @@ impl SmallCapQuantStrategy {
         }
     }
 
+    // ========================================================================
+    // StrategyContext 연동 헬퍼
+    // ========================================================================
+
+    /// StrategyContext에서 지수 klines 가져오기
+    fn get_index_klines(&self) -> Vec<Kline> {
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return vec![],
+        };
+        ctx_lock.get_klines(&config.index_ticker, Timeframe::D1).to_vec()
+    }
+
+    /// 지수가 MA 위에 있는지 확인 (StrategyContext 기반)
+    fn is_index_above_ma(&self, period: usize) -> Option<bool> {
+        let klines = self.get_index_klines();
+        if klines.len() < period {
+            return None;
+        }
+
+        let sum: Decimal = klines.iter().rev().take(period).map(|k| k.close).sum();
+        let ma = sum / Decimal::from(period);
+        let current = klines.last()?.close;
+
+        Some(current > ma)
+    }
+
     /// 시장 상태 업데이트.
     fn update_market_state(&mut self) {
         let config = match self.config.as_ref() {
@@ -315,7 +330,7 @@ impl SmallCapQuantStrategy {
 
         self.prev_market_state = self.current_market_state;
 
-        match self.index_data.is_above_ma(config.ma_period) {
+        match self.is_index_above_ma(config.ma_period) {
             Some(true) => self.current_market_state = MarketState::AboveMA,
             Some(false) => self.current_market_state = MarketState::BelowMA,
             None => self.current_market_state = MarketState::Unknown,
@@ -530,9 +545,9 @@ impl Strategy for SmallCapQuantStrategy {
             _ => return Ok(vec![]),
         };
 
-        // 기준 지수 데이터 업데이트
+        // 기준 지수 데이터 업데이트 (StrategyContext에서 klines 조회하므로 현재가만 저장)
         if ticker_str == config.index_ticker {
-            self.index_data.add_price(close);
+            self.index_data.update_price(close);
             self.update_market_state();
 
             debug!(
@@ -714,21 +729,6 @@ mod tests {
         assert!(!small_stock.passes_filter(&config));
     }
 
-    #[test]
-    fn test_index_ma_calculation() {
-        let mut index = IndexData::new();
-
-        // 20개 가격 추가
-        for i in 1..=25 {
-            index.add_price(Decimal::from(100 + i));
-        }
-
-        let ma = index.calculate_ma(20);
-        assert!(ma.is_some());
-
-        // 현재가가 MA 위인지 확인
-        assert!(index.is_above_ma(20).unwrap());
-    }
 }
 
 // 전략 레지스트리에 자동 등록

@@ -25,14 +25,14 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use trader_strategy_macro::StrategyConfig;
-use crate::strategies::common::ExitConfig;
-use std::collections::VecDeque;
+use crate::strategies::common::{adjust_strength_by_score, ExitConfig};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::{
     domain::{MacroRisk, MarketRegime, StrategyContext},
-    MarketData, MarketDataType, Order, Position, Side, Signal, SignalType,
+    types::Timeframe,
+    Kline, MarketData, Order, Position, RouteState, Side, Signal, SignalType,
 };
 
 // ============================================================================
@@ -60,33 +60,42 @@ pub enum MomentumPowerMarket {
 pub struct MomentumPowerConfig {
     /// 시장 타입 (KR/US)
     #[serde(default)]
-    #[schema(label = "시장 타입")]
+    #[schema(label = "시장 타입", section = "asset")]
     pub market: MomentumPowerMarket,
 
     /// TIP 이동평균 기간 (기본: 200일 = 약 10개월)
     #[serde(default = "default_tip_ma_period")]
-    #[schema(label = "TIP MA 기간", min = 50, max = 300)]
+    #[schema(label = "TIP MA 기간", min = 50, max = 300, default = 200, section = "indicator")]
     pub tip_ma_period: usize,
 
     /// 공격 자산 모멘텀 확인 기간 (기본: 5일)
     #[serde(default = "default_momentum_period")]
-    #[schema(label = "모멘텀 확인 기간", min = 1, max = 30)]
+    #[schema(label = "모멘텀 확인 기간", min = 1, max = 30, default = 5, section = "indicator")]
     pub momentum_period: usize,
 
     /// 리밸런싱 간격 (일) - 기본: 30일 (월간)
     #[serde(default = "default_rebalance_days")]
-    #[schema(label = "리밸런싱 간격 (일)", min = 1, max = 90)]
+    #[schema(label = "리밸런싱 간격 (일)", min = 1, max = 90, default = 30, section = "timing")]
     pub rebalance_days: u32,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
     #[serde(default)]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
+
+    /// RouteState 필터 사용 여부 (기본값: true)
+    #[serde(default = "default_use_route_filter")]
+    #[schema(label = "RouteState 필터 사용", default = true, section = "filter")]
+    pub use_route_filter: bool,
+}
+
+fn default_use_route_filter() -> bool {
+    true
 }
 
 fn default_tip_ma_period() -> usize {
@@ -110,7 +119,8 @@ impl Default for MomentumPowerConfig {
             momentum_period: default_momentum_period(),
             rebalance_days: default_rebalance_days(),
             min_global_score: default_min_global_score(),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_momentum(),
+            use_route_filter: default_use_route_filter(),
         }
     }
 }
@@ -209,11 +219,6 @@ pub struct MomentumPowerStrategy {
     config: Option<MomentumPowerConfig>,
     state: MomentumPowerState,
     context: Option<Arc<RwLock<StrategyContext>>>,
-    /// TIP 가격 히스토리
-    tip_prices: VecDeque<Decimal>,
-    /// 공격 자산 가격 히스토리
-    attack_prices: VecDeque<Decimal>,
-    initialized: bool,
 }
 
 impl MomentumPowerStrategy {
@@ -222,10 +227,35 @@ impl MomentumPowerStrategy {
             config: None,
             state: MomentumPowerState::default(),
             context: None,
-            tip_prices: VecDeque::new(),
-            attack_prices: VecDeque::new(),
-            initialized: false,
         }
+    }
+
+    // ========================================================================
+    // StrategyContext 헬퍼
+    // ========================================================================
+
+    /// 특정 티커의 klines 가져오기
+    fn get_klines(&self, ticker: &str) -> Vec<Kline> {
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return vec![],
+        };
+        ctx_lock.get_klines(ticker, Timeframe::D1).to_vec()
+    }
+
+    /// 충분한 데이터가 있는지 확인
+    fn has_sufficient_data(&self) -> bool {
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return false,
+        };
+        let assets = Assets::for_market(config.market);
+        let tip_klines = self.get_klines(assets.indicator);
+        tip_klines.len() >= config.tip_ma_period
     }
 
     // ========================================================================
@@ -244,6 +274,44 @@ impl MomentumPowerStrategy {
         let ctx = self.context.as_ref()?;
         let ctx_lock = ctx.try_read().ok()?;
         ctx_lock.get_market_regime(ticker).copied()
+    }
+
+    /// RouteState 확인
+    fn check_route_state(&self, ticker: &str) -> bool {
+        let config = match &self.config {
+            Some(c) => c,
+            None => return true,
+        };
+
+        if !config.use_route_filter {
+            return true;
+        }
+
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return true,
+        };
+
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return true,
+        };
+
+        if let Some(route) = ctx_lock.get_route_state(ticker) {
+            match route {
+                RouteState::Attack | RouteState::Armed => true,
+                RouteState::Neutral => {
+                    debug!(ticker, ?route, "RouteState Neutral - 진입 보류");
+                    false
+                }
+                RouteState::Wait | RouteState::Overheat => {
+                    debug!(ticker, ?route, "RouteState 비호의적 - 진입 거부");
+                    false
+                }
+            }
+        } else {
+            true // RouteState 없으면 통과
+        }
     }
 
     /// GlobalScore 확인
@@ -277,20 +345,40 @@ impl MomentumPowerStrategy {
         true
     }
 
+    /// GlobalScore 기반 신호 강도 계산.
+    fn get_adjusted_strength(&self, ticker: &str, base_strength: f64) -> f64 {
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return base_strength,
+        };
+
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return base_strength,
+        };
+
+        if let Some(score) = ctx_lock.get_global_score(ticker) {
+            adjust_strength_by_score(base_strength, Some(score.overall_score))
+        } else {
+            base_strength
+        }
+    }
+
     // ========================================================================
     // 핵심 로직
     // ========================================================================
 
-    /// 이동평균 계산
-    fn calculate_ma(prices: &VecDeque<Decimal>, period: usize) -> Option<Decimal> {
-        if prices.len() < period {
+    /// 이동평균 계산 (klines 기반)
+    fn calculate_ma(klines: &[Kline], period: usize) -> Option<Decimal> {
+        if klines.len() < period {
             return None;
         }
-        let sum: Decimal = prices.iter().take(period).sum();
+        // 최신 데이터부터 period개 사용
+        let sum: Decimal = klines.iter().rev().take(period).map(|k| k.close).sum();
         Some(sum / Decimal::from(period))
     }
 
-    /// 시장 안전 여부 (TIP > TIP MA)
+    /// 시장 안전 여부 (TIP > TIP MA, StrategyContext 기반)
     fn is_market_safe(&self) -> bool {
         let config = match &self.config {
             Some(c) => c,
@@ -305,26 +393,33 @@ impl MomentumPowerStrategy {
             }
         }
 
+        // TIP 데이터 가져오기
+        let assets = Assets::for_market(config.market);
+        let tip_klines = self.get_klines(assets.indicator);
+
         // TIP MA 비교
-        if let Some(ma) = Self::calculate_ma(&self.tip_prices, config.tip_ma_period) {
-            if let Some(current) = self.tip_prices.front() {
-                return *current > ma;
+        if let Some(ma) = Self::calculate_ma(&tip_klines, config.tip_ma_period) {
+            if let Some(current) = tip_klines.last() {
+                return current.close > ma;
             }
         }
 
         false
     }
 
-    /// 모멘텀 확인 (공격 자산 > 공격 자산 MA)
+    /// 모멘텀 확인 (공격 자산 > 공격 자산 MA, StrategyContext 기반)
     fn has_momentum(&self) -> bool {
         let config = match &self.config {
             Some(c) => c,
             None => return false,
         };
 
-        if let Some(ma) = Self::calculate_ma(&self.attack_prices, config.momentum_period) {
-            if let Some(current) = self.attack_prices.front() {
-                return *current > ma;
+        let assets = Assets::for_market(config.market);
+        let attack_klines = self.get_klines(assets.attack);
+
+        if let Some(ma) = Self::calculate_ma(&attack_klines, config.momentum_period) {
+            if let Some(current) = attack_klines.last() {
+                return current.close > ma;
             }
         }
 
@@ -425,14 +520,11 @@ impl Strategy for MomentumPowerStrategy {
             market = ?cfg.market,
             tip_ma = cfg.tip_ma_period,
             rebalance_days = cfg.rebalance_days,
-            "Snow 전략 초기화"
+            "Momentum Power 전략 초기화"
         );
 
         self.config = Some(cfg);
         self.state = MomentumPowerState::default();
-        self.tip_prices.clear();
-        self.attack_prices.clear();
-        self.initialized = false;
 
         Ok(())
     }
@@ -442,7 +534,7 @@ impl Strategy for MomentumPowerStrategy {
         data: &MarketData,
     ) -> Result<Vec<Signal>, Box<dyn std::error::Error + Send + Sync>> {
         let config = match &self.config {
-            Some(c) => c,
+            Some(c) => c.clone(),
             None => return Ok(vec![]),
         };
 
@@ -455,39 +547,14 @@ impl Strategy for MomentumPowerStrategy {
             return Ok(vec![]);
         }
 
-        // 가격 추출
-        let price = match &data.data {
-            MarketDataType::Kline(k) => k.close,
-            MarketDataType::Ticker(t) => t.last,
-            MarketDataType::Trade(t) => t.price,
-            _ => return Ok(vec![]),
-        };
-
-        // 가격 히스토리 업데이트
-        if ticker == assets.indicator {
-            self.tip_prices.push_front(price);
-            if self.tip_prices.len() > 250 {
-                self.tip_prices.pop_back();
-            }
-            self.state.tip_ma = Self::calculate_ma(&self.tip_prices, config.tip_ma_period);
+        // StrategyContext에 충분한 데이터가 있는지 확인
+        if !self.has_sufficient_data() {
+            return Ok(vec![]);
         }
 
-        if ticker == assets.attack {
-            self.attack_prices.push_front(price);
-            if self.attack_prices.len() > 50 {
-                self.attack_prices.pop_back();
-            }
-        }
-
-        // 초기화 체크
-        if !self.initialized {
-            if self.tip_prices.len() >= config.tip_ma_period {
-                self.initialized = true;
-                info!("Snow 전략 초기화 완료");
-            } else {
-                return Ok(vec![]);
-            }
-        }
+        // TIP MA 업데이트 (StrategyContext 기반)
+        let tip_klines = self.get_klines(assets.indicator);
+        self.state.tip_ma = Self::calculate_ma(&tip_klines, config.tip_ma_period);
 
         // 공격 자산에서만 신호 생성
         if ticker != assets.attack {
@@ -512,14 +579,20 @@ impl Strategy for MomentumPowerStrategy {
             return Ok(vec![]);
         }
 
+        // RouteState 체크
+        if !self.check_route_state(target_ticker) {
+            return Ok(vec![]);
+        }
+
         // 모드 변경 또는 자산 변경 시 신호 생성
         if new_mode != self.state.mode || self.state.current_asset.as_deref() != Some(&target) {
             self.state.mode = new_mode;
             self.state.last_rebalance = Some(now);
             self.state.current_asset = Some(target.clone());
 
-            let signal = Signal::new("snow", target.clone(), Side::Buy, SignalType::Entry)
-                .with_strength(1.0)
+            let strength = self.get_adjusted_strength(&target, 1.0);
+            let signal = Signal::new("momentum_power", target.clone(), Side::Buy, SignalType::Entry)
+                .with_strength(strength)
                 .with_metadata("mode", json!(format!("{:?}", new_mode)))
                 .with_metadata("tip_ma", json!(self.state.tip_ma.map(|d| d.to_string())))
                 .with_metadata("market_safe", json!(self.is_market_safe()))
@@ -563,8 +636,7 @@ impl Strategy for MomentumPowerStrategy {
     }
 
     async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Snow 전략 종료");
-        self.initialized = false;
+        info!("Momentum Power 전략 종료");
         Ok(())
     }
 
@@ -574,12 +646,22 @@ impl Strategy for MomentumPowerStrategy {
     }
 
     fn get_state(&self) -> Value {
+        let config = self.config.as_ref();
+        let tip_klines_count = config.map(|c| {
+            let assets = Assets::for_market(c.market);
+            self.get_klines(assets.indicator).len()
+        }).unwrap_or(0);
+        let attack_klines_count = config.map(|c| {
+            let assets = Assets::for_market(c.market);
+            self.get_klines(assets.attack).len()
+        }).unwrap_or(0);
+
         json!({
             "config": self.config,
             "state": self.state,
-            "initialized": self.initialized,
-            "tip_prices_count": self.tip_prices.len(),
-            "attack_prices_count": self.attack_prices.len(),
+            "has_context": self.context.is_some(),
+            "tip_klines_count": tip_klines_count,
+            "attack_klines_count": attack_klines_count,
         })
     }
 }
@@ -591,8 +673,8 @@ impl Strategy for MomentumPowerStrategy {
 use crate::register_strategy;
 
 register_strategy! {
-    id: "snow",
-    aliases: ["momentum_power", "snow_us", "snow_kr"],
+    id: "momentum_power",
+    aliases: ["snow", "snow_us", "snow_kr"],
     name: "Momentum Power",
     description: "시장 안전도 기반 공격/방어 자산 전환 전략",
     timeframe: "1d",

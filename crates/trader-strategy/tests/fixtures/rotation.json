@@ -1,0 +1,61 @@
+{
+  "description": "로테이션 전략 회귀 테스트 파라미터",
+  "strategies": [
+    {
+      "strategy_id": "sector_momentum",
+      "name": "섹터 모멘텀",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "lookback_period": 5,
+        "rebalance_period": "weekly",
+        "top_n": 1,
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "stock_rotation",
+      "name": "종목 로테이션",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "lookback_period": 5,
+        "rebalance_period": "weekly",
+        "top_n": 1,
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    },
+    {
+      "strategy_id": "market_cap_top",
+      "name": "시총 상위",
+      "symbols": ["005930"],
+      "market": "KR",
+      "config": {
+        "tickers": ["005930"],
+        "amount": "10000000",
+        "cash_ticker": "005930",
+        "rebalance_period": "weekly",
+        "top_n": 1,
+        "rebalance_threshold": "1.0"
+      },
+      "expected": {
+        "initialization": "success",
+        "min_trades": 2
+      }
+    }
+  ]
+}

@@ -24,13 +24,13 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::{
     domain::{MarketRegime, RouteState, StrategyContext},
-    MarketData, MarketDataType, Order, Position, Side, Signal, SignalType,
+    types::Timeframe,
+    Kline, MarketData, MarketDataType, Order, Position, Side, Signal, SignalType,
 };
 
 // ============================================================================
@@ -47,37 +47,37 @@ use trader_core::{
 )]
 pub struct RangeTradingConfig {
     /// 대상 티커
-    #[schema(label = "대상 종목")]
+    #[schema(label = "대상 종목", section = "asset")]
     pub ticker: String,
 
     /// 구간 분할 수 (기본: 15)
     #[serde(default = "default_div_num")]
-    #[schema(label = "구간 분할 수", min = 5, max = 50)]
+    #[schema(label = "구간 분할 수", min = 5, max = 50, section = "indicator")]
     pub div_num: usize,
 
     /// 구간 계산 기간 (기본: 20일)
     #[serde(default = "default_target_period")]
-    #[schema(label = "구간 계산 기간 (일)", min = 5, max = 100)]
+    #[schema(label = "구간 계산 기간 (일)", min = 5, max = 100, section = "indicator")]
     pub target_period: usize,
 
     /// MA 필터 사용 여부
     #[serde(default = "default_use_ma_filter")]
-    #[schema(label = "MA 필터 사용")]
+    #[schema(label = "MA 필터 사용", section = "filter")]
     pub use_ma_filter: bool,
 
     /// 매수 MA 기간 (기본: 20)
     #[serde(default = "default_buy_ma_period")]
-    #[schema(label = "매수 MA 기간", min = 5, max = 60)]
+    #[schema(label = "매수 MA 기간", min = 5, max = 60, section = "indicator")]
     pub buy_ma_period: usize,
 
     /// 매도 MA 기간 (기본: 5)
     #[serde(default = "default_sell_ma_period")]
-    #[schema(label = "매도 MA 기간", min = 3, max = 30)]
+    #[schema(label = "매도 MA 기간", min = 3, max = 30, section = "indicator")]
     pub sell_ma_period: usize,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, section = "filter")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -115,7 +115,7 @@ impl Default for RangeTradingConfig {
             buy_ma_period: default_buy_ma_period(),
             sell_ma_period: default_sell_ma_period(),
             min_global_score: default_min_global_score(),
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_mean_reversion(),
         }
     }
 }
@@ -150,13 +150,6 @@ pub struct RangeTradingStrategy {
     config: Option<RangeTradingConfig>,
     state: RangeTradingState,
     context: Option<Arc<RwLock<StrategyContext>>>,
-    /// 가격 히스토리
-    prices: VecDeque<Decimal>,
-    /// 고가 히스토리
-    highs: VecDeque<Decimal>,
-    /// 저가 히스토리
-    lows: VecDeque<Decimal>,
-    initialized: bool,
 }
 
 impl RangeTradingStrategy {
@@ -165,11 +158,39 @@ impl RangeTradingStrategy {
             config: None,
             state: RangeTradingState::default(),
             context: None,
-            prices: VecDeque::new(),
-            highs: VecDeque::new(),
-            lows: VecDeque::new(),
-            initialized: false,
         }
+    }
+
+    // ========================================================================
+    // StrategyContext 헬퍼
+    // ========================================================================
+
+    /// StrategyContext에서 klines 가져오기
+    fn get_klines(&self) -> Vec<Kline> {
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return vec![],
+        };
+        let ctx_lock = match ctx.try_read() {
+            Ok(l) => l,
+            Err(_) => return vec![],
+        };
+        ctx_lock.get_klines(&config.ticker, Timeframe::D1).to_vec()
+    }
+
+    /// 충분한 데이터가 있는지 확인
+    fn has_sufficient_data(&self) -> bool {
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => return false,
+        };
+        let klines = self.get_klines();
+        let required_len = config.target_period.max(config.buy_ma_period);
+        klines.len() >= required_len
     }
 
     // ========================================================================
@@ -260,29 +281,33 @@ impl RangeTradingStrategy {
     // 핵심 로직
     // ========================================================================
 
-    /// 이동평균 계산
+    /// 이동평균 계산 (StrategyContext 기반)
     fn calculate_ma(&self, period: usize) -> Option<Decimal> {
-        if self.prices.len() < period {
+        let klines = self.get_klines();
+        if klines.len() < period {
             return None;
         }
-        let sum: Decimal = self.prices.iter().take(period).sum();
+        // 최신 데이터부터 period개 사용
+        let sum: Decimal = klines.iter().rev().take(period).map(|k| k.close).sum();
         Some(sum / Decimal::from(period))
     }
 
-    /// 구간 정보 업데이트 (최근 target_period일 기준)
+    /// 구간 정보 업데이트 (최근 target_period일 기준, StrategyContext 기반)
     fn update_zone_info(&mut self) {
         let config = match &self.config {
-            Some(c) => c,
+            Some(c) => c.clone(),
             None => return,
         };
 
-        if self.highs.len() < config.target_period || self.lows.len() < config.target_period {
+        let klines = self.get_klines();
+        if klines.len() < config.target_period {
             return;
         }
 
         // 최근 target_period일의 최고가/최저가
-        let high = self.highs.iter().take(config.target_period).copied().max();
-        let low = self.lows.iter().take(config.target_period).copied().min();
+        let recent: Vec<&Kline> = klines.iter().rev().take(config.target_period).collect();
+        let high = recent.iter().map(|k| k.high).max();
+        let low = recent.iter().map(|k| k.low).min();
 
         if let (Some(h), Some(l)) = (high, low) {
             if h > l {
@@ -319,7 +344,7 @@ impl RangeTradingStrategy {
         Some(config.div_num)
     }
 
-    /// MA 필터 확인 (매수/매도)
+    /// MA 필터 확인 (매수/매도, StrategyContext 기반)
     fn check_ma_filter(&self, is_buy: bool) -> bool {
         let config = match &self.config {
             Some(c) => c,
@@ -330,8 +355,9 @@ impl RangeTradingStrategy {
             return true;
         }
 
-        let current_price = match self.prices.front() {
-            Some(p) => *p,
+        let klines = self.get_klines();
+        let current_price = match klines.last() {
+            Some(k) => k.close,
             None => return false,
         };
 
@@ -390,10 +416,6 @@ impl Strategy for RangeTradingStrategy {
 
         self.config = Some(cfg);
         self.state = RangeTradingState::default();
-        self.prices.clear();
-        self.highs.clear();
-        self.lows.clear();
-        self.initialized = false;
 
         Ok(())
     }
@@ -412,34 +434,16 @@ impl Strategy for RangeTradingStrategy {
             return Ok(vec![]);
         }
 
-        // 가격 추출
-        let (price, high, low) = match &data.data {
-            MarketDataType::Kline(k) => (k.close, k.high, k.low),
-            MarketDataType::Ticker(t) => (t.last, t.last, t.last),
-            MarketDataType::Trade(t) => (t.price, t.price, t.price),
+        // 가격 추출 (마켓 데이터에서)
+        let price = match &data.data {
+            MarketDataType::Kline(k) => k.close,
+            MarketDataType::Ticker(t) => t.last,
+            MarketDataType::Trade(t) => t.price,
             _ => return Ok(vec![]),
         };
 
-        // 히스토리 업데이트
-        self.prices.push_front(price);
-        self.highs.push_front(high);
-        self.lows.push_front(low);
-
-        if self.prices.len() > 100 {
-            self.prices.pop_back();
-            self.highs.pop_back();
-            self.lows.pop_back();
-        }
-
-        // 초기화 체크
-        let required_len = config.target_period.max(config.buy_ma_period);
-        if !self.initialized && self.prices.len() >= required_len {
-            self.initialized = true;
-            self.update_zone_info();
-            info!("StockGugan 초기화 완료");
-        }
-
-        if !self.initialized {
+        // StrategyContext에 충분한 데이터가 있는지 확인
+        if !self.has_sufficient_data() {
             return Ok(vec![]);
         }
 
@@ -567,7 +571,6 @@ impl Strategy for RangeTradingStrategy {
 
     async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(trades = self.state.trades_count, "StockGugan 종료");
-        self.initialized = false;
         Ok(())
     }
 
@@ -577,11 +580,12 @@ impl Strategy for RangeTradingStrategy {
     }
 
     fn get_state(&self) -> Value {
+        let klines_count = self.get_klines().len();
         json!({
             "config": self.config,
             "state": self.state,
-            "initialized": self.initialized,
-            "prices_count": self.prices.len(),
+            "has_context": self.context.is_some(),
+            "klines_count": klines_count,
         })
     }
 }
@@ -593,8 +597,8 @@ impl Strategy for RangeTradingStrategy {
 use crate::register_strategy;
 
 register_strategy! {
-    id: "stock_gugan",
-    aliases: ["range_trading", "구간매매"],
+    id: "range_trading",
+    aliases: ["stock_gugan", "구간매매"],
     name: "Range Trading",
     description: "구간분할 매매 전략 - 가격대 구간별 분할 매수/매도",
     timeframe: "1d",

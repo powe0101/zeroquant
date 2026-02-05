@@ -34,7 +34,7 @@
 use crate::strategies::common::rebalance::{
     PortfolioPosition, RebalanceCalculator, RebalanceConfig, RebalanceOrderSide, TargetAllocation,
 };
-use crate::strategies::common::ExitConfig;
+use crate::strategies::common::{adjust_strength_by_score, ExitConfig};
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Utc};
@@ -48,6 +48,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::domain::{RouteState, StrategyContext};
+use trader_core::types::Timeframe;
 use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, SignalType};
 
 // ============================================================================
@@ -323,10 +324,6 @@ fn default_sector_top_n() -> usize {
     3
 }
 
-fn default_use_momentum_filter() -> bool {
-    true
-}
-
 fn default_kr_sector_top_n() -> usize {
     2
 }
@@ -360,36 +357,36 @@ impl Default for RotationConfig {
 pub struct SectorMomentumConfig {
     /// 상위 N개 선택
     #[serde(default = "default_sector_top_n")]
-    #[schema(label = "상위 섹터 수", field_type = "integer", min = 1, max = 11, default = "3")]
+    #[schema(label = "상위 섹터 수", field_type = "integer", min = 1, max = 11, default = "3", section = "filter")]
     pub top_n: usize,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000")]
+    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000", section = "asset")]
     pub total_amount: Decimal,
 
     /// 리밸런싱 허용 오차 (%)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5", section = "filter")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 모멘텀 (이 이하면 투자 안 함)
     #[serde(default = "default_min_momentum")]
-    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0")]
+    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0", section = "indicator")]
     pub min_momentum: Decimal,
 
     /// 현금 보유 비율 (0.0 ~ 1.0)
     #[serde(default = "default_cash_reserve_rate")]
-    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0")]
+    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0", section = "filter")]
     pub cash_reserve_rate: Decimal,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60")]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60", section = "indicator")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -418,36 +415,36 @@ impl From<SectorMomentumConfig> for RotationConfig {
 pub struct SectorMomentumKrConfig {
     /// 상위 N개 선택
     #[serde(default = "default_kr_sector_top_n")]
-    #[schema(label = "상위 섹터 수", field_type = "integer", min = 1, max = 10, default = "2")]
+    #[schema(label = "상위 섹터 수", field_type = "integer", min = 1, max = 10, default = "2", section = "filter")]
     pub top_n: usize,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000")]
+    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000", section = "asset")]
     pub total_amount: Decimal,
 
     /// 리밸런싱 허용 오차 (%)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5", section = "filter")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 모멘텀
     #[serde(default = "default_min_momentum")]
-    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0")]
+    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0", section = "indicator")]
     pub min_momentum: Decimal,
 
     /// 현금 보유 비율
     #[serde(default = "default_cash_reserve_rate")]
-    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0")]
+    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0", section = "filter")]
     pub cash_reserve_rate: Decimal,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60")]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60", section = "indicator")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -476,36 +473,36 @@ impl From<SectorMomentumKrConfig> for RotationConfig {
 pub struct StockRotationConfig {
     /// 상위 N개 선택
     #[serde(default = "default_top_n")]
-    #[schema(label = "상위 종목 수", field_type = "integer", min = 1, max = 20, default = "5")]
+    #[schema(label = "상위 종목 수", field_type = "integer", min = 1, max = 20, default = "5", section = "filter")]
     pub top_n: usize,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000")]
+    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000", section = "asset")]
     pub total_amount: Decimal,
 
     /// 리밸런싱 허용 오차 (%)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5", section = "filter")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 모멘텀
     #[serde(default = "default_min_momentum")]
-    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0")]
+    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0", section = "indicator")]
     pub min_momentum: Decimal,
 
     /// 현금 보유 비율
     #[serde(default = "default_cash_reserve_rate")]
-    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0")]
+    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0", section = "filter")]
     pub cash_reserve_rate: Decimal,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60")]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60", section = "indicator")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -534,36 +531,36 @@ impl From<StockRotationConfig> for RotationConfig {
 pub struct StockRotationKrConfig {
     /// 상위 N개 선택
     #[serde(default = "default_top_n")]
-    #[schema(label = "상위 종목 수", field_type = "integer", min = 1, max = 20, default = "5")]
+    #[schema(label = "상위 종목 수", field_type = "integer", min = 1, max = 20, default = "5", section = "filter")]
     pub top_n: usize,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000")]
+    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000", section = "asset")]
     pub total_amount: Decimal,
 
     /// 리밸런싱 허용 오차 (%)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5", section = "filter")]
     pub rebalance_threshold: Decimal,
 
     /// 최소 모멘텀
     #[serde(default = "default_min_momentum")]
-    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0")]
+    #[schema(label = "최소 모멘텀", field_type = "number", min = -100, max = 100, default = "0", section = "indicator")]
     pub min_momentum: Decimal,
 
     /// 현금 보유 비율
     #[serde(default = "default_cash_reserve_rate")]
-    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0")]
+    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0", section = "filter")]
     pub cash_reserve_rate: Decimal,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60")]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60", section = "indicator")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -592,36 +589,36 @@ impl From<StockRotationKrConfig> for RotationConfig {
 pub struct MarketCapTopConfig {
     /// 상위 N개 선택
     #[serde(default = "default_market_cap_top_n")]
-    #[schema(label = "상위 종목 수", field_type = "integer", min = 1, max = 30, default = "10")]
+    #[schema(label = "상위 종목 수", field_type = "integer", min = 1, max = 30, default = "10", section = "filter")]
     pub top_n: usize,
 
     /// 총 투자 금액
     #[serde(default = "default_total_amount")]
-    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000")]
+    #[schema(label = "투자 금액", field_type = "number", min = 100000, max = 1000000000, default = "10000000", section = "asset")]
     pub total_amount: Decimal,
 
     /// 리밸런싱 허용 오차 (%)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5")]
+    #[schema(label = "리밸런싱 허용 오차 (%)", field_type = "number", min = 1, max = 20, default = "5", section = "filter")]
     pub rebalance_threshold: Decimal,
 
     /// 모멘텀 필터 사용 여부
     #[serde(default = "default_false")]
-    #[schema(label = "모멘텀 필터 사용", field_type = "boolean", default = "false")]
+    #[schema(label = "모멘텀 필터 사용", field_type = "boolean", default = "false", section = "filter")]
     pub use_momentum_filter: bool,
 
     /// 현금 보유 비율
     #[serde(default = "default_cash_reserve_rate")]
-    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0")]
+    #[schema(label = "현금 보유 비율", field_type = "number", min = 0, max = 1, default = "0", section = "filter")]
     pub cash_reserve_rate: Decimal,
 
     /// 최소 GlobalScore
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60")]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = "60", section = "indicator")]
     pub min_global_score: Decimal,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
-    #[serde(default)]
+    #[serde(default = "ExitConfig::for_rebalancing")]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
 }
@@ -826,10 +823,8 @@ struct AssetData {
     ticker: String,
     /// 자산명
     name: String,
-    /// 현재 가격
+    /// 현재 가격 (StrategyContext에서 업데이트)
     current_price: Decimal,
-    /// 가격 히스토리 (최신이 앞에)
-    prices: Vec<Decimal>,
     /// 모멘텀 스코어
     momentum_score: Decimal,
     /// 현재 보유 수량
@@ -842,114 +837,28 @@ impl AssetData {
             ticker,
             name,
             current_price: Decimal::ZERO,
-            prices: Vec::new(),
             momentum_score: Decimal::ZERO,
             holdings: Decimal::ZERO,
         }
     }
 
-    /// 가격 추가 (최신이 앞에).
-    fn add_price(&mut self, price: Decimal) {
+    /// 현재 가격 업데이트.
+    fn update_price(&mut self, price: Decimal) {
         self.current_price = price;
-        self.prices.insert(0, price);
-        // 최대 300일 보관
-        if self.prices.len() > 300 {
-            self.prices.truncate(300);
-        }
     }
 
-    /// 다중 기간 모멘텀 계산.
-    fn calculate_multi_period_momentum(
-        &mut self,
-        short_period: usize,
-        medium_period: usize,
-        long_period: usize,
-        short_weight: f64,
-        medium_weight: f64,
-        long_weight: f64,
-    ) {
-        if self.prices.is_empty() {
-            return;
-        }
-
-        let mut score = Decimal::ZERO;
-        let current = self.prices[0];
-
-        // 단기 모멘텀
-        if self.prices.len() > short_period {
-            let past = self.prices[short_period];
-            if past > Decimal::ZERO {
-                let ret = (current - past) / past;
-                score += ret * Decimal::from_f64_retain(short_weight).unwrap_or(dec!(0.5));
-            }
-        }
-
-        // 중기 모멘텀
-        if self.prices.len() > medium_period {
-            let past = self.prices[medium_period];
-            if past > Decimal::ZERO {
-                let ret = (current - past) / past;
-                score += ret * Decimal::from_f64_retain(medium_weight).unwrap_or(dec!(0.3));
-            }
-        }
-
-        // 장기 모멘텀
-        if self.prices.len() > long_period {
-            let past = self.prices[long_period];
-            if past > Decimal::ZERO {
-                let ret = (current - past) / past;
-                score += ret * Decimal::from_f64_retain(long_weight).unwrap_or(dec!(0.2));
-            }
-        }
-
+    /// 모멘텀 점수 업데이트 (GlobalScore에서 가져온 값).
+    fn update_momentum(&mut self, score: Decimal) {
         self.momentum_score = score;
     }
 
-    /// 평균 기간 모멘텀 계산.
-    fn calculate_average_momentum(&mut self, periods: &[usize]) {
-        if self.prices.is_empty() || periods.is_empty() {
-            return;
-        }
-
-        let current = self.prices[0];
-        let mut valid_count = 0;
-        let mut total_return = Decimal::ZERO;
-
-        for &period in periods {
-            if self.prices.len() > period {
-                let past = self.prices[period];
-                if past > Decimal::ZERO {
-                    let ret = (current - past) / past;
-                    total_return += ret;
-                    valid_count += 1;
-                }
-            }
-        }
-
-        if valid_count > 0 {
-            self.momentum_score = total_return / Decimal::from(valid_count);
-        }
-    }
-
-    /// 단일 기간 모멘텀 계산.
-    fn calculate_single_period_momentum(&mut self, period: usize) {
-        if self.prices.len() > period {
-            let current = self.prices[0];
-            let past = self.prices[period];
-            if past > Decimal::ZERO {
-                self.momentum_score = (current - past) / past * dec!(100);
-            }
-        }
-    }
-
-    /// 변동성 계산.
-    fn calculate_volatility(&self, period: usize) -> Decimal {
-        if self.prices.len() < period + 1 {
+    /// 가격 기반 변동성 계산.
+    fn calculate_volatility(prices: &[Decimal], period: usize) -> Decimal {
+        if prices.len() < period + 1 {
             return Decimal::ZERO;
         }
 
-        let returns: Vec<Decimal> = self
-            .prices
+        let returns: Vec<Decimal> = prices
             .windows(2)
             .take(period)
             .filter_map(|w| {
@@ -1167,46 +1076,67 @@ impl RotationStrategy {
         true
     }
 
+    /// GlobalScore 기반 신호 강도 계산.
+    fn get_adjusted_strength(&self, ticker: &str, base_strength: f64) -> f64 {
+        let Some(ctx) = self.context.as_ref() else {
+            return base_strength;
+        };
+
+        let Ok(ctx_lock) = ctx.try_read() else {
+            return base_strength;
+        };
+
+        if let Some(score) = ctx_lock.get_global_score(ticker) {
+            adjust_strength_by_score(base_strength, Some(score.overall_score))
+        } else {
+            base_strength
+        }
+    }
+
     // ========================================================================
     // 모멘텀 계산
     // ========================================================================
 
-    /// 모든 자산의 모멘텀 계산.
+    /// 모든 자산의 모멘텀 업데이트 (GlobalScore에서 가져옴).
     fn calculate_all_momentum(&mut self) {
-        let Some(config) = self.config.as_ref() else {
+        let Some(ctx) = self.context.as_ref() else {
+            warn!("[Rotation] StrategyContext 없음 - 모멘텀 계산 불가");
             return;
         };
 
-        let metric = config.ranking_metric.clone();
+        let Ok(ctx_lock) = ctx.try_read() else {
+            warn!("[Rotation] StrategyContext 잠금 실패");
+            return;
+        };
 
+        // GlobalScore에서 각 자산의 모멘텀 점수 가져오기
         for data in self.asset_data.values_mut() {
-            match &metric {
-                RankingMetric::MultiPeriodMomentum {
-                    short_period,
-                    medium_period,
-                    long_period,
-                    short_weight,
-                    medium_weight,
-                    long_weight,
-                } => {
-                    data.calculate_multi_period_momentum(
-                        *short_period,
-                        *medium_period,
-                        *long_period,
-                        *short_weight,
-                        *medium_weight,
-                        *long_weight,
-                    );
+            if let Some(score) = ctx_lock.get_global_score(&data.ticker) {
+                // component_scores에서 momentum 가져오기
+                let momentum = score
+                    .component_scores
+                    .get("momentum")
+                    .copied()
+                    .unwrap_or(Decimal::ZERO);
+                data.update_momentum(momentum);
+
+                // 현재 가격도 klines에서 업데이트
+                let klines = ctx_lock.get_klines(&data.ticker, Timeframe::D1);
+                if let Some(last_kline) = klines.last() {
+                    data.update_price(last_kline.close);
                 }
-                RankingMetric::AverageMomentum { periods } => {
-                    data.calculate_average_momentum(periods);
-                }
-                RankingMetric::SinglePeriodMomentum { period } => {
-                    data.calculate_single_period_momentum(*period);
-                }
-                RankingMetric::None => {
-                    // 순위 없음
-                }
+
+                debug!(
+                    ticker = %data.ticker,
+                    momentum = %momentum,
+                    overall_score = %score.overall_score,
+                    "[Rotation] GlobalScore에서 모멘텀 가져옴"
+                );
+            } else {
+                debug!(
+                    ticker = %data.ticker,
+                    "[Rotation] GlobalScore 없음"
+                );
             }
         }
     }
@@ -1321,14 +1251,22 @@ impl RotationStrategy {
                 let mut inv_vols: Vec<(String, Decimal)> = Vec::new();
                 let mut total_inv_vol = Decimal::ZERO;
 
+                // StrategyContext에서 klines 가져와서 변동성 계산
+                let ctx_opt = self.context.as_ref().and_then(|c| c.try_read().ok());
+
                 for asset in ranked_assets.iter().take(top_n) {
-                    if let Some(data) = self.asset_data.get(&asset.ticker) {
-                        let vol = data.calculate_volatility(20);
-                        if vol > Decimal::ZERO {
-                            let inv_vol = Decimal::ONE / vol;
-                            inv_vols.push((asset.ticker.clone(), inv_vol));
-                            total_inv_vol += inv_vol;
-                        }
+                    let vol = if let Some(ref ctx_lock) = ctx_opt {
+                        let klines = ctx_lock.get_klines(&asset.ticker, Timeframe::D1);
+                        let prices: Vec<Decimal> = klines.iter().map(|k| k.close).collect();
+                        AssetData::calculate_volatility(&prices, 20)
+                    } else {
+                        Decimal::ZERO
+                    };
+
+                    if vol > Decimal::ZERO {
+                        let inv_vol = Decimal::ONE / vol;
+                        inv_vols.push((asset.ticker.clone(), inv_vol));
+                        total_inv_vol += inv_vol;
                     }
                 }
 
@@ -1549,8 +1487,9 @@ impl RotationStrategy {
             };
 
             // ticker는 그대로 사용 (quote currency 붙이지 않음)
+            let strength = self.get_adjusted_strength(&order.ticker, 0.5);
             let signal = Signal::new(self.name(), order.ticker.clone(), side, signal_type)
-                .with_strength(0.5)
+                .with_strength(strength)
                 .with_metadata("variant", json!(format!("{:?}", config.variant)))
                 .with_metadata("rotation_type", json!(rotation_type))
                 .with_metadata("current_weight", json!(order.current_weight.to_string()))
@@ -1769,13 +1708,19 @@ impl Strategy for RotationStrategy {
 
         // 가격 업데이트
         if let Some(asset_data) = self.asset_data.get_mut(&ticker) {
-            asset_data.add_price(price);
+            asset_data.update_price(price);
         }
 
-        // 리밸런싱 신호 생성 (모든 자산 데이터가 있을 때만)
-        let all_have_data = self.asset_data.values().all(|d| !d.prices.is_empty());
+        // 리밸런싱 신호 생성 (GlobalScore가 있을 때만)
+        let has_global_scores = self.context.as_ref().map_or(false, |ctx| {
+            ctx.try_read().map_or(false, |lock| {
+                self.asset_data
+                    .keys()
+                    .any(|ticker| lock.get_global_score(ticker).is_some())
+            })
+        });
 
-        if all_have_data {
+        if has_global_scores {
             let signals = self.generate_rebalance_signals(timestamp);
             return Ok(signals);
         }

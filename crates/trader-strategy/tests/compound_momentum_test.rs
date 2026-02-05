@@ -10,7 +10,9 @@ use chrono::{TimeZone, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
-use trader_core::{Kline, MarketData, MarketDataType, Position, Side, Timeframe};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use trader_core::{Kline, MarketData, MarketDataType, Position, Side, StrategyContext, Timeframe};
 use trader_strategy::strategies::compound_momentum::{
     CompoundMomentumConfig, CompoundMomentumStrategy, MarketType,
 };
@@ -90,6 +92,51 @@ async fn feed_falling_prices_in_month(
         let data = create_kline_at_month(ticker, price, year, month, day_num);
         let _ = strategy.on_market_data(&data).await;
     }
+}
+
+/// 특정 연월에 상승 추세 klines 생성 (StrategyContext용).
+fn generate_rising_klines_at_month(
+    ticker: &str,
+    days: usize,
+    base_price: Decimal,
+    year: i32,
+    month: u32,
+) -> Vec<Kline> {
+    let mut klines = Vec::new();
+    for day in 1..=days {
+        let day_num = (day as u32).min(28);
+        let price = base_price + Decimal::from(day as i32 * 2);
+        let timestamp = Utc.with_ymd_and_hms(year, month, day_num, 12, 0, 0).unwrap();
+        let kline = Kline::new(
+            ticker.to_string(),
+            Timeframe::D1,
+            timestamp,
+            price - dec!(1),
+            price + dec!(1),
+            price - dec!(2),
+            price,
+            dec!(10000),
+            timestamp,
+        );
+        klines.push(kline);
+    }
+    klines
+}
+
+/// StrategyContext에 상승 추세 데이터 설정.
+fn setup_context_with_rising_prices(
+    tickers: &[&str],
+    days: usize,
+    base_price: Decimal,
+    year: i32,
+    month: u32,
+) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+    for ticker in tickers {
+        let klines = generate_rising_klines_at_month(ticker, days, base_price, year, month);
+        context.update_klines(ticker, Timeframe::D1, klines);
+    }
+    Arc::new(RwLock::new(context))
 }
 
 /// 짧은 MA 기간의 테스트 설정 (기본 130일 대신 10일 사용).
@@ -234,14 +281,13 @@ mod rebalance_condition_tests {
 
         let tickers = vec!["TQQQ", "SCHD", "PFIX", "TMF"];
 
-        // 충분한 데이터 입력 (MA 10일 + 여유분)
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 15, dec!(100), 2025, 12).await;
-        }
+        // StrategyContext에 충분한 데이터 설정 (MA 10일 + 여유분)
+        let context = setup_context_with_rising_prices(&tickers, 15, dec!(100), 2025, 12);
+        strategy.set_context(context);
 
         // 현재 시점 데이터로 리밸런싱 트리거
         let data = create_kline_at_month("TQQQ", dec!(150), 2025, 12, 28);
-        let signals = strategy.on_market_data(&data).await.unwrap();
+        let _signals = strategy.on_market_data(&data).await.unwrap();
 
         let state = strategy.get_state();
         assert!(
@@ -259,14 +305,13 @@ mod rebalance_condition_tests {
 
         let tickers = vec!["TQQQ", "SCHD", "PFIX", "TMF"];
 
-        // 충분한 데이터 입력
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 15, dec!(100), 2025, 12).await;
-        }
+        // StrategyContext에 충분한 데이터 설정
+        let context = setup_context_with_rising_prices(&tickers, 15, dec!(100), 2025, 12);
+        strategy.set_context(context);
 
         // 첫 번째 리밸런싱 (12월 20일)
         let data1 = create_kline_at_month("TQQQ", dec!(150), 2025, 12, 20);
-        let signals1 = strategy.on_market_data(&data1).await.unwrap();
+        let _signals1 = strategy.on_market_data(&data1).await.unwrap();
 
         // 같은 달에 두 번째 데이터 (12월 25일)
         let data2 = create_kline_at_month("TQQQ", dec!(155), 2025, 12, 25);
@@ -289,30 +334,24 @@ mod rebalance_condition_tests {
 
         let tickers = vec!["TQQQ", "SCHD", "PFIX", "TMF"];
 
-        // 12월 데이터 입력
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 15, dec!(100), 2025, 12).await;
-        }
+        // StrategyContext에 12월 데이터 설정
+        let context = setup_context_with_rising_prices(&tickers, 15, dec!(100), 2025, 12);
+        strategy.set_context(context);
 
         // 12월 리밸런싱
-        for ticker in &tickers {
-            let data = create_kline_at_month(ticker, dec!(150), 2025, 12, 28);
-            let _ = strategy.on_market_data(&data).await;
-        }
+        let data = create_kline_at_month("TQQQ", dec!(150), 2025, 12, 28);
+        let _ = strategy.on_market_data(&data).await;
 
         let state_dec = strategy.get_state();
         let dec_ym = state_dec["last_rebalance_ym"].as_str().unwrap_or("");
 
-        // 1월 데이터 추가
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 10, dec!(155), 2026, 1).await;
-        }
+        // 1월 데이터로 컨텍스트 업데이트
+        let context_jan = setup_context_with_rising_prices(&tickers, 15, dec!(155), 2026, 1);
+        strategy.set_context(context_jan);
 
         // 1월 리밸런싱
-        for ticker in &tickers {
-            let data = create_kline_at_month(ticker, dec!(180), 2026, 1, 15);
-            let _ = strategy.on_market_data(&data).await;
-        }
+        let data_jan = create_kline_at_month("TQQQ", dec!(180), 2026, 1, 15);
+        let _ = strategy.on_market_data(&data_jan).await;
 
         let state_jan = strategy.get_state();
         let jan_ym = state_jan["last_rebalance_ym"].as_str().unwrap_or("");
@@ -336,8 +375,8 @@ mod signal_generation_tests {
     /// 테스트 1: 신호가 실제로 생성되는지 확인
     ///
     /// 핵심 로직:
-    /// 1. 2025년 12월에 모든 ticker 데이터 입력 → last_rebalance_ym = "2025_12"
-    /// 2. 2026년 1월 데이터로 리밸런싱 트리거 → 월이 바뀌었으므로 리밸런싱 실행
+    /// 1. StrategyContext에 충분한 klines 데이터 설정
+    /// 2. 리밸런싱 트리거 → 신호 생성
     #[tokio::test]
     async fn signals_are_actually_generated() {
         let mut strategy = CompoundMomentumStrategy::new();
@@ -345,32 +384,26 @@ mod signal_generation_tests {
         strategy.initialize(config).await.unwrap();
 
         let tickers = vec!["TQQQ", "SCHD", "PFIX", "TMF"];
-        let mut all_signals = vec![];
 
-        // 1단계: 2025년 12월에 충분한 데이터 입력 (MA 10일 + 여유분)
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 15, dec!(100), 2025, 12).await;
-        }
+        // StrategyContext에 충분한 데이터 설정 (MA 10일 + 여유분)
+        let context = setup_context_with_rising_prices(&tickers, 15, dec!(100), 2025, 12);
+        strategy.set_context(context);
 
-        // 2단계: 2026년 1월 데이터로 리밸런싱 트리거
-        for ticker in &tickers {
-            let data = create_kline_at_month(ticker, dec!(180), 2026, 1, 15);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            all_signals.extend(signals);
-        }
+        // 리밸런싱 트리거
+        let data = create_kline_at_month("TQQQ", dec!(180), 2025, 12, 28);
+        let signals = strategy.on_market_data(&data).await.unwrap();
 
         // 핵심 검증: 신호가 실제로 생성되어야 함
         assert!(
-            !all_signals.is_empty(),
+            !signals.is_empty(),
             "리밸런싱 시 신호가 생성되어야 함. \
             원인 분석: \
             1) 모든 ticker에 MA 기간+3일 이상 데이터 필요 \
-            2) 월이 바뀌어야 should_rebalance() = true \
-            3) initial_capital이 설정되어야 cash_balance > 0"
+            2) initial_capital이 설정되어야 cash_balance > 0"
         );
 
         // 신호 구조 검증
-        for signal in &all_signals {
+        for signal in &signals {
             assert!(
                 signal.side == Side::Buy || signal.side == Side::Sell,
                 "신호는 Buy 또는 Sell이어야 함"
@@ -386,28 +419,23 @@ mod signal_generation_tests {
         strategy.initialize(config).await.unwrap();
 
         let tickers = vec!["TQQQ", "SCHD", "PFIX", "TMF"];
-        let mut all_signals = vec![];
 
-        // 데이터 입력
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 15, dec!(100), 2025, 12).await;
-        }
+        // StrategyContext에 데이터 설정
+        let context = setup_context_with_rising_prices(&tickers, 15, dec!(100), 2025, 12);
+        strategy.set_context(context);
 
         // 리밸런싱 트리거
-        for ticker in &tickers {
-            let data = create_kline_at_month(ticker, dec!(180), 2026, 1, 15);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            all_signals.extend(signals);
-        }
+        let data = create_kline_at_month("TQQQ", dec!(180), 2025, 12, 28);
+        let signals = strategy.on_market_data(&data).await.unwrap();
 
         // 선행 조건: 신호가 먼저 생성되어야 함
         assert!(
-            !all_signals.is_empty(),
+            !signals.is_empty(),
             "테스트 전제 조건 실패: 신호가 생성되어야 함"
         );
 
         // 신호의 ticker가 설정에 있는지 확인 (ticker/USD 형식)
-        for signal in &all_signals {
+        for signal in &signals {
             let base_ticker = signal.ticker.split('/').next().unwrap_or("");
             assert!(
                 tickers.contains(&base_ticker) || base_ticker == "USD",
@@ -426,22 +454,17 @@ mod signal_generation_tests {
         strategy.initialize(config).await.unwrap();
 
         let tickers = vec!["TQQQ", "SCHD", "PFIX", "TMF"];
-        let mut all_signals = vec![];
 
-        // 데이터 입력 (상승 추세)
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 15, dec!(100), 2025, 12).await;
-        }
+        // StrategyContext에 데이터 설정 (상승 추세)
+        let context = setup_context_with_rising_prices(&tickers, 15, dec!(100), 2025, 12);
+        strategy.set_context(context);
 
         // 리밸런싱 트리거
-        for ticker in &tickers {
-            let data = create_kline_at_month(ticker, dec!(180), 2026, 1, 15);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            all_signals.extend(signals);
-        }
+        let data = create_kline_at_month("TQQQ", dec!(180), 2025, 12, 28);
+        let signals = strategy.on_market_data(&data).await.unwrap();
 
         // 포지션이 없는 상태에서 목표 비중이 있으면 매수 신호 생성
-        let buy_signals: Vec<_> = all_signals.iter().filter(|s| s.side == Side::Buy).collect();
+        let buy_signals: Vec<_> = signals.iter().filter(|s| s.side == Side::Buy).collect();
         assert!(
             !buy_signals.is_empty(),
             "초기 리밸런싱에서 매수 신호가 생성되어야 함"

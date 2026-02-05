@@ -19,6 +19,7 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::metrics::record_order;
@@ -30,7 +31,7 @@ use trader_core::{Order, OrderStatusType, OrderType, Side};
 // ==================== 응답 타입 ====================
 
 /// 주문 목록 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OrdersListResponse {
     /// 주문 목록
     pub orders: Vec<OrderResponse>,
@@ -39,7 +40,7 @@ pub struct OrdersListResponse {
 }
 
 /// 주문 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct OrderResponse {
     /// 주문 ID
     pub id: String,
@@ -98,7 +99,7 @@ impl From<&Order> for OrderResponse {
 }
 
 /// 주문 취소 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CancelOrderResponse {
     /// 성공 여부
     pub success: bool,
@@ -109,7 +110,7 @@ pub struct CancelOrderResponse {
 }
 
 /// 주문 취소 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CancelOrderRequest {
     /// 취소 사유 (선택)
     #[serde(default)]
@@ -117,7 +118,7 @@ pub struct CancelOrderRequest {
 }
 
 /// 주문 생성 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateOrderRequest {
     /// 심볼
@@ -135,7 +136,7 @@ pub struct CreateOrderRequest {
 }
 
 /// 주문 생성 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateOrderResponse {
     /// 성공 여부
@@ -148,11 +149,51 @@ pub struct CreateOrderResponse {
     pub order: OrderResponse,
 }
 
+/// 주문 통계 응답.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrderStatsResponse {
+    /// 전체 주문 수
+    pub total: usize,
+    /// 상태별 주문 수
+    pub by_status: OrderStatsByStatus,
+    /// 방향별 주문 수
+    pub by_side: OrderStatsBySide,
+}
+
+/// 상태별 주문 통계.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrderStatsByStatus {
+    /// 대기 중
+    pub pending: usize,
+    /// 열림
+    pub open: usize,
+    /// 부분 체결
+    pub partially_filled: usize,
+}
+
+/// 방향별 주문 통계.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrderStatsBySide {
+    /// 매수
+    pub buy: usize,
+    /// 매도
+    pub sell: usize,
+}
+
 // ==================== Handler ====================
 
 /// 주문 생성.
-///
-/// POST /api/v1/orders
+#[utoipa::path(
+    post,
+    path = "/api/v1/orders",
+    tag = "orders",
+    request_body = CreateOrderRequest,
+    responses(
+        (status = 200, description = "주문 생성 성공", body = CreateOrderResponse),
+        (status = 400, description = "잘못된 요청", body = ApiError),
+        (status = 500, description = "서버 오류", body = ApiError)
+    )
+)]
 pub async fn create_order(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CreateOrderRequest>,
@@ -253,8 +294,14 @@ pub async fn create_order(
 }
 
 /// 활성 주문 목록 조회.
-///
-/// GET /api/v1/orders
+#[utoipa::path(
+    get,
+    path = "/api/v1/orders",
+    tag = "orders",
+    responses(
+        (status = 200, description = "주문 목록 조회 성공", body = OrdersListResponse)
+    )
+)]
 pub async fn list_orders(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // 최소 락 홀드: 주문 목록만 빠르게 복사
     let orders = {
@@ -286,8 +333,19 @@ pub async fn list_orders(State(state): State<Arc<AppState>>) -> impl IntoRespons
 }
 
 /// 특정 주문 상세 조회.
-///
-/// GET /api/v1/orders/:id
+#[utoipa::path(
+    get,
+    path = "/api/v1/orders/{id}",
+    tag = "orders",
+    params(
+        ("id" = String, Path, description = "주문 ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "주문 조회 성공", body = OrderResponse),
+        (status = 400, description = "잘못된 주문 ID", body = ApiError),
+        (status = 404, description = "주문 없음", body = ApiError)
+    )
+)]
 pub async fn get_order(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -331,8 +389,21 @@ pub async fn get_order(
 }
 
 /// 주문 취소.
-///
-/// DELETE /api/v1/orders/:id
+#[utoipa::path(
+    delete,
+    path = "/api/v1/orders/{id}",
+    tag = "orders",
+    params(
+        ("id" = String, Path, description = "주문 ID (UUID)")
+    ),
+    request_body(content = Option<CancelOrderRequest>, description = "취소 사유 (선택)"),
+    responses(
+        (status = 200, description = "주문 취소 성공", body = CancelOrderResponse),
+        (status = 400, description = "잘못된 주문 ID", body = ApiError),
+        (status = 404, description = "주문 없음", body = ApiError),
+        (status = 500, description = "취소 실패", body = ApiError)
+    )
+)]
 pub async fn cancel_order(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -411,8 +482,14 @@ pub async fn cancel_order(
 }
 
 /// 주문 통계 조회.
-///
-/// GET /api/v1/orders/stats
+#[utoipa::path(
+    get,
+    path = "/api/v1/orders/stats",
+    tag = "orders",
+    responses(
+        (status = 200, description = "주문 통계 조회 성공", body = OrderStatsResponse)
+    )
+)]
 pub async fn get_order_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // 최소 락 홀드: 주문 목록만 빠르게 복사
     let orders = {
@@ -438,18 +515,18 @@ pub async fn get_order_stats(State(state): State<Arc<AppState>>) -> impl IntoRes
     let buy_orders = orders.iter().filter(|o| o.side == Side::Buy).count();
     let sell_orders = orders.iter().filter(|o| o.side == Side::Sell).count();
 
-    Json(serde_json::json!({
-        "total": total,
-        "by_status": {
-            "pending": pending,
-            "open": open,
-            "partially_filled": partially_filled
+    Json(OrderStatsResponse {
+        total,
+        by_status: OrderStatsByStatus {
+            pending,
+            open,
+            partially_filled,
         },
-        "by_side": {
-            "buy": buy_orders,
-            "sell": sell_orders
-        }
-    }))
+        by_side: OrderStatsBySide {
+            buy: buy_orders,
+            sell: sell_orders,
+        },
+    })
 }
 
 // ==================== 라우터 ====================

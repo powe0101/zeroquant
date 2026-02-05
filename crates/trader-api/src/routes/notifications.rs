@@ -11,6 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::{error, info};
+use utoipa::ToSchema;
 
 use crate::state::AppState;
 use rust_decimal_macros::dec;
@@ -20,7 +21,7 @@ use trader_notification::{
 };
 
 /// 텔레그램 테스트 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct TelegramTestRequest {
     /// Bot Token
     pub bot_token: String,
@@ -29,7 +30,7 @@ pub struct TelegramTestRequest {
 }
 
 /// 텔레그램 테스트 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TelegramTestResponse {
     /// 성공 여부
     pub success: bool,
@@ -38,7 +39,7 @@ pub struct TelegramTestResponse {
 }
 
 /// 알림 설정 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct NotificationSettingsResponse {
     /// 텔레그램 활성화 여부
     pub telegram_enabled: bool,
@@ -47,21 +48,21 @@ pub struct NotificationSettingsResponse {
 }
 
 /// 템플릿 테스트 요청.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct TemplateTestRequest {
     /// 템플릿 타입
     pub template_type: String,
 }
 
 /// 사용 가능한 템플릿 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TemplateListResponse {
     /// 템플릿 목록
     pub templates: Vec<TemplateInfo>,
 }
 
 /// 템플릿 정보.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TemplateInfo {
     /// 템플릿 ID
     pub id: String,

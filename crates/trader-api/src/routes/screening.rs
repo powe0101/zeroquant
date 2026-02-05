@@ -937,14 +937,24 @@ pub async fn get_sector_ranking(
         }
     };
 
-    // 자산군 카테고리 제외 (산업 섹터만 표시)
-    // "주식", "채권", "혼합자산", "Cryptocurrency" 등은 섹터가 아닌 자산 분류
+    // 자산군 카테고리 및 시장 부 분류 제외 (산업 섹터만 표시)
+    // - 자산 분류: "주식", "채권", "혼합자산", "Cryptocurrency"
+    // - KOSPI/KOSDAQ 시장 부: "중견기업부", "우량기업부", "벤처기업부" 등
     const EXCLUDED_CATEGORIES: &[&str] = &[
+        // 자산 분류
         "주식",
         "채권",
         "혼합자산",
         "Cryptocurrency",
         "기타",
+        // KOSPI/KOSDAQ 시장 부 분류 (산업 섹터 아님)
+        "중견기업부",
+        "우량기업부",
+        "벤처기업부",
+        "기술성장기업부",
+        "투자주의환기종목(소속부없음)",
+        "SPAC(소속부없음)",
+        "외국기업(소속부없음)",
     ];
 
     let filtered_results: Vec<_> = results

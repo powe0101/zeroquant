@@ -59,6 +59,9 @@ uuid = { workspace = true }
 # Progress indication
 indicatif = "0.17"
 
+# Chart generation for regression tests
+plotters = "0.3"
+
 # ML Runtime (optional)
 ort = { workspace = true, optional = true }
 

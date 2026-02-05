@@ -18,7 +18,7 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod commands;
 
@@ -26,6 +26,7 @@ use commands::download::{
     download_data, parse_date, print_available_symbols, DownloadConfig, Interval, Market,
 };
 use commands::import::{import_to_db, ImportDbConfig};
+use commands::strategy_test::{run_strategy_test, StrategyTestConfig};
 
 #[derive(Parser)]
 #[command(name = "trader")]
@@ -217,6 +218,77 @@ enum Commands {
         /// 사용 가능한 전략 목록 보기
         #[arg(long)]
         list_strategies: bool,
+    },
+
+    /// 전략 통합 테스트 (UI와 동일한 환경에서 전략 검증)
+    StrategyTest {
+        /// 전략 ID (예: rsi, grid, bollinger)
+        #[arg(short = 'i', long)]
+        strategy: Option<String>,
+
+        /// 종목 코드/심볼 (단일, 예: 005930)
+        #[arg(short, long)]
+        symbol: Option<String>,
+
+        /// 다중 종목 코드 (쉼표 구분, 예: "005930,000660,035720")
+        #[arg(long)]
+        symbols: Option<String>,
+
+        /// 시장 유형 (KR: 한국, US: 미국)
+        #[arg(short, long, default_value = "KR")]
+        market: String,
+
+        /// JSON 설정 (UI에서 전달되는 형식)
+        #[arg(short, long)]
+        config: Option<String>,
+
+        /// 시작 날짜 (YYYY-MM-DD)
+        #[arg(short = 'f', long)]
+        from: Option<String>,
+
+        /// 종료 날짜 (YYYY-MM-DD)
+        #[arg(short, long)]
+        to: Option<String>,
+
+        /// 초기 자본금 (기본: 10,000,000원)
+        #[arg(long, default_value = "10000000")]
+        capital: String,
+
+        /// 디버그 모드 (지표 값 상세 출력)
+        #[arg(long)]
+        debug: bool,
+
+        /// 사용 가능한 전략 목록 보기
+        #[arg(long)]
+        list_strategies: bool,
+
+        /// 데이터베이스 URL
+        #[arg(long)]
+        db_url: Option<String>,
+
+        /// 회귀 테스트 Fixture 파일 경로 (단일 파일)
+        #[arg(long)]
+        fixture: Option<String>,
+
+        /// 모든 Fixture에 대해 회귀 테스트 실행
+        #[arg(long)]
+        regression: bool,
+
+        /// Fixture 디렉토리 (기본: crates/trader-strategy/tests/fixtures)
+        #[arg(long)]
+        fixtures_dir: Option<String>,
+
+        /// 초기화 전용 테스트 (빠른 검증, DB 불필요)
+        #[arg(long)]
+        init_only: bool,
+
+        /// 차트 이미지 생성 (회귀 테스트용)
+        #[arg(long)]
+        charts: bool,
+
+        /// 차트 출력 디렉토리 (기본: ./regression_charts)
+        #[arg(long, default_value = "regression_charts")]
+        charts_dir: String,
     },
 
     /// 시스템 상태 확인
@@ -596,6 +668,161 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("✅ CLI 도구: 정상");
             println!("⚠️  KIS API 연결: 미확인 (설정 필요)");
             println!("⚠️  데이터베이스: 미확인 (설정 필요)");
+        }
+
+        Commands::StrategyTest {
+            strategy,
+            symbol,
+            symbols,
+            market,
+            config,
+            from,
+            to,
+            capital,
+            debug,
+            list_strategies,
+            db_url,
+            fixture,
+            regression,
+            fixtures_dir,
+            init_only,
+            charts,
+            charts_dir,
+        } => {
+            use commands::strategy_test::{
+                run_regression_tests_with_options, run_init_only_regression_tests,
+                run_fixture_tests, load_fixture, RegressionTestOptions,
+            };
+            use std::path::Path;
+
+            // 전략 목록 출력
+            if list_strategies {
+                commands::strategy_test::print_available_strategies();
+                return Ok(());
+            }
+
+            // 기본 Fixture 디렉토리
+            let default_fixtures_dir = "crates/trader-strategy/tests/fixtures";
+            let fixtures_path = fixtures_dir.as_deref().unwrap_or(default_fixtures_dir);
+
+            // 회귀 테스트 모드 (모든 Fixture)
+            if regression {
+                let results = if init_only {
+                    run_init_only_regression_tests(Path::new(fixtures_path)).await?
+                } else {
+                    let options = RegressionTestOptions {
+                        chart_output_dir: if charts {
+                            Some(std::path::PathBuf::from(&charts_dir))
+                        } else {
+                            None
+                        },
+                        db_url: db_url.clone(),
+                    };
+                    run_regression_tests_with_options(Path::new(fixtures_path), options).await?
+                };
+
+                // 실패 여부 체크
+                let total_failed: usize = results.iter().map(|r| r.failed).sum();
+                if total_failed > 0 {
+                    return Err(format!("{} 테스트 실패", total_failed).into());
+                }
+                return Ok(());
+            }
+
+            // 단일 Fixture 파일 테스트
+            if let Some(ref fixture_path) = fixture {
+                let results = if init_only {
+                    // 초기화 전용 테스트
+                    let fixture_file = load_fixture(Path::new(fixture_path))?;
+                    println!("\n🧪 초기화 전용 테스트: {}", fixture_path);
+                    println!("───────────────────────────────────────────────────────────────");
+
+                    let mut passed = 0;
+                    let mut failed = 0;
+
+                    for strategy_fixture in &fixture_file.strategies {
+                        // 전략 존재 여부 확인
+                        let available = trader_strategy::StrategyRegistry::list_ids();
+                        let exists = available.contains(&strategy_fixture.strategy_id.as_str());
+                        let expected_success = strategy_fixture.expected.initialization == "success";
+
+                        if exists == expected_success {
+                            passed += 1;
+                            println!("  ✅ {} ({})", strategy_fixture.name, strategy_fixture.strategy_id);
+                        } else {
+                            failed += 1;
+                            println!("  ❌ {} ({})", strategy_fixture.name, strategy_fixture.strategy_id);
+                        }
+                    }
+
+                    println!("\n총: {} 통과, {} 실패", passed, failed);
+
+                    if failed > 0 {
+                        return Err(format!("{} 테스트 실패", failed).into());
+                    }
+                    return Ok(());
+                } else {
+                    run_fixture_tests(Path::new(fixture_path), db_url.clone()).await?
+                };
+
+                if results.failed > 0 {
+                    return Err(format!("{} 테스트 실패", results.failed).into());
+                }
+                return Ok(());
+            }
+
+            // 일반 전략 테스트 실행 시 필수 인자 검증
+            let strategy = strategy.ok_or_else(|| {
+                "전략 ID가 필요합니다. --strategy <ID> 또는 --list-strategies 사용"
+            })?;
+
+            // 심볼 처리: --symbols가 있으면 다중, 없으면 --symbol 사용
+            let symbol_list: Vec<String> = if let Some(ref s) = symbols {
+                s.split(',').map(|x| x.trim().to_uppercase()).collect()
+            } else if let Some(ref s) = symbol {
+                vec![s.to_uppercase()]
+            } else {
+                return Err("종목 코드가 필요합니다. --symbol <CODE> 또는 --symbols <CODES> 지정".into());
+            };
+
+            let market = Market::parse(&market)
+                .ok_or_else(|| format!("Invalid market: {}. Supported: KR, US", market))?;
+
+            let start_date = from.as_ref().map(|d| parse_date(d)).transpose()?;
+            let end_date = to.as_ref().map(|d| parse_date(d)).transpose()?;
+
+            let initial_capital = capital
+                .parse::<rust_decimal::Decimal>()
+                .map_err(|_| format!("Invalid capital: {}", capital))?;
+
+            let test_config = StrategyTestConfig {
+                strategy_id: strategy,
+                symbols: symbol_list,
+                market,
+                json_config: config.clone(),
+                start_date,
+                end_date,
+                initial_capital,
+                debug,
+                db_url: db_url.clone(),
+            };
+
+            match run_strategy_test(test_config).await {
+                Ok(result) => {
+                    if result.success {
+                        info!("✅ Strategy test passed: {} trades", result.trades_executed);
+                    } else {
+                        warn!("⚠️ Strategy test completed but no trades executed");
+                        for diag in &result.diagnostics {
+                            println!("{}", diag);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Strategy test failed: {}", e);
+                    return Err(e.into());
+                }
+            }
         }
 
         Commands::Start { config, dry_run } => {

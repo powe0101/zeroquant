@@ -8,8 +8,10 @@ import { Show, createSignal, createResource, onMount, onCleanup, For } from 'sol
 import { X, Star, Link2, TrendingUp, TrendingDown, BarChart2, Activity, Target, LineChart } from 'lucide-solid'
 import type { ScreeningResultDto, CandleData } from '../../api/client'
 import { getKlines } from '../../api/client'
-import { EChart, CHART_COLORS, RouteStateBadge } from '../ui'
-import type { EChartsOption } from 'echarts'
+import { CHART_COLORS, RouteStateBadge } from '../ui'
+import { PriceChart, type CandlestickDataPoint, type LineDataPoint } from '../charts/PriceChart'
+import { SyncedChartPanel } from '../charts/SyncedChartPanel'
+import type { SeparateIndicatorData } from '../charts/SubPriceChart'
 
 interface SymbolDetailModalProps {
   /** 표시 여부 */
@@ -115,9 +117,14 @@ export function SymbolDetailModal(props: SymbolDetailModalProps) {
     async (ticker): Promise<CandleData[]> => {
       if (!ticker) return []
       try {
+        console.log('[Chart] Loading candles for:', ticker)
         const response = await getKlines({ symbol: ticker, timeframe: '1d', limit: 60 })
-        return response.data || []
-      } catch {
+        console.log('[Chart] Response:', response)
+        const data = response.data || []
+        console.log('[Chart] Candle count:', data.length)
+        return data
+      } catch (error) {
+        console.error('[Chart] Error loading candles:', error)
         return []
       }
     }
@@ -148,97 +155,46 @@ export function SymbolDetailModal(props: SymbolDetailModalProps) {
     { id: 'chart', label: '차트', icon: LineChart },
   ]
 
-  // 캔들 차트 옵션
-  const candleChartOption = (): EChartsOption => {
+  // CandleData를 캔들스틱 차트용 데이터로 변환
+  const toCandlestickData = (): CandlestickDataPoint[] => {
     const data = candleData() || []
-    if (data.length === 0) return {}
-
-    const dates = data.map((d) => d.time.split('T')[0])
-    const ohlc = data.map((d) => [d.open, d.close, d.low, d.high])
-    const volumes = data.map((d) => ({
-      value: d.volume,
-      itemStyle: {
-        color: d.close >= d.open ? CHART_COLORS.success : CHART_COLORS.danger,
-      },
+    return data.map((d) => ({
+      time: d.time.split('T')[0], // "2024-01-15T00:00:00" → "2024-01-15"
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
     }))
-
-    return {
-      tooltip: {
-        trigger: 'axis',
-        backgroundColor: 'rgba(30, 30, 40, 0.95)',
-        borderColor: '#374151',
-        textStyle: { color: '#e5e7eb', fontSize: 12 },
-        axisPointer: { type: 'cross' },
-      },
-      grid: [
-        { left: 50, right: 20, top: 20, height: '55%' },
-        { left: 50, right: 20, top: '70%', height: '20%' },
-      ],
-      xAxis: [
-        { type: 'category', data: dates, show: false, gridIndex: 0 },
-        { type: 'category', data: dates, gridIndex: 1, axisLabel: { color: '#9ca3af', fontSize: 10 } },
-      ],
-      yAxis: [
-        { type: 'value', scale: true, gridIndex: 0, axisLabel: { color: '#9ca3af', fontSize: 10 }, splitLine: { lineStyle: { color: '#374151' } } },
-        { type: 'value', scale: true, gridIndex: 1, axisLabel: { show: false }, splitLine: { show: false } },
-      ],
-      series: [
-        {
-          type: 'candlestick',
-          data: ohlc,
-          xAxisIndex: 0,
-          yAxisIndex: 0,
-          itemStyle: {
-            color: CHART_COLORS.success,
-            color0: CHART_COLORS.danger,
-            borderColor: CHART_COLORS.success,
-            borderColor0: CHART_COLORS.danger,
-          },
-        },
-        {
-          type: 'bar',
-          data: volumes,
-          xAxisIndex: 1,
-          yAxisIndex: 1,
-        },
-      ],
-    }
   }
 
-  // 라인 차트 옵션 (개요 탭용)
-  const lineChartOption = (): EChartsOption => {
+  // CandleData를 라인 차트용 데이터로 변환 (종가 기준)
+  const toLineData = (): LineDataPoint[] => {
     const data = candleData() || []
-    if (data.length === 0) return {}
+    return data.map((d) => ({
+      time: d.time.split('T')[0],
+      value: d.close,
+    }))
+  }
 
-    const dates = data.map((d) => d.time.split('T')[0])
-    const prices = data.map((d) => d.close)
+  // 볼륨 데이터를 서브 지표 형태로 변환
+  const toVolumeIndicator = (): SeparateIndicatorData[] => {
+    const data = candleData() || []
+    if (data.length === 0) return []
 
-    const startPrice = prices[0] || 0
-    const endPrice = prices[prices.length - 1] || 0
-    const isUp = endPrice >= startPrice
-    const lineColor = isUp ? CHART_COLORS.success : CHART_COLORS.danger
-
-    return {
-      grid: { left: 10, right: 10, top: 10, bottom: 20 },
-      xAxis: { type: 'category', data: dates, show: false },
-      yAxis: { type: 'value', show: false, min: 'dataMin', max: 'dataMax' },
+    return [{
+      id: 'volume',
+      type: 'volume',
+      name: '거래량',
       series: [{
-        type: 'line',
-        data: prices,
-        smooth: true,
-        symbol: 'none',
-        lineStyle: { color: lineColor, width: 2 },
-        areaStyle: {
-          color: {
-            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: `${lineColor}40` },
-              { offset: 1, color: `${lineColor}05` },
-            ],
-          },
-        },
+        name: 'Volume',
+        data: data.map((d) => ({
+          time: d.time.split('T')[0],
+          value: d.volume,
+        })),
+        color: '#6366f1',
+        seriesType: 'bar' as const,
       }],
-    }
+    }]
   }
 
   return (
@@ -336,7 +292,7 @@ export function SymbolDetailModal(props: SymbolDetailModalProps) {
                       </div>
                     }
                   >
-                    <EChart option={lineChartOption()} height={100} />
+                    <PriceChart data={toLineData()} type="line" height={100} />
                   </Show>
                 </div>
 
@@ -481,7 +437,13 @@ export function SymbolDetailModal(props: SymbolDetailModalProps) {
                     </div>
                   }
                 >
-                  <EChart option={candleChartOption()} height={350} />
+                  <SyncedChartPanel
+                    data={toCandlestickData()}
+                    type="candlestick"
+                    mainHeight={280}
+                    subHeight={80}
+                    subIndicators={toVolumeIndicator()}
+                  />
                 </Show>
               </div>
             </Show>

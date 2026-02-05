@@ -17,13 +17,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use trader_analytics::ml::{CandlestickPatternInfo, ChartPatternInfo, PatternDetectionResult};
+use utoipa::{IntoParams, ToSchema};
 
 use crate::state::AppState;
 
 // ==================== 쿼리 파라미터 ====================
 
 /// 패턴 감지 쿼리 파라미터.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams, ToSchema)]
 pub struct PatternQuery {
     /// 심볼 (예: "BTC/USDT", "005930")
     pub symbol: String,
@@ -53,7 +54,7 @@ fn default_confidence() -> f64 {
 // ==================== 응답 타입 ====================
 
 /// 캔들스틱 패턴 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CandlestickPatternsResponse {
     /// 심볼
     pub symbol: String,
@@ -68,7 +69,7 @@ pub struct CandlestickPatternsResponse {
 }
 
 /// 차트 패턴 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ChartPatternsResponse {
     /// 심볼
     pub symbol: String,
@@ -83,7 +84,7 @@ pub struct ChartPatternsResponse {
 }
 
 /// 패턴 타입 정보.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PatternTypeInfo {
     /// 패턴 ID (snake_case)
     pub id: String,
@@ -98,7 +99,7 @@ pub struct PatternTypeInfo {
 }
 
 /// 지원 패턴 타입 목록 응답.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PatternTypesResponse {
     /// 캔들스틱 패턴 타입
     pub candlestick_patterns: Vec<PatternTypeInfo>,
@@ -111,6 +112,15 @@ pub struct PatternTypesResponse {
 /// 캔들스틱 패턴 감지.
 ///
 /// GET /api/v1/patterns/candlestick?symbol=BTC/USDT&timeframe=1h&limit=100
+#[utoipa::path(
+    get,
+    path = "/api/v1/patterns/candlestick",
+    tag = "patterns",
+    params(PatternQuery),
+    responses(
+        (status = 200, description = "캔들스틱 패턴 감지 성공", body = CandlestickPatternsResponse)
+    )
+)]
 async fn get_candlestick_patterns(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PatternQuery>,
@@ -144,6 +154,15 @@ async fn get_candlestick_patterns(
 /// 차트 패턴 감지.
 ///
 /// GET /api/v1/patterns/chart?symbol=BTC/USDT&timeframe=1h&limit=100
+#[utoipa::path(
+    get,
+    path = "/api/v1/patterns/chart",
+    tag = "patterns",
+    params(PatternQuery),
+    responses(
+        (status = 200, description = "차트 패턴 감지 성공", body = ChartPatternsResponse)
+    )
+)]
 async fn get_chart_patterns(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PatternQuery>,
@@ -176,6 +195,15 @@ async fn get_chart_patterns(
 /// 모든 패턴 감지 (캔들스틱 + 차트).
 ///
 /// GET /api/v1/patterns/detect?symbol=BTC/USDT&timeframe=1h&limit=100
+#[utoipa::path(
+    get,
+    path = "/api/v1/patterns/detect",
+    tag = "patterns",
+    params(PatternQuery),
+    responses(
+        (status = 200, description = "모든 패턴 감지 성공", body = PatternDetectionResult)
+    )
+)]
 async fn detect_all_patterns(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PatternQuery>,
@@ -204,6 +232,14 @@ async fn detect_all_patterns(
 /// 지원되는 패턴 타입 목록.
 ///
 /// GET /api/v1/patterns/types
+#[utoipa::path(
+    get,
+    path = "/api/v1/patterns/types",
+    tag = "patterns",
+    responses(
+        (status = 200, description = "패턴 타입 목록 조회 성공", body = PatternTypesResponse)
+    )
+)]
 async fn get_pattern_types() -> Json<PatternTypesResponse> {
     let candlestick_patterns = vec![
         // 단일 캔들 (Bullish)

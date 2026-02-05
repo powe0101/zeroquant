@@ -26,11 +26,12 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use trader_core::domain::StrategyContext;
+use trader_core::types::Timeframe;
 use trader_core::{
     MacroRisk, MarketData, MarketDataType, MarketRegime, Order, Position, RouteState, Side, Signal,
 };
@@ -76,58 +77,58 @@ pub enum EtfType {
 pub struct Us3xLeverageConfig {
     /// ETF 배분 리스트
     #[serde(default = "default_allocations")]
-    #[schema(label = "ETF 배분")]
+    #[schema(label = "ETF 배분", section = "asset")]
     pub allocations: Vec<EtfAllocation>,
 
     /// 리밸런싱 임계값 (비율 이탈 %, 기본값: 5%)
     #[serde(default = "default_rebalance_threshold")]
-    #[schema(label = "리밸런싱 임계값 (%)", min = 1, max = 20)]
+    #[schema(label = "리밸런싱 임계값 (%)", min = 1, max = 20, section = "timing")]
     pub rebalance_threshold: f64,
 
     /// 리밸런싱 주기 (일, 기본값: 30일)
     #[serde(default = "default_rebalance_period_days")]
-    #[schema(label = "리밸런싱 주기 (일)", min = 1, max = 90)]
+    #[schema(label = "리밸런싱 주기 (일)", min = 1, max = 90, section = "timing")]
     pub rebalance_period_days: u32,
 
     /// 레버리지 MA 기간 (기본값: 20)
     #[serde(default = "default_ma_period")]
-    #[schema(label = "이동평균 기간", min = 5, max = 200)]
+    #[schema(label = "이동평균 기간", min = 5, max = 200, section = "indicator")]
     pub ma_period: usize,
 
     /// 하락장 인버스 최대 비중 (기본값: 60%)
     #[serde(default = "default_max_inverse_ratio")]
-    #[schema(label = "인버스 최대 비중 (%)", min = 0, max = 100)]
+    #[schema(label = "인버스 최대 비중 (%)", min = 0, max = 100, section = "sizing")]
     pub max_inverse_ratio: f64,
 
     /// 레버리지 최대 손실 시 전량 매도 (기본값: 30%)
     #[serde(default = "default_max_drawdown")]
-    #[schema(label = "최대 손실률 (%)", min = 5, max = 50)]
+    #[schema(label = "최대 손실률 (%)", min = 5, max = 50, section = "sizing")]
     pub max_drawdown_pct: f64,
 
     // ========== StrategyContext 연동 설정 (v2.0) ==========
     /// 최소 글로벌 스코어 (기본값: 55.0)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, section = "filter")]
     pub min_global_score: f64,
 
     /// RouteState 필터 사용 여부 (기본값: true)
     #[serde(default = "default_use_route_filter")]
-    #[schema(label = "RouteState 필터 사용")]
+    #[schema(label = "RouteState 필터 사용", section = "filter")]
     pub use_route_filter: bool,
 
     /// MarketRegime 기반 동적 배분 사용 여부 (기본값: true)
     #[serde(default = "default_use_regime_allocation")]
-    #[schema(label = "MarketRegime 동적 배분")]
+    #[schema(label = "MarketRegime 동적 배분", section = "filter")]
     pub use_regime_allocation: bool,
 
     /// MacroRisk 기반 방어 전환 사용 여부 (기본값: true)
     #[serde(default = "default_use_macro_risk")]
-    #[schema(label = "MacroRisk 방어 전환")]
+    #[schema(label = "MacroRisk 방어 전환", section = "filter")]
     pub use_macro_risk: bool,
 
     /// 위기 상황 시 전량 현금화 (기본값: false)
     #[serde(default)]
-    #[schema(label = "위기 시 현금화")]
+    #[schema(label = "위기 시 현금화", section = "filter")]
     pub cash_out_on_crisis: bool,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -203,7 +204,7 @@ impl Default for Us3xLeverageConfig {
             use_regime_allocation: true,
             use_macro_risk: true,
             cash_out_on_crisis: false,
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_leverage(),
         }
     }
 }
@@ -212,7 +213,7 @@ impl Default for Us3xLeverageConfig {
 // 내부 데이터 구조체
 // ============================================================================
 
-/// ETF 데이터
+/// ETF 데이터 (가격 히스토리는 StrategyContext에서 가져옴)
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct EtfData {
@@ -224,7 +225,6 @@ struct EtfData {
     current_price: Decimal,
     holdings: Decimal,
     entry_price: Decimal,
-    prices: VecDeque<Decimal>,
     ma_period: usize,
 }
 
@@ -239,32 +239,12 @@ impl EtfData {
             current_price: Decimal::ZERO,
             holdings: Decimal::ZERO,
             entry_price: Decimal::ZERO,
-            prices: VecDeque::new(),
             ma_period,
         }
     }
 
-    fn update(&mut self, price: Decimal) {
+    fn update_price(&mut self, price: Decimal) {
         self.current_price = price;
-        self.prices.push_front(price);
-        while self.prices.len() > self.ma_period + 5 {
-            self.prices.pop_back();
-        }
-    }
-
-    fn calculate_ma(&self) -> Option<Decimal> {
-        if self.prices.len() < self.ma_period {
-            return None;
-        }
-        let sum: Decimal = self.prices.iter().take(self.ma_period).sum();
-        Some(sum / Decimal::from(self.ma_period))
-    }
-
-    fn is_above_ma(&self) -> bool {
-        match self.calculate_ma() {
-            Some(ma) => self.current_price > ma,
-            None => true, // 데이터 부족 시 기본값
-        }
     }
 }
 
@@ -368,6 +348,26 @@ impl Us3xLeverageStrategy {
         ctx_guard
             .get_macro_environment()
             .map(|m| m.risk_level)
+    }
+
+    /// StrategyContext에서 klines를 가져와 MA 위에 있는지 확인
+    async fn is_etf_above_ma(&self, ticker: &str, ma_period: usize, current_price: Decimal) -> bool {
+        let ctx = match self.context.as_ref() {
+            Some(c) => c,
+            None => return false,
+        };
+        let ctx_guard = ctx.read().await;
+        let klines = ctx_guard.get_klines(ticker, Timeframe::D1);
+
+        if klines.len() < ma_period {
+            return false;
+        }
+
+        // 최근 ma_period개의 종가 평균
+        let sum: Decimal = klines.iter().rev().take(ma_period).map(|k| k.close).sum();
+        let ma = sum / Decimal::from(ma_period);
+
+        current_price > ma
     }
 
     /// 종목별 진입 가능 여부 확인 (v2.0 - async)
@@ -474,14 +474,20 @@ impl Us3xLeverageStrategy {
 
         // 3. 폴백: MA 기반 판단
         let mut bullish_count = 0;
-        let mut total_leverage = 0;
 
-        for data in self.etf_data.values() {
-            if data.etf_type == EtfType::Leverage {
-                total_leverage += 1;
-                if data.is_above_ma() {
-                    bullish_count += 1;
-                }
+        // borrow 문제 회피를 위해 필요한 데이터 미리 추출
+        let leverage_etfs: Vec<_> = self
+            .etf_data
+            .values()
+            .filter(|d| d.etf_type == EtfType::Leverage)
+            .map(|d| (d.ticker.clone(), d.ma_period, d.current_price))
+            .collect();
+
+        let total_leverage = leverage_etfs.len();
+
+        for (ticker, ma_period, current_price) in leverage_etfs {
+            if self.is_etf_above_ma(&ticker, ma_period, current_price).await {
+                bullish_count += 1;
             }
         }
 
@@ -904,7 +910,7 @@ impl Strategy for Us3xLeverageStrategy {
 
         // ETF 데이터 업데이트
         if let Some(etf) = self.etf_data.get_mut(&ticker_str) {
-            etf.update(close);
+            etf.update_price(close);
         }
 
         // 총 가치 계산

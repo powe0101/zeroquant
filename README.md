@@ -170,53 +170,195 @@ pub trait Strategy: Send + Sync {
 
 ### 새 전략 추가 방법
 
-1. **전략 파일 생성**: `crates/trader-strategy/src/strategies/my_strategy.rs`
+#### 1. 전략 Config 정의 (SDUI 스키마 자동 생성)
+
+`crates/trader-strategy/src/strategies/my_strategy.rs`
 
 ```rust
 use crate::Strategy;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use trader_strategy_macro::StrategyConfig;  // SDUI 스키마 자동 생성 매크로
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+// 공통 모듈 임포트 (v0.7.0+)
+use super::common::{
+    ExitConfig, calculate_rsi, PositionSizer, RiskChecker,
+};
+
+/// 전략 설정 - SDUI 스키마 자동 생성
+#[derive(Debug, Clone, Serialize, Deserialize, StrategyConfig)]
+#[strategy(
+    id = "my_strategy",                    // 전략 고유 ID (URL/API에서 사용)
+    name = "나만의 RSI 전략",               // UI 표시명
+    description = "RSI 과매수/과매도 평균회귀", // 전략 설명
+    category = "Intraday"                  // 카테고리: Intraday, Swing, Position
+)]
 pub struct MyStrategyConfig {
-    pub symbol: String,
-    pub parameter1: f64,
-    // ... 전략 파라미터
+    /// 거래 종목
+    #[serde(default = "default_ticker")]
+    #[schema(
+        label = "거래 종목",      // UI 라벨
+        field_type = "symbol",   // 필드 타입: symbol, number, integer, boolean, select
+        default = "005930",      // 기본값
+        section = "asset"        // UI 섹션 그룹
+    )]
+    pub ticker: String,
+
+    /// 거래 금액
+    #[serde(default = "default_amount")]
+    #[schema(label = "거래 금액", field_type = "number", min = 10000, max = 100000000, default = 1000000, section = "asset")]
+    pub amount: Decimal,
+
+    /// RSI 기간
+    #[serde(default = "default_rsi_period")]
+    #[schema(label = "RSI 기간", field_type = "integer", min = 2, max = 100, default = 14, section = "indicator")]
+    pub rsi_period: usize,
+
+    /// 과매도 임계값
+    #[serde(default = "default_oversold")]
+    #[schema(label = "과매도 임계값", field_type = "number", min = 0, max = 50, default = 30, section = "indicator")]
+    pub oversold: Decimal,
+
+    /// 과매수 임계값
+    #[serde(default = "default_overbought")]
+    #[schema(label = "과매수 임계값", field_type = "number", min = 50, max = 100, default = 70, section = "indicator")]
+    pub overbought: Decimal,
+
+    /// 청산 설정 (공통 스키마 프래그먼트 참조)
+    #[serde(default)]
+    #[fragment("risk.exit_config")]
+    pub exit_config: ExitConfig,
+
+    /// 최소 GlobalScore 필터
+    #[serde(default = "default_min_score")]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50, section = "filter")]
+    pub min_global_score: Decimal,
 }
 
+// 기본값 함수들
+fn default_ticker() -> String { "005930".to_string() }
+fn default_amount() -> Decimal { dec!(1000000) }
+fn default_rsi_period() -> usize { 14 }
+fn default_oversold() -> Decimal { dec!(30) }
+fn default_overbought() -> Decimal { dec!(70) }
+fn default_min_score() -> Decimal { dec!(50) }
+
+impl Default for MyStrategyConfig {
+    fn default() -> Self {
+        Self {
+            ticker: default_ticker(),
+            amount: default_amount(),
+            rsi_period: default_rsi_period(),
+            oversold: default_oversold(),
+            overbought: default_overbought(),
+            exit_config: ExitConfig::default(),
+            min_global_score: default_min_score(),
+        }
+    }
+}
+```
+
+#### 2. Strategy Trait 구현
+
+```rust
 pub struct MyStrategy {
     config: MyStrategyConfig,
-    // ... 내부 상태
+    context: Option<Arc<RwLock<StrategyContext>>>,  // GlobalScore, RouteState 등
 }
 
 #[async_trait]
 impl Strategy for MyStrategy {
     fn name(&self) -> &str { "my_strategy" }
     fn version(&self) -> &str { "1.0.0" }
-    fn description(&self) -> &str { "나만의 전략 설명" }
+    fn description(&self) -> &str { "RSI 기반 평균회귀 전략" }
+
+    // StrategyContext 주입 (GlobalScore, RouteState 접근용)
+    fn set_context(&mut self, ctx: Arc<RwLock<StrategyContext>>) {
+        self.context = Some(ctx);
+    }
 
     async fn on_market_data(&mut self, data: &MarketData) -> Result<Vec<Signal>> {
-        // 시장 데이터 분석 후 매수/매도 신호 생성
-        let signals = vec![];
+        let mut signals = vec![];
 
-        if /* 매수 조건 */ {
-            signals.push(Signal::new(SignalType::Buy, ...));
+        // GlobalScore 필터링 (공통 패턴)
+        if let Some(ctx) = &self.context {
+            let ctx = ctx.read().await;
+            if let Some(score) = ctx.get_global_score(&self.config.ticker) {
+                if score < self.config.min_global_score {
+                    return Ok(vec![]); // 스코어 미달 종목 제외
+                }
+            }
+        }
+
+        // RSI 계산 및 신호 생성
+        let rsi = calculate_rsi(&data.closes, self.config.rsi_period)?;
+
+        if rsi < self.config.oversold {
+            signals.push(Signal::buy(&self.config.ticker, data.close));
+        } else if rsi > self.config.overbought {
+            signals.push(Signal::sell(&self.config.ticker, data.close));
         }
 
         Ok(signals)
     }
-    // ... 나머지 구현
+    // ... 나머지 구현 (on_order_filled, on_position_update, shutdown, get_state)
 }
 ```
 
-2. **모듈 등록**: `crates/trader-strategy/src/strategies/mod.rs`
+#### 3. 모듈 및 레지스트리 등록
 
+**모듈 등록**: `crates/trader-strategy/src/strategies/mod.rs`
 ```rust
 pub mod my_strategy;
 pub use my_strategy::*;
 ```
 
-3. **엔진에 등록**: `crates/trader-strategy/src/engine.rs`의 전략 팩토리에 추가
+**스키마 레지스트리 등록**: `crates/trader-strategy/src/schema_registry.rs`
+```rust
+// 전략 Config들 등록 (SDUI 스키마 제공)
+registry.register::<MyStrategyConfig>();
+```
+
+**전략 팩토리 등록**: `crates/trader-strategy/src/engine.rs`
+```rust
+"my_strategy" => Box::new(MyStrategy::from_config(config)?),
+```
+
+#### 4. 공통 Exit Config 프리셋 활용 (v0.7.0+)
+
+| 프리셋 | 손절 | 익절 | 트레일링 | 반대신호 청산 | 적용 대상 |
+|--------|------|------|----------|--------------|----------|
+| `for_day_trading()` | 2% | 4% | ❌ | ✅ | day_trading, sector_vb, momentum_surge |
+| `for_mean_reversion()` | 3% | 6% | ❌ | ✅ | mean_reversion, range_trading, candle_pattern |
+| `for_grid_trading()` | ❌ | 3% | ❌ | ❌ | infinity_bot, grid 변형 |
+| `for_rebalancing()` | ❌ | ❌ | ❌ | ❌ | asset_allocation, rotation, pension_bot |
+| `for_leverage_etf()` | 5% | 10% | ✅ (3%→2%) | ✅ | us_3x_leverage |
+
+```rust
+// 사용 예시
+use super::common::ExitConfig;
+
+#[serde(default = "ExitConfig::for_mean_reversion")]
+pub exit_config: ExitConfig,
+```
+
+### CLI로 전략 테스트 (v0.7.0+)
+
+```bash
+# 단일 심볼 테스트
+trader strategy-test --strategy my_strategy --symbol 005930 --market KR
+
+# 다중 심볼 테스트 (로테이션 전략)
+trader strategy-test --strategy rotation --symbols "SPY,QQQ,IWM" --market US
+
+# JSON config로 상세 테스트
+trader strategy-test --strategy my_strategy --config '{"ticker":"005930","rsi_period":14}'
+
+# 디버그 모드 (상세 진단 정보 출력)
+trader strategy-test --strategy my_strategy --symbol 005930 --debug
+```
 
 ### 전략 구조
 
@@ -229,10 +371,18 @@ crates/trader-strategy/
 │   ├── plugin/             # 동적 플러그인 로더
 │   └── strategies/
 │       ├── mod.rs          # 전략 모듈 목록
-│       ├── common/         # 공통 유틸리티 (모멘텀, 리밸런스)
-│       ├── grid.rs         # 그리드 트레이딩
-│       ├── rsi.rs          # RSI 평균회귀
-│       └── ...             # 기타 전략들
+│       ├── common/         # 공통 유틸리티 (v0.7.0 대폭 확장)
+│       │   ├── exit_config.rs      # 청산 설정 프리셋
+│       │   ├── global_score_utils.rs # GlobalScore 유틸리티
+│       │   ├── indicators.rs       # 기술 지표 (RSI, SMA, BB 등)
+│       │   ├── position_sizing.rs  # 포지션 사이징
+│       │   ├── risk_checks.rs      # 리스크 검증
+│       │   └── signal_filters.rs   # 신호 필터링
+│       ├── day_trading.rs      # 단타/그리드 전략
+│       ├── mean_reversion.rs   # RSI/볼린저 평균회귀
+│       ├── rotation.rs         # 모멘텀 로테이션
+│       ├── asset_allocation.rs # 자산배분 (HAA/XAA/BAA)
+│       └── ...                 # 기타 통합 전략들
 ```
 
 ## 아키텍처
@@ -243,14 +393,24 @@ zeroquant/
 │   ├── trader-core/         # 도메인 모델, 공통 유틸리티
 │   ├── trader-exchange/     # 거래소 연동 (Binance, KIS)
 │   ├── trader-strategy/     # 전략 엔진, 16개 통합 전략
+│   │   └── strategies/common/ # 공통 모듈 (exit_config, global_score_utils 등)
 │   ├── trader-risk/         # 리스크 관리
 │   ├── trader-execution/    # 주문 실행 엔진
 │   ├── trader-data/         # 데이터 수집/저장 (OHLCV)
+│   │   └── provider/        # 데이터 프로바이더
+│   │       ├── naver.rs         # 네이버 금융 (국내)
+│   │       ├── yahoo_fundamental.rs # Yahoo 펀더멘털 (해외)
+│   │       └── krx_api.rs       # KRX OPEN API
 │   ├── trader-analytics/    # ML 추론, 성과 분석, 패턴 인식
-│   ├── trader-api/          # REST/WebSocket API
+│   ├── trader-api/          # REST/WebSocket API (OpenAPI 3.0 문서화)
 │   │   ├── repository/      # 데이터 접근 계층 (12개 Repository)
 │   │   └── routes/          # 모듈화된 라우트 (analytics/, credentials/, backtest/, journal, screening)
 │   ├── trader-cli/          # CLI 도구
+│   │   └── commands/
+│   │       ├── strategy_test.rs # 전략 통합 테스트 (v0.7.0 신규)
+│   │       └── download.rs      # 데이터 다운로드
+│   ├── trader-collector/    # Standalone 데이터 수집기
+│   │   └── modules/         # 수집 모듈 (ohlcv, indicator, global_score, fundamental)
 │   └── trader-notification/ # 알림 (Telegram)
 ├── frontend/                # SolidJS + TypeScript + Vite
 │   ├── src/pages/
@@ -261,6 +421,7 @@ zeroquant/
 │   │   ├── Simulation.tsx   # 시뮬레이션
 │   │   ├── MLTraining.tsx   # ML 모델 훈련
 │   │   ├── TradingJournal.tsx # 매매일지
+│   │   ├── GlobalRanking.tsx  # 글로벌 랭킹
 │   │   └── Settings.tsx     # 설정 (API 키, 알림)
 │   └── src/components/      # 재사용 컴포넌트 (15개+)
 ├── migrations/              # DB 마이그레이션 (7개 통합)

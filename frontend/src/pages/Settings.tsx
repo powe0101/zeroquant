@@ -1,5 +1,5 @@
 import { createSignal, For, Show, createResource, createEffect } from 'solid-js'
-import { Save, Key, Bell, Shield, Database, Globe, Moon, Sun, Send, MessageCircle, CheckCircle, XCircle, RefreshCw, Play, Plus, Trash2, TestTube, Building2, Bot, ChevronDown, ChevronRight, BellRing } from 'lucide-solid'
+import { Save, Key, Bell, Database, Globe, Moon, Sun, Send, MessageCircle, CheckCircle, XCircle, RefreshCw, Play, Plus, Trash2, TestTube, Building2, Bot, ChevronDown, ChevronRight, BellRing } from 'lucide-solid'
 import { useToast } from '../components/Toast'
 import {
   Card,
@@ -424,12 +424,6 @@ export function Settings() {
     dailyReport: false,
     errorAlerts: true,
   })
-  const [riskSettings, setRiskSettings] = createSignal({
-    maxDailyLoss: '3',
-    maxPositionSize: '10',
-    stopLossDefault: '2',
-    takeProfitDefault: '5',
-  })
   const [telegramSettings, setTelegramSettings] = createSignal({
     botToken: '',
     chatId: '',
@@ -547,7 +541,6 @@ export function Settings() {
       // 로컬 스토리지에 설정 저장 (임시)
       localStorage.setItem('trader_settings', JSON.stringify({
         notifications: notifications(),
-        riskSettings: riskSettings(),
         isDarkMode: isDarkMode(),
       }))
     }, 500)
@@ -1146,88 +1139,6 @@ export function Settings() {
             </div>
           </Show>
         </Show>
-        </CardContent>
-      </Card>
-
-      {/* Risk Management */}
-      <Card>
-        <CardHeader>
-          <h3 class="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2">
-            <Shield class="w-5 h-5" />
-            리스크 관리
-          </h3>
-        </CardHeader>
-        <CardContent>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label class="block text-sm text-[var(--color-text-muted)] mb-1">
-              일일 최대 손실 (%)
-            </label>
-            <input
-              type="number"
-              value={riskSettings().maxDailyLoss}
-              onInput={(e) =>
-                setRiskSettings((prev) => ({
-                  ...prev,
-                  maxDailyLoss: e.currentTarget.value,
-                }))
-              }
-              class="w-full px-4 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm text-[var(--color-text-muted)] mb-1">
-              최대 포지션 크기 (%)
-            </label>
-            <input
-              type="number"
-              value={riskSettings().maxPositionSize}
-              onInput={(e) =>
-                setRiskSettings((prev) => ({
-                  ...prev,
-                  maxPositionSize: e.currentTarget.value,
-                }))
-              }
-              class="w-full px-4 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm text-[var(--color-text-muted)] mb-1">
-              기본 손절가 (%)
-            </label>
-            <input
-              type="number"
-              value={riskSettings().stopLossDefault}
-              onInput={(e) =>
-                setRiskSettings((prev) => ({
-                  ...prev,
-                  stopLossDefault: e.currentTarget.value,
-                }))
-              }
-              class="w-full px-4 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm text-[var(--color-text-muted)] mb-1">
-              기본 익절가 (%)
-            </label>
-            <input
-              type="number"
-              value={riskSettings().takeProfitDefault}
-              onInput={(e) =>
-                setRiskSettings((prev) => ({
-                  ...prev,
-                  takeProfitDefault: e.currentTarget.value,
-                }))
-              }
-              class="w-full px-4 py-2 rounded-lg bg-[var(--color-surface-light)] border border-[var(--color-surface-light)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-            />
-          </div>
-        </div>
         </CardContent>
       </Card>
 

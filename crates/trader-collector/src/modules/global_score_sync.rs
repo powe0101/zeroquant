@@ -3,17 +3,18 @@
 //! 모든 활성 심볼에 대해 GlobalScore를 계산하여 symbol_global_score 테이블에 저장합니다.
 
 use rust_decimal::Decimal;
-use sqlx::PgPool;
+use sqlx::{PgPool, QueryBuilder, Postgres};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use trader_analytics::{GlobalScorer, GlobalScorerParams, IndicatorEngine, StructuralFeatures};
 use trader_analytics::indicators::AtrParams;
-use trader_core::{MarketType, Symbol, Timeframe};
+use trader_core::{Symbol, Timeframe};
 use trader_data::cache::historical::CachedHistoricalDataProvider;
 
 use super::checkpoint::{self, CheckpointStatus};
+use super::utils::market_to_market_type;
 use crate::config::CollectorConfig;
 use crate::error::CollectorError;
 use crate::stats::CollectionStats;
@@ -190,15 +191,8 @@ async fn calculate_and_save(
     ticker: &str,
     market: &str,
 ) -> Result<bool> {
-    // 1. MarketType 변환
-    let market_type = match market {
-        "KR" => MarketType::Stock,
-        "US" => MarketType::Stock,
-        "CRYPTO" => MarketType::Crypto,
-        "FOREX" => MarketType::Forex,
-        "FUTURES" => MarketType::Futures,
-        _ => MarketType::Stock,
-    };
+    // 1. MarketType 변환 (utils.rs 사용)
+    let market_type = market_to_market_type(market);
 
     let symbol = Symbol::new(ticker, "", market_type);
 
@@ -289,6 +283,7 @@ async fn calculate_and_save(
 
     let penalties = serde_json::json!({ "total": penalties_value.to_string() });
 
+    // 추천 등급 (BUY, WATCH, HOLD)
     let grade = &result.recommendation;
 
     let confidence_str = if result.confidence >= Decimal::new(8, 1) {
@@ -343,50 +338,42 @@ async fn get_symbols_by_tickers(
     Ok(results)
 }
 
-/// 전체 활성 심볼 조회.
-#[allow(dead_code)]
-async fn get_all_active_symbols(pool: &PgPool, limit: i64) -> Result<Vec<(Uuid, String, String)>> {
-    get_active_symbols_with_options(pool, limit, None, None).await
-}
+
 
 /// 활성 심볼 조회 (resume, stale_hours 지원).
+/// QueryBuilder 사용으로 SQL 주입 방지.
 async fn get_active_symbols_with_options(
     pool: &PgPool,
     limit: i64,
     resume_ticker: Option<&str>,
     stale_hours: Option<u32>,
 ) -> Result<Vec<(Uuid, String, String)>> {
-    let resume_condition = if let Some(t) = resume_ticker {
-        format!("AND si.ticker > '{}'", t)
-    } else {
-        String::new()
-    };
-
-    let stale_condition = if let Some(hours) = stale_hours {
-        format!(
-            "AND (sgs.updated_at IS NULL OR sgs.updated_at < NOW() - INTERVAL '{} hours')",
-            hours
-        )
-    } else {
-        String::new()
-    };
-
-    let query = format!(
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
         r#"
         SELECT si.id, si.ticker, si.market
         FROM symbol_info si
         LEFT JOIN symbol_global_score sgs ON si.id = sgs.symbol_info_id
         WHERE si.is_active = true
           AND si.market != 'CRYPTO'
-          {} {}
-        ORDER BY si.ticker
-        LIMIT $1
         "#,
-        resume_condition, stale_condition
     );
 
-    let results = sqlx::query_as::<_, (Uuid, String, String)>(&query)
-        .bind(limit)
+    if let Some(t) = resume_ticker {
+        qb.push(" AND si.ticker > ");
+        qb.push_bind(t.to_string());
+    }
+
+    if let Some(hours) = stale_hours {
+        qb.push(" AND (sgs.updated_at IS NULL OR sgs.updated_at < NOW() - INTERVAL '");
+        qb.push(hours.to_string());
+        qb.push(" hours')");
+    }
+
+    qb.push(" ORDER BY si.ticker LIMIT ");
+    qb.push_bind(limit);
+
+    let results = qb
+        .build_query_as::<(Uuid, String, String)>()
         .fetch_all(pool)
         .await
         .map_err(CollectorError::Database)?;

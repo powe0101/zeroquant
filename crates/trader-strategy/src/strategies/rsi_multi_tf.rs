@@ -43,7 +43,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::{
     domain::{MultiTimeframeConfig, StrategyContext},
-    Kline, MarketData, MarketDataType, Order, Position, Side, Signal, Timeframe,
+    Kline, MarketData, MarketDataType, Order, Position, RouteState, Side, Signal, Timeframe,
 };
 
 /// 다중 타임프레임 RSI 전략 설정.
@@ -57,57 +57,75 @@ use trader_core::{
 pub struct RsiMultiTfConfig {
     /// 거래할 티커
     #[serde(deserialize_with = "deserialize_ticker")]
-    #[schema(label = "거래 종목")]
+    #[schema(label = "거래 종목", section = "asset")]
     pub ticker: String,
 
     /// 거래 금액 (호가 통화 기준)
-    #[schema(label = "거래 금액", min = 100, max = 100000000)]
+    #[schema(label = "거래 금액", min = 100, max = 100000000, section = "asset")]
     pub amount: Decimal,
 
     /// 일봉 RSI 추세 필터 임계값 (기본: 50)
     #[serde(default = "default_daily_trend_threshold")]
-    #[schema(label = "일봉 RSI 임계값", min = 30, max = 70)]
+    #[schema(label = "일봉 RSI 임계값", min = 30, max = 70, section = "indicator")]
     pub daily_trend_threshold: Decimal,
 
     /// 1시간봉 과매도 임계값 (기본: 30)
     #[serde(default = "default_h1_oversold")]
-    #[schema(label = "1시간봉 과매도 임계값", min = 10, max = 40)]
+    #[schema(label = "1시간봉 과매도 임계값", min = 10, max = 40, section = "indicator")]
     pub h1_oversold_threshold: Decimal,
 
     /// 5분봉 과매도 임계값 (기본: 30)
     #[serde(default = "default_m5_oversold")]
-    #[schema(label = "5분봉 과매도 임계값", min = 10, max = 40)]
+    #[schema(label = "5분봉 과매도 임계값", min = 10, max = 40, section = "indicator")]
     pub m5_oversold_threshold: Decimal,
 
     /// 과매수 청산 임계값 (기본: 70)
     #[serde(default = "default_overbought")]
-    #[schema(label = "과매수 청산 임계값", min = 60, max = 90)]
+    #[schema(label = "과매수 청산 임계값", min = 60, max = 90, section = "indicator")]
     pub overbought_threshold: Decimal,
 
     /// RSI 기간 (기본: 14)
     #[serde(default = "default_rsi_period")]
-    #[schema(label = "RSI 기간", min = 5, max = 50)]
+    #[schema(label = "RSI 기간", min = 5, max = 50, section = "indicator")]
     pub rsi_period: usize,
 
     /// 손절 비율 (%)
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(label = "손절 비율 (%)", min = 0.5, max = 20.0)]
+    #[schema(label = "손절 비율 (%)", min = 0.5, max = 20.0, section = "sizing")]
     pub stop_loss_pct: Option<Decimal>,
 
     /// 익절 비율 (%)
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(label = "익절 비율 (%)", min = 1.0, max = 50.0)]
+    #[schema(label = "익절 비율 (%)", min = 1.0, max = 50.0, section = "sizing")]
     pub take_profit_pct: Option<Decimal>,
 
     /// 거래 후 쿨다운 기간 (Primary 캔들 수)
     #[serde(default = "default_cooldown")]
-    #[schema(label = "쿨다운 캔들 수", min = 0, max = 20)]
+    #[schema(label = "쿨다운 캔들 수", min = 0, max = 20, section = "timing")]
     pub cooldown_candles: usize,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
     #[serde(default)]
     #[fragment("risk.exit_config")]
     pub exit_config: ExitConfig,
+
+    /// 최소 GlobalScore (기본값: 50)
+    #[serde(default = "default_min_global_score")]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 50, section = "filter")]
+    pub min_global_score: Decimal,
+
+    /// RouteState 필터 사용 여부 (기본값: true)
+    #[serde(default = "default_use_route_filter")]
+    #[schema(label = "RouteState 필터 사용", default = true, section = "filter")]
+    pub use_route_filter: bool,
+}
+
+fn default_min_global_score() -> Decimal {
+    dec!(50)
+}
+
+fn default_use_route_filter() -> bool {
+    true
 }
 
 fn default_daily_trend_threshold() -> Decimal {
@@ -142,7 +160,9 @@ impl Default for RsiMultiTfConfig {
             stop_loss_pct: Some(dec!(2)),   // 2% 손절
             take_profit_pct: Some(dec!(4)), // 4% 익절
             cooldown_candles: 3,
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_momentum(),
+            min_global_score: default_min_global_score(),
+            use_route_filter: default_use_route_filter(),
         }
     }
 }
@@ -235,6 +255,67 @@ impl RsiMultiTfStrategy {
             total_pnl: Decimal::ZERO,
             initialized: false,
         }
+    }
+
+    /// StrategyContext에서 RouteState 조회
+    async fn get_route_state(&self, ticker: &str) -> Option<RouteState> {
+        let ctx = self.context.as_ref()?;
+        let ctx_guard = ctx.read().await;
+        ctx_guard.get_route_state(ticker).cloned()
+    }
+
+    /// StrategyContext에서 GlobalScore 조회
+    async fn get_global_score(&self, ticker: &str) -> Option<f64> {
+        use rust_decimal::prelude::ToPrimitive;
+        let ctx = self.context.as_ref()?;
+        let ctx_guard = ctx.read().await;
+        ctx_guard.get_global_score(ticker).map(|gs| {
+            gs.overall_score.to_f64().unwrap_or(0.0)
+        })
+    }
+
+    /// 컨텍스트 기반 진입 조건 확인 (RouteState + GlobalScore)
+    async fn check_context_conditions(&self, config: &RsiMultiTfConfig) -> bool {
+        let ticker = match &self.ticker {
+            Some(t) => t.clone(),
+            None => return false,
+        };
+
+        // GlobalScore 체크
+        if let Some(score) = self.get_global_score(&ticker).await {
+            use rust_decimal::prelude::ToPrimitive;
+            let min_score = config.min_global_score.to_f64().unwrap_or(50.0);
+            if score < min_score {
+                debug!(
+                    ticker,
+                    score,
+                    min_score,
+                    "GlobalScore 미달 - 진입 거부"
+                );
+                return false;
+            }
+        }
+
+        // RouteState 체크
+        if config.use_route_filter {
+            if let Some(route) = self.get_route_state(&ticker).await {
+                match route {
+                    RouteState::Attack | RouteState::Armed => {
+                        // 진입 허용
+                    }
+                    RouteState::Neutral => {
+                        debug!(ticker, ?route, "RouteState Neutral - 진입 보류");
+                        return false;
+                    }
+                    RouteState::Wait | RouteState::Overheat => {
+                        debug!(ticker, ?route, "RouteState 비호의적 - 진입 거부");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     /// RSI 계산 (Wilder's Smoothing 사용)
@@ -577,6 +658,11 @@ impl Strategy for RsiMultiTfStrategy {
 
         match self.position_state {
             PositionState::Flat => {
+                // 컨텍스트 조건 체크 (RouteState + GlobalScore)
+                if !self.check_context_conditions(&config).await {
+                    return Ok(vec![]);
+                }
+
                 if self.should_enter_long(&config) {
                     info!(
                         "[{}] 매수 신호: ticker={}, price={}, daily_rsi={:?}, h1_rsi={:?}, m5_rsi={:?}",
@@ -773,27 +859,6 @@ register_strategy! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
-
-    fn create_kline(close: Decimal, open_time_hour: u32) -> Kline {
-        Kline {
-            ticker: "BTC/USDT".to_string(),
-            timeframe: Timeframe::M5,
-            open_time: Utc
-                .with_ymd_and_hms(2024, 1, 1, open_time_hour, 0, 0)
-                .unwrap(),
-            open: close,
-            high: close + dec!(10),
-            low: close - dec!(10),
-            close,
-            volume: dec!(1000),
-            close_time: Utc
-                .with_ymd_and_hms(2024, 1, 1, open_time_hour, 5, 0)
-                .unwrap(),
-            quote_volume: None,
-            num_trades: None,
-        }
-    }
 
     #[test]
     fn test_default_config() {

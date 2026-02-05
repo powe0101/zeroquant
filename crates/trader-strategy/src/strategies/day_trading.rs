@@ -49,7 +49,7 @@
 //! });
 //! ```
 
-use crate::strategies::common::deserialize_ticker;
+use crate::strategies::common::adjust_strength_by_score;
 use crate::Strategy;
 use async_trait::async_trait;
 use chrono::{DateTime, Timelike, Utc};
@@ -63,7 +63,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 use trader_core::domain::{RouteState, StrategyContext};
-use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal};
+use trader_core::{MarketData, MarketDataType, Order, Position, Side, Signal, Timeframe};
 
 /// 일간 트레이딩 전략 변형.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -299,42 +299,42 @@ impl Default for ExitConfig {
 pub struct VolatilityBreakoutConfig {
     /// 대상 티커.
     #[serde(default = "default_day_ticker")]
-    #[schema(label = "거래 종목", field_type = "symbol", default = "005930")]
+    #[schema(label = "거래 종목", field_type = "symbol", default = "005930", section = "asset")]
     pub ticker: String,
 
     /// 거래 금액.
     #[serde(default = "default_trade_amount")]
-    #[schema(label = "거래 금액", field_type = "number", min = 100000, max = 100000000, default = 1000000)]
+    #[schema(label = "거래 금액", field_type = "number", min = 100000, max = 100000000, default = 1000000, section = "asset")]
     pub trade_amount: Decimal,
 
     /// 돌파 K 계수.
     #[serde(default = "default_k_factor")]
-    #[schema(label = "K 계수", field_type = "number", min = 0.1, max = 1, default = 0.5)]
+    #[schema(label = "K 계수", field_type = "number", min = 0.1, max = 1, default = 0.5, section = "indicator")]
     pub k_factor: Decimal,
 
     /// ATR 사용 여부.
     #[serde(default)]
-    #[schema(label = "ATR 사용", field_type = "boolean", default = false)]
+    #[schema(label = "ATR 사용", field_type = "boolean", default = false, section = "indicator")]
     pub use_atr: bool,
 
     /// ATR 기간.
     #[serde(default = "default_atr_period")]
-    #[schema(label = "ATR 기간", field_type = "integer", min = 5, max = 50, default = 14)]
+    #[schema(label = "ATR 기간", field_type = "integer", min = 5, max = 50, default = 14, section = "indicator")]
     pub atr_period: usize,
 
     /// 룩백 기간.
     #[serde(default = "default_lookback")]
-    #[schema(label = "룩백 기간", field_type = "integer", min = 1, max = 10, default = 1)]
+    #[schema(label = "룩백 기간", field_type = "integer", min = 1, max = 10, default = 1, section = "indicator")]
     pub lookback_period: usize,
 
     /// 양방향 거래 여부.
     #[serde(default = "default_trade_both_directions")]
-    #[schema(label = "양방향 거래", field_type = "boolean", default = true)]
+    #[schema(label = "양방향 거래", field_type = "boolean", default = true, section = "trading")]
     pub trade_both_directions: bool,
 
     /// 기간 종료 시 청산.
     #[serde(default = "default_exit_at_period_close")]
-    #[schema(label = "장 마감 청산", field_type = "boolean", default = true)]
+    #[schema(label = "장 마감 청산", field_type = "boolean", default = true, section = "trading")]
     pub exit_at_period_close: bool,
 
     /// 청산 설정.
@@ -344,7 +344,7 @@ pub struct VolatilityBreakoutConfig {
 
     /// 최소 GlobalScore.
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: Decimal,
 }
 
@@ -386,22 +386,22 @@ impl From<VolatilityBreakoutConfig> for DayTradingConfig {
 pub struct SmaCrossoverConfig {
     /// 대상 티커.
     #[serde(default = "default_day_ticker")]
-    #[schema(label = "거래 종목", field_type = "symbol", default = "005930")]
+    #[schema(label = "거래 종목", field_type = "symbol", default = "005930", section = "asset")]
     pub ticker: String,
 
     /// 거래 금액.
     #[serde(default = "default_trade_amount")]
-    #[schema(label = "거래 금액", field_type = "number", min = 100000, max = 100000000, default = 1000000)]
+    #[schema(label = "거래 금액", field_type = "number", min = 100000, max = 100000000, default = 1000000, section = "asset")]
     pub trade_amount: Decimal,
 
     /// 단기 이동평균 기간.
     #[serde(default = "default_short_period")]
-    #[schema(label = "단기 MA 기간", field_type = "integer", min = 2, max = 50, default = 10)]
+    #[schema(label = "단기 MA 기간", field_type = "integer", min = 2, max = 50, default = 10, section = "indicator")]
     pub short_period: usize,
 
     /// 장기 이동평균 기간.
     #[serde(default = "default_long_period")]
-    #[schema(label = "장기 MA 기간", field_type = "integer", min = 5, max = 200, default = 20)]
+    #[schema(label = "장기 MA 기간", field_type = "integer", min = 5, max = 200, default = 20, section = "indicator")]
     pub long_period: usize,
 
     /// 청산 설정.
@@ -411,7 +411,7 @@ pub struct SmaCrossoverConfig {
 
     /// 최소 GlobalScore.
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: Decimal,
 }
 
@@ -444,42 +444,42 @@ impl From<SmaCrossoverConfig> for DayTradingConfig {
 pub struct VolumeSurgeStrategyConfig {
     /// 대상 티커.
     #[serde(default = "default_day_ticker")]
-    #[schema(label = "거래 종목", field_type = "symbol", default = "005930")]
+    #[schema(label = "거래 종목", field_type = "symbol", default = "005930", section = "asset")]
     pub ticker: String,
 
     /// 거래 금액.
     #[serde(default = "default_trade_amount")]
-    #[schema(label = "거래 금액", field_type = "number", min = 100000, max = 100000000, default = 1000000)]
+    #[schema(label = "거래 금액", field_type = "number", min = 100000, max = 100000000, default = 1000000, section = "asset")]
     pub trade_amount: Decimal,
 
     /// 거래량 급증 배수.
     #[serde(default = "default_volume_multiplier")]
-    #[schema(label = "거래량 배수", field_type = "number", min = 1, max = 10, default = 2)]
+    #[schema(label = "거래량 배수", field_type = "number", min = 1, max = 10, default = 2, section = "indicator")]
     pub volume_multiplier: Decimal,
 
     /// 거래량 평균 기간.
     #[serde(default = "default_volume_period")]
-    #[schema(label = "거래량 평균 기간", field_type = "integer", min = 5, max = 60, default = 20)]
+    #[schema(label = "거래량 평균 기간", field_type = "integer", min = 5, max = 60, default = 20, section = "indicator")]
     pub volume_period: usize,
 
     /// 연속 상승봉 수.
     #[serde(default = "default_consecutive_up")]
-    #[schema(label = "연속 상승봉 수", field_type = "integer", min = 1, max = 10, default = 3)]
+    #[schema(label = "연속 상승봉 수", field_type = "integer", min = 1, max = 10, default = 3, section = "indicator")]
     pub consecutive_up_candles: usize,
 
     /// RSI 과열 기준.
     #[serde(default = "default_rsi_overbought")]
-    #[schema(label = "RSI 과열 기준", field_type = "number", min = 60, max = 100, default = 80)]
+    #[schema(label = "RSI 과열 기준", field_type = "number", min = 60, max = 100, default = 80, section = "indicator")]
     pub rsi_overbought: Decimal,
 
     /// RSI 기간.
     #[serde(default = "default_rsi_period")]
-    #[schema(label = "RSI 기간", field_type = "integer", min = 5, max = 50, default = 14)]
+    #[schema(label = "RSI 기간", field_type = "integer", min = 5, max = 50, default = 14, section = "indicator")]
     pub rsi_period: usize,
 
     /// 최대 보유 시간 (분).
     #[serde(default = "default_max_hold_minutes")]
-    #[schema(label = "최대 보유 시간 (분)", field_type = "integer", min = 10, max = 480, default = 120)]
+    #[schema(label = "최대 보유 시간 (분)", field_type = "integer", min = 10, max = 480, default = 120, section = "trading")]
     pub max_hold_minutes: u32,
 
     /// 청산 설정.
@@ -489,7 +489,7 @@ pub struct VolumeSurgeStrategyConfig {
 
     /// 최소 GlobalScore.
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", field_type = "number", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: Decimal,
 }
 
@@ -735,6 +735,36 @@ impl DayTradingStrategy {
         true
     }
 
+
+    /// GlobalScore 기반 신호 강도 계산.
+    ///
+    /// 기본 강도를 GlobalScore에 따라 조정합니다.
+    /// - 90점 이상: 1.25배
+    /// - 80~90점: 1.15배
+    /// - 70~80점: 1.0배 (기본)
+    /// - 60~70점: 0.85배
+    /// - 60점 미만: 0.75배
+    fn get_adjusted_strength(&self, base_strength: f64) -> f64 {
+        let Some(config) = self.config.as_ref() else {
+            return base_strength;
+        };
+        let ticker = &config.ticker;
+
+        let Some(ctx) = self.context.as_ref() else {
+            return base_strength;
+        };
+
+        let Ok(ctx_lock) = ctx.try_read() else {
+            return base_strength;
+        };
+
+        if let Some(score) = ctx_lock.get_global_score(ticker) {
+            adjust_strength_by_score(base_strength, Some(score.overall_score))
+        } else {
+            base_strength
+        }
+    }
+
     /// SMA 계산.
     fn calculate_sma(&self, period: usize) -> Option<Decimal> {
         if self.prices.len() < period {
@@ -900,16 +930,41 @@ impl DayTradingStrategy {
         }
     }
 
-    /// 레인지 가져오기.
-    fn get_range(&self) -> Option<Decimal> {
-        let config = self.config.as_ref()?;
+    /// StrategyContext에서 레인지와 시가 가져오기.
+    ///
+    /// 전일 캔들의 (high - low)를 레인지로, 오늘 캔들의 open을 시가로 반환합니다.
+    fn get_range_from_context(&self, ticker: &str) -> Option<(Decimal, Decimal)> {
+        let ctx = self.context.as_ref()?;
+        let ctx_lock = ctx.try_read().ok()?;
 
-        if config.breakout_config.use_atr {
-            self.current_atr
-        } else {
-            self.prev_range
+        // D1 타임프레임 캔들 가져오기
+        let klines = ctx_lock.get_klines(ticker, Timeframe::D1);
+
+        if klines.len() < 2 {
+            debug!(ticker = %ticker, klines_len = klines.len(), "캔들 데이터 부족");
+            return None;
         }
+
+        let today_kline = &klines[0];      // 오늘 캔들 (가장 최근)
+        let prev_kline = &klines[1];       // 전일 캔들
+
+        // 레인지: 전일 고가 - 전일 저가
+        let range = prev_kline.high - prev_kline.low;
+        // 시가: 오늘 캔들의 시가
+        let period_open = today_kline.open;
+
+        debug!(
+            ticker = %ticker,
+            prev_high = %prev_kline.high,
+            prev_low = %prev_kline.low,
+            range = %range,
+            today_open = %period_open,
+            "StrategyContext에서 캔들 데이터 로드"
+        );
+
+        Some((range, period_open))
     }
+
 
     /// 레인지 유효성 검증.
     fn is_range_valid(&self, range: Decimal, current_price: Decimal) -> bool {
@@ -960,10 +1015,13 @@ impl DayTradingStrategy {
             return signals;
         }
 
-        // 레인지 가져오기
-        let range = match self.get_range() {
-            Some(r) => r,
-            None => return signals,
+        // StrategyContext에서 레인지와 시가 가져오기
+        let (range, period_open) = match self.get_range_from_context(ticker) {
+            Some(data) => data,
+            None => {
+                debug!(ticker = %ticker, "StrategyContext에서 캔들 데이터를 가져올 수 없음");
+                return signals;
+            }
         };
 
         // 레인지 유효성 검증
@@ -971,13 +1029,7 @@ impl DayTradingStrategy {
             return signals;
         }
 
-        // 현재 기간의 시가
-        let period_open = match &self.current_candle {
-            Some(c) => c.open,
-            None => return signals,
-        };
-
-        // 돌파 레벨 계산
+        // 돌파 레벨 계산 (period_open은 StrategyContext에서 가져옴)
         let k = config.breakout_config.k_factor;
         let upper = period_open + range * k;
         let lower = period_open - range * k;
@@ -990,9 +1042,10 @@ impl DayTradingStrategy {
             let stop = candle.close - range;
             let tp = candle.close + range * dec!(2);
 
+            let strength = self.get_adjusted_strength(0.5);
             signals.push(
                 Signal::entry("day_trading", ticker.clone(), Side::Buy)
-                    .with_strength(0.5)
+                    .with_strength(strength)
                     .with_prices(Some(candle.close), Some(stop), Some(tp))
                     .with_metadata("variant", json!("breakout"))
                     .with_metadata("breakout_level", json!(upper.to_string()))
@@ -1019,9 +1072,10 @@ impl DayTradingStrategy {
             let stop = candle.close + range;
             let tp = candle.close - range * dec!(2);
 
+            let strength = self.get_adjusted_strength(0.5);
             signals.push(
                 Signal::entry("day_trading", ticker.clone(), Side::Sell)
-                    .with_strength(0.5)
+                    .with_strength(strength)
                     .with_prices(Some(candle.close), Some(stop), Some(tp))
                     .with_metadata("variant", json!("breakout"))
                     .with_metadata("breakout_level", json!(lower.to_string()))
@@ -1116,9 +1170,10 @@ impl DayTradingStrategy {
                 let stop = candle.close * (dec!(1) - config.exit_config.stop_loss_pct / dec!(100));
                 let tp = candle.close * (dec!(1) + config.exit_config.take_profit_pct / dec!(100));
 
+                let strength = self.get_adjusted_strength(1.0);
                 signals.push(
                     Signal::entry("day_trading", ticker.clone(), Side::Buy)
-                        .with_strength(1.0)
+                        .with_strength(strength)
                         .with_prices(Some(candle.close), Some(stop), Some(tp))
                         .with_metadata("variant", json!("crossover"))
                         .with_metadata("short_sma", json!(short_sma.to_string()))
@@ -1221,9 +1276,10 @@ impl DayTradingStrategy {
         let stop = candle.close * (dec!(1) - config.exit_config.stop_loss_pct / dec!(100));
         let tp = candle.close * (dec!(1) + config.exit_config.take_profit_pct / dec!(100));
 
+        let strength = self.get_adjusted_strength(1.0);
         signals.push(
             Signal::entry("day_trading", ticker.clone(), Side::Buy)
-                .with_strength(1.0)
+                .with_strength(strength)
                 .with_prices(Some(candle.close), Some(stop), Some(tp))
                 .with_metadata("variant", json!("volume_surge"))
                 .with_metadata("volume", json!(candle.volume.to_string()))

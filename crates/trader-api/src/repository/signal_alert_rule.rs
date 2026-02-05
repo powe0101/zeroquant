@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use axum::Json;
 
 /// 신호 알림 규칙 엔티티.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SignalAlertRule {
     /// 규칙 ID
     pub id: Uuid,

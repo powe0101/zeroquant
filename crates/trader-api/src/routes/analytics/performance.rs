@@ -165,12 +165,15 @@ pub(crate) async fn get_position_metrics(
 // ==================== 핸들러 ====================
 
 /// 성과 요약 조회.
-///
-/// GET /api/v1/analytics/performance
-///
-/// # Query Parameters
-/// - `period`: 기간 (1w, 1m, 3m, 6m, 1y, ytd, all)
-/// - `credential_id`: 자격증명 ID (선택적, 특정 계좌만 조회)
+#[utoipa::path(
+    get,
+    path = "/api/v1/analytics/performance",
+    tag = "analytics",
+    params(PeriodQuery),
+    responses(
+        (status = 200, description = "성과 요약 조회 성공", body = PerformanceResponse)
+    )
+)]
 pub async fn get_performance(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PeriodQuery>,

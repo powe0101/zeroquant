@@ -9,8 +9,11 @@ use chrono::{TimeZone, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use trader_core::{
-    Kline, MarketData, MarketDataType, Order, OrderStatusType, Position, Side, Timeframe,
+    Kline, MarketData, MarketDataType, Order, OrderStatusType, Position, Side, StrategyContext,
+    Timeframe,
 };
 use trader_strategy::strategies::day_trading::{
     BreakoutConfig, CrossoverConfig, DayTradingConfig, DayTradingStrategy, DayTradingVariant,
@@ -90,6 +93,48 @@ fn create_order(ticker: &str, side: Side, quantity: Decimal, price: Decimal) -> 
         updated_at: Utc::now(),
         metadata: serde_json::Value::Null,
     }
+}
+
+/// StrategyContext에 Breakout용 전일 캔들 데이터 설정
+fn setup_context_for_breakout(
+    ticker: &str,
+    prev_high: Decimal,
+    prev_low: Decimal,
+    prev_close: Decimal,
+) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+
+    // 전일 캔들 데이터 (day 0)
+    let prev_timestamp = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+    let prev_kline = Kline::new(
+        ticker.to_string(),
+        Timeframe::D1,
+        prev_timestamp,
+        prev_close - dec!(100), // open
+        prev_high,
+        prev_low,
+        prev_close,
+        dec!(10000),
+        prev_timestamp,
+    );
+
+    // 당일 시가 캔들 (day 1)
+    let today_timestamp = Utc.with_ymd_and_hms(2024, 1, 2, 9, 0, 0).unwrap();
+    let today_kline = Kline::new(
+        ticker.to_string(),
+        Timeframe::D1,
+        today_timestamp,
+        prev_close + dec!(200), // open (= period_open)
+        prev_close + dec!(300),
+        prev_close + dec!(100),
+        prev_close + dec!(200),
+        dec!(10000),
+        today_timestamp,
+    );
+
+    context.update_klines(ticker, Timeframe::D1, vec![prev_kline, today_kline]);
+
+    Arc::new(RwLock::new(context))
 }
 
 // ================================================================================================
@@ -187,8 +232,9 @@ mod breakout_tests {
 
     /// 테스트 2: 상방 돌파 시 매수 신호
     ///
-    /// range = high - low = 50500 - 49500 = 1000
-    /// upper = open + range * k = 50200 + 1000 * 0.5 = 50700
+    /// StrategyContext에서 D1 캔들 가져와서:
+    /// - 전일 캔들: high=50500, low=49500 → range=1000
+    /// - 당일 시가: 50200 → upper = 50200 + 1000*0.5 = 50700
     /// close >= 50700 → 롱 신호
     #[tokio::test]
     async fn test_upward_breakout_buy_signal() {
@@ -204,45 +250,28 @@ mod breakout_tests {
         });
         strategy.initialize(config).await.unwrap();
 
-        // 1. 첫 번째 캔들 - 레인지 설정 (high=50500, low=49500, range=1000)
-        let data1 = create_kline(
+        // StrategyContext 설정: D1 캔들 (당일이 먼저, 전일이 뒤에)
+        // get_range_from_context는 klines[0]=당일, klines[1]=전일로 가정
+        let context = setup_context_for_breakout(
             "BTC/USDT",
-            dec!(50000),
-            dec!(50500),
-            dec!(49500),
-            dec!(50200),
-            dec!(1000),
-            0,
-            1,
+            dec!(50500), // prev_high
+            dec!(49500), // prev_low
+            dec!(50000), // prev_close
         );
-        let _ = strategy.on_market_data(&data1).await.unwrap();
+        strategy.set_context(context);
 
-        // 2. 두 번째 캔들 - 새 기간 시작 (open=50200)
-        // upper = 50200 + 1000 * 0.5 = 50700
-        let data2 = create_kline(
-            "BTC/USDT",
-            dec!(50200),
-            dec!(50200),
-            dec!(50200),
-            dec!(50200),
-            dec!(1000),
-            1,
-            1,
-        );
-        let _ = strategy.on_market_data(&data2).await.unwrap();
-
-        // 3. 상방 돌파 (close=50800 >= upper=50700)
-        let data3 = create_kline(
+        // 돌파 시도: close=50800 >= upper=50700
+        let data = create_kline(
             "BTC/USDT",
             dec!(50200),
             dec!(51000),
             dec!(50200),
             dec!(50800),
             dec!(1000),
-            1,
-            1,
+            10,
+            2, // 당일 (day=2)
         );
-        let signals = strategy.on_market_data(&data3).await.unwrap();
+        let signals = strategy.on_market_data(&data).await.unwrap();
 
         // 검증: 매수 신호 발생
         assert!(!signals.is_empty(), "상방 돌파 시 매수 신호가 발생해야 함");

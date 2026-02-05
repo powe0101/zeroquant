@@ -70,6 +70,10 @@ pub struct OhlcvCollectConfig {
     pub end_date: Option<String>,
     /// 대상 시장 목록 (빈 경우 전체, 예: ["US", "KR"])
     pub target_markets: Vec<String>,
+    /// 최대 보존 기간 (년), 이 기간 이전 데이터는 수집하지 않음
+    pub max_retention_years: u32,
+    /// 수집할 타임프레임 목록 (예: ["1d", "1w"])
+    pub timeframes: Vec<String>,
 }
 
 /// Fundamental 및 지표 수집 설정
@@ -128,11 +132,17 @@ impl CollectorConfig {
                 start_date: std::env::var("OHLCV_START_DATE").ok(),
                 end_date: std::env::var("OHLCV_END_DATE").ok(),
                 target_markets: env_var_list("OHLCV_TARGET_MARKETS"),
+                max_retention_years: env_var_parse("OHLCV_MAX_RETENTION_YEARS", 3),
+                timeframes: env_var_list_or_default("OHLCV_TIMEFRAMES", vec!["1d".to_string()]),
             },
             fundamental_collect: FundamentalCollectConfig {
-                batch_size: env_var_parse("INDICATOR_BATCH_SIZE", 100),
-                stale_days: env_var_parse("INDICATOR_STALE_DAYS", 1),
-                request_delay_ms: env_var_parse("INDICATOR_REQUEST_DELAY_MS", 50),
+                batch_size: env_var_parse("FUNDAMENTAL_BATCH_SIZE", 100),
+                // FUNDAMENTAL_STALE_DAYS 우선, INDICATOR_STALE_DAYS 폴백 (하위 호환)
+                stale_days: std::env::var("FUNDAMENTAL_STALE_DAYS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or_else(|| env_var_parse("INDICATOR_STALE_DAYS", 7)),
+                request_delay_ms: env_var_parse("FUNDAMENTAL_REQUEST_DELAY_MS", 50),
                 include_ohlcv: env_var_bool("FUNDAMENTAL_INCLUDE_OHLCV", true),
             },
             daemon: DaemonConfig {
@@ -188,4 +198,16 @@ fn env_var_list(key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// 환경변수에서 리스트 파싱 (기본값 지원)
+fn env_var_list_or_default(key: &str, default: Vec<String>) -> Vec<String> {
+    std::env::var(key)
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or(default)
 }

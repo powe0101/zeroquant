@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use trader_core::{Side, Timeframe, TradeInfo};
 use ts_rs::TS;
+use utoipa::ToSchema;
 use validator::{Validate, ValidationError};
 
 // ==================== 커스텀 검증 함수 ====================
@@ -71,7 +72,7 @@ fn validate_date_format(value: &str) -> Result<(), ValidationError> {
 // ==================== SDUI (Server Driven UI) 스키마 ====================
 
 /// UI 필드 타입
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UiFieldType {
     /// 숫자 입력
@@ -97,8 +98,7 @@ pub enum UiFieldType {
 }
 
 /// 유효성 검사 규칙
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
 pub struct UiValidation {
     /// 필수 여부
     #[serde(default)]
@@ -131,7 +131,7 @@ pub struct UiValidation {
 
 
 /// 선택 옵션 (Select 타입용)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UiSelectOption {
     /// 표시 레이블
     pub label: String,
@@ -143,7 +143,7 @@ pub struct UiSelectOption {
 }
 
 /// 심볼 카테고리 정의 (자산배분 전략용)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SymbolCategory {
     /// 카테고리 키 (예: "canary_assets", "offensive_assets")
     pub key: String,
@@ -170,7 +170,7 @@ pub struct SymbolCategory {
 }
 
 /// UI 필드 정의 (SDUI 핵심)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UiField {
     /// 필드 키 (파라미터 이름)
     pub key: String,
@@ -211,7 +211,7 @@ pub struct UiField {
 }
 
 /// 조건부 표시 규칙
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UiCondition {
     /// 참조 필드 키
     pub field: String,
@@ -222,7 +222,7 @@ pub struct UiCondition {
 }
 
 /// 조건 연산자
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum UiConditionOperator {
     Equals,
@@ -233,7 +233,7 @@ pub enum UiConditionOperator {
 }
 
 /// 필드 그룹 정의
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UiFieldGroup {
     /// 그룹 ID
     pub id: String,
@@ -251,7 +251,7 @@ pub struct UiFieldGroup {
 }
 
 /// SDUI 스키마 (전략별 UI 정의)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UiSchema {
     /// 필드 정의 목록
     pub fields: Vec<UiField>,
@@ -264,7 +264,7 @@ pub struct UiSchema {
 }
 
 /// 레이아웃 힌트
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct UiLayout {
     /// 열 수 (기본 1)
     #[serde(default = "default_columns")]
@@ -276,7 +276,7 @@ fn default_columns() -> usize {
 }
 
 /// 전략 실행 주기
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionSchedule {
     /// 실시간 (가격 변동 시마다)
@@ -318,7 +318,7 @@ impl ExecutionSchedule {
 // ==================== 다중 타임프레임 설정 ====================
 
 /// Secondary 타임프레임 설정 (API 요청용)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SecondaryTimeframeConfig {
     /// 타임프레임
     pub timeframe: Timeframe,
@@ -331,7 +331,7 @@ pub struct SecondaryTimeframeConfig {
 ///
 /// 프론트엔드에서 전송하는 형식과 일치합니다.
 /// 백엔드의 `trader_core::MultiTimeframeConfig`로 변환되어 사용됩니다.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MultiTimeframeRequest {
     /// Primary 타임프레임 (전략 실행 기준)
     pub primary: Timeframe,
@@ -364,7 +364,7 @@ impl MultiTimeframeRequest {
 
 /// 백테스트 가능한 전략 항목
 // Note: 복잡한 타입(UiSchema, ExecutionSchedule)은 skip 처리
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 #[ts(export, export_to = "backtest/")]
 pub struct BacktestableStrategy {
     /// 전략 ID
@@ -401,7 +401,7 @@ pub struct BacktestableStrategy {
 }
 
 /// 백테스트 가능한 전략 목록 응답
-#[derive(Debug, Serialize, Deserialize, TS)]
+#[derive(Debug, Serialize, Deserialize, TS, ToSchema)]
 #[ts(export, export_to = "backtest/")]
 pub struct BacktestStrategiesResponse {
     /// 전략 목록
@@ -411,7 +411,7 @@ pub struct BacktestStrategiesResponse {
 }
 
 /// 백테스트 실행 요청
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct BacktestRunRequest {
     /// 전략 ID
     #[validate(length(min = 1, max = 100, message = "전략 ID는 1-100자여야 합니다"))]
@@ -446,7 +446,7 @@ pub struct BacktestRunRequest {
 }
 
 /// 다중 자산 백테스트 실행 요청
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct BacktestMultiRunRequest {
     /// 전략 ID
     #[validate(length(min = 1, max = 100, message = "전략 ID는 1-100자여야 합니다"))]
@@ -477,7 +477,7 @@ pub struct BacktestMultiRunRequest {
 }
 
 /// 다중 자산 백테스트 실행 응답
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BacktestMultiRunResponse {
     /// 백테스트 결과 ID
     pub id: String,
@@ -504,7 +504,7 @@ pub struct BacktestMultiRunResponse {
 }
 
 /// 백테스트 성과 지표 응답
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS, ToSchema)]
 #[ts(export, export_to = "backtest/")]
 pub struct BacktestMetricsResponse {
     /// 총 수익률 (%)
@@ -551,7 +551,7 @@ pub struct BacktestMetricsResponse {
 }
 
 /// 자산 곡선 데이터 포인트
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct EquityCurvePoint {
     /// 타임스탬프 (Unix timestamp)
     pub timestamp: i64,
@@ -562,7 +562,7 @@ pub struct EquityCurvePoint {
 }
 
 /// 거래 내역 항목
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TradeHistoryItem {
     /// 심볼
     pub symbol: String,
@@ -609,7 +609,7 @@ impl TradeInfo for TradeHistoryItem {
 }
 
 /// 백테스트 실행 응답
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BacktestRunResponse {
     /// 백테스트 결과 ID
     pub id: String,
@@ -634,7 +634,7 @@ pub struct BacktestRunResponse {
 }
 
 /// 백테스트 설정 요약
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct BacktestConfigSummary {
     /// 초기 자본금
     pub initial_capital: Decimal,
@@ -651,7 +651,7 @@ pub struct BacktestConfigSummary {
 }
 
 /// API 에러 응답
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BacktestApiError {
     /// 에러 코드
     pub code: String,
@@ -674,7 +674,7 @@ impl BacktestApiError {
 /// 배치 백테스트 요청 항목.
 ///
 /// 단일 전략의 백테스트 설정을 정의합니다.
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate, ToSchema)]
 pub struct BatchBacktestItem {
     /// 전략 ID
     #[validate(length(min = 1, max = 100))]
@@ -689,7 +689,7 @@ pub struct BatchBacktestItem {
 /// 배치 백테스트 요청.
 ///
 /// 여러 전략을 병렬로 실행합니다.
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, Validate, ToSchema)]
 pub struct BatchBacktestRequest {
     /// 백테스트할 전략 목록 (최대 10개)
     #[validate(length(min = 1, max = 10, message = "전략은 1-10개 사이여야 합니다"))]
@@ -719,7 +719,7 @@ pub struct BatchBacktestRequest {
 }
 
 /// 배치 백테스트 결과 항목.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BatchBacktestResultItem {
     /// 전략 ID
     pub strategy_id: String,
@@ -736,7 +736,7 @@ pub struct BatchBacktestResultItem {
 }
 
 /// 배치 백테스트 응답.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct BatchBacktestResponse {
     /// 요청 ID
     pub request_id: String,

@@ -45,7 +45,7 @@ use trader_core::{
 };
 use trader_strategy_macro::StrategyConfig;
 
-use crate::strategies::common::ExitConfig;
+use crate::strategies::common::{adjust_strength_by_score, ExitConfig};
 
 // ============================================================================
 // 상수 정의
@@ -76,63 +76,63 @@ pub struct SectorVbConfig {
         default = "default_sector_list",
         deserialize_with = "deserialize_tickers"
     )]
-    #[schema(label = "대상 섹터 ETF", field_type = "symbols")]
+    #[schema(label = "대상 섹터 ETF", field_type = "symbols", section = "asset")]
     pub tickers: Vec<String>,
 
     /// 돌파 K 계수 (기본값: 0.5)
     #[serde(default = "default_k_factor")]
-    #[schema(label = "K 계수", min = 0.1, max = 1.0, default = 0.5)]
+    #[schema(label = "K 계수", min = 0.1, max = 1.0, default = 0.5, section = "indicator")]
     pub k_factor: f64,
 
     /// 섹터 선정 기준 (기본값: "returns" - 전일 수익률)
     #[serde(default = "default_selection_method")]
-    #[schema(label = "섹터 선정 기준", field_type = "select", options = ["returns", "momentum", "volume"], default = "returns")]
+    #[schema(label = "섹터 선정 기준", field_type = "select", options = ["returns", "momentum", "volume"], default = "returns", section = "indicator")]
     pub selection_method: String,
 
     /// 선택할 상위 섹터 수 (기본값: 1)
     #[serde(default = "default_top_n")]
-    #[schema(label = "상위 섹터 수", min = 1, max = 10, default = 1)]
+    #[schema(label = "상위 섹터 수", min = 1, max = 10, default = 1, section = "sizing")]
     pub top_n: usize,
 
     /// 최소 전일 거래량 (기본값: 100000)
     #[serde(default = "default_min_volume")]
-    #[schema(label = "최소 거래량", min = 10000, max = 10000000, default = 100000)]
+    #[schema(label = "최소 거래량", min = 10000, max = 10000000, default = 100000, section = "filter")]
     pub min_volume: u64,
 
     /// 장 마감 전 청산 시간 (분, 기본값: 10분 전)
     #[serde(default = "default_close_before_minutes")]
-    #[schema(label = "마감 전 청산 (분)", min = 1, max = 60, default = 10)]
+    #[schema(label = "마감 전 청산 (분)", min = 1, max = 60, default = 10, section = "timing")]
     pub close_before_minutes: u32,
 
     /// 손절 비율 (기본값: 2%)
     #[serde(default = "default_stop_loss_pct")]
-    #[schema(label = "손절 비율 (%)", min = 0.5, max = 10, default = 2.0)]
+    #[schema(label = "손절 비율 (%)", min = 0.5, max = 10, default = 2.0, section = "sizing")]
     pub stop_loss_pct: f64,
 
     /// 익절 비율 (기본값: 3%)
     #[serde(default = "default_take_profit_pct")]
-    #[schema(label = "익절 비율 (%)", min = 0.5, max = 20, default = 3.0)]
+    #[schema(label = "익절 비율 (%)", min = 0.5, max = 20, default = 3.0, section = "sizing")]
     pub take_profit_pct: f64,
 
     // ========== StrategyContext 연동 설정 (v2.0) ==========
     /// 최소 GlobalScore (기본값: 50.0)
     #[serde(default = "default_min_global_score")]
-    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 50)]
+    #[schema(label = "최소 GlobalScore", min = 0, max = 100, default = 50, section = "filter")]
     pub min_global_score: f64,
 
     /// RouteState 필터 사용 여부 (기본값: true)
     #[serde(default = "default_use_route_filter")]
-    #[schema(label = "RouteState 필터 사용", default = true)]
+    #[schema(label = "RouteState 필터 사용", default = true, section = "filter")]
     pub use_route_filter: bool,
 
     /// MarketRegime 필터 사용 여부 (기본값: true)
     #[serde(default = "default_use_regime_filter")]
-    #[schema(label = "MarketRegime 필터 사용", default = true)]
+    #[schema(label = "MarketRegime 필터 사용", default = true, section = "filter")]
     pub use_regime_filter: bool,
 
     /// 하락장에서 진입 허용 여부 (기본값: false)
     #[serde(default)]
-    #[schema(label = "하락장 진입 허용", default = false)]
+    #[schema(label = "하락장 진입 허용", default = false, section = "filter")]
     pub allow_downtrend_entry: bool,
 
     /// 청산 설정 (손절/익절/트레일링 스탑).
@@ -202,7 +202,7 @@ impl Default for SectorVbConfig {
             use_route_filter: true,
             use_regime_filter: true,
             allow_downtrend_entry: false,
-            exit_config: ExitConfig::default(),
+            exit_config: ExitConfig::for_day_trading(),
         }
     }
 }
@@ -407,6 +407,15 @@ impl SectorVbStrategy {
         let ctx = self.context.as_ref()?;
         let ctx_guard = ctx.read().await;
         ctx_guard.get_market_regime(ticker).cloned()
+    }
+
+    /// GlobalScore 기반 신호 강도 계산.
+    async fn get_adjusted_strength(&self, ticker: &str, base_strength: f64) -> f64 {
+        if let Some(score) = self.get_global_score(ticker).await {
+            adjust_strength_by_score(base_strength, Some(Decimal::try_from(score).unwrap_or_default()))
+        } else {
+            base_strength
+        }
     }
 
     /// 섹터가 진입 가능한지 StrategyContext 기반으로 확인
@@ -681,9 +690,10 @@ impl SectorVbStrategy {
                                 + Decimal::from_f64_retain(config.take_profit_pct / 100.0)
                                     .unwrap_or(dec!(0.03)));
 
+                        let strength = self.get_adjusted_strength(ticker, 0.5).await;
                         signals.push(
-                            Signal::entry("sector_vb", sym, Side::Buy)
-                                .with_strength(0.5)
+                            Signal::entry("sector_vb", sym.clone(), Side::Buy)
+                                .with_strength(strength)
                                 .with_prices(
                                     Some(current_price),
                                     Some(stop_loss),

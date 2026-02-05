@@ -52,4 +52,8 @@ hidden: boolean,
 /**
  * 표시 순서 (낮을수록 먼저 표시)
  */
-order: number | null, };
+order: number | null,
+/**
+ * 섹션 ID (같은 섹션의 필드들을 UI에서 그룹화)
+ */
+section: string | null, };

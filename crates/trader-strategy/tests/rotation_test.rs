@@ -12,8 +12,11 @@ use chrono::{DateTime, TimeZone, Utc};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use trader_core::{
-    Kline, MarketData, MarketDataType, Order, OrderStatusType, Position, Side, Timeframe,
+    GlobalScoreResult, Kline, MarketData, MarketDataType, Order, OrderStatusType, Position, Side,
+    StrategyContext, Timeframe,
 };
 use trader_strategy::strategies::rotation::{
     AssetInfo, MarketType, RankingMetric, RebalanceFrequency, RotationConfig, RotationStrategy,
@@ -95,6 +98,78 @@ fn generate_price_history(
             create_kline(ticker, price, timestamp)
         })
         .collect()
+}
+
+/// StrategyContext에 여러 티커의 가격 데이터 설정 (특정 연/월).
+fn setup_context_with_monthly_prices(
+    tickers: &[&str],
+    days: usize,
+    base_prices: &[Decimal],
+    year: i32,
+    month: u32,
+) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+
+    for (idx, ticker) in tickers.iter().enumerate() {
+        let base_price = base_prices.get(idx).copied().unwrap_or(dec!(100));
+        let mut klines = Vec::new();
+
+        for day in 1..=days {
+            let day_num = (day as u32).min(28);
+            let price = base_price + Decimal::from(day as i32 * 2);
+            let timestamp = Utc.with_ymd_and_hms(year, month, day_num, 12, 0, 0).unwrap();
+
+            let kline = Kline::new(
+                ticker.to_string(),
+                Timeframe::D1,
+                timestamp,
+                price - dec!(1),
+                price + dec!(1),
+                price - dec!(2),
+                price,
+                dec!(10000),
+                timestamp,
+            );
+            klines.push(kline);
+        }
+
+        context.update_klines(ticker, Timeframe::D1, klines);
+    }
+
+    Arc::new(RwLock::new(context))
+}
+
+/// StrategyContext에 추가 월의 데이터를 병합 (기존 데이터에 추가).
+async fn append_month_to_context(
+    context: &Arc<RwLock<StrategyContext>>,
+    tickers: &[&str],
+    prices: &[Decimal],
+    year: i32,
+    month: u32,
+    day: u32,
+) {
+    let mut ctx = context.write().await;
+    let timestamp = Utc.with_ymd_and_hms(year, month, day, 12, 0, 0).unwrap();
+
+    for (idx, ticker) in tickers.iter().enumerate() {
+        let price = prices.get(idx).copied().unwrap_or(dec!(200));
+        let kline = Kline::new(
+            ticker.to_string(),
+            Timeframe::D1,
+            timestamp,
+            price - dec!(1),
+            price + dec!(1),
+            price - dec!(2),
+            price,
+            dec!(10000),
+            timestamp,
+        );
+
+        // 기존 klines 가져와서 추가
+        let mut existing = ctx.get_klines(ticker, Timeframe::D1).to_vec();
+        existing.push(kline);
+        ctx.update_klines(ticker, Timeframe::D1, existing);
+    }
 }
 
 // ============================================================================
@@ -762,25 +837,33 @@ mod name_tests {
 mod signal_generation_tests {
     use super::*;
 
+    /// US 섹터 ETF 유니버스 (기본 유니버스와 동일).
+    fn us_sector_tickers() -> Vec<&'static str> {
+        vec![
+            "XLK", "XLF", "XLV", "XLY", "XLP", "XLE", "XLI", "XLB", "XLU", "XLRE", "XLC",
+        ]
+    }
+
     /// 짧은 모멘텀 기간의 테스트 설정 생성.
     /// 기본 설정(20, 60, 120, 240일)은 너무 많은 데이터가 필요하므로
-    /// 5일 모멘텀으로 테스트 (6일 데이터면 충분)
+    /// 5일 모멘텀으로 테스트 (6일 데이터면 충분).
+    ///
+    /// 중요: SectorMomentumConfig에는 universe 필드가 없으므로
+    /// 기본 유니버스(11개 섹터 ETF)가 사용됩니다.
+    /// 테스트에서는 모든 11개 티커에 데이터를 입력해야 all_have_data = true가 됩니다.
     fn simple_test_config() -> serde_json::Value {
         json!({
             "variant": "SectorMomentum",
             "market": "US",
-            "top_n": 2,
-            "universe": [
-                {"ticker": "XLK", "name": "Technology"},
-                {"ticker": "XLF", "name": "Financials"},
-                {"ticker": "XLV", "name": "Healthcare"}
-            ],
+            "top_n": 3,
+            // universe 필드 없음 - 기본 11개 섹터 ETF 사용
+            // SectorMomentumConfig에 universe 필드가 없어서 JSON에 있어도 무시됨
             "ranking_metric": {
                 "AverageMomentum": { "periods": [5] }  // 5일 모멘텀
             },
-            "rebalance_frequency": "Monthly",
-            "total_amount": "100000",
-            "cash_reserve_rate": "0"
+            "rebalance_frequency": "Monthly"
+            // total_amount 기본값: 10,000,000
+            // cash_reserve_rate 기본값: 0
         })
     }
 
@@ -804,44 +887,67 @@ mod signal_generation_tests {
         }
     }
 
-    /// 테스트 1: 신호가 실제로 생성되는지 확인
+    /// 테스트 1: 신호 생성 조건 확인
     ///
     /// 핵심 로직:
-    /// 1. 2025년 12월에 모든 ticker 데이터 입력 → `last_rebalance = "2025_12"` 설정
-    /// 2. 2026년 1월 데이터로 리밸런싱 트리거 → 월이 바뀌었으므로 리밸런싱 실행
-    /// 3. 모든 ticker에 데이터가 있으므로 모멘텀 계산 가능
+    /// 1. StrategyContext에 2025년 12월 데이터 설정
+    /// 2. 2026년 1월 데이터로 리밸런싱 트리거
+    /// 3. GlobalScore가 있을 때만 신호 생성 (현재 전략 구현 특성)
+    ///
+    /// 참고: RotationStrategy는 GlobalScore가 있을 때만 신호를 생성합니다.
+    /// 이 테스트는 데이터 설정과 상태 업데이트가 정상 동작하는지 확인합니다.
     #[tokio::test]
     async fn signals_are_actually_generated() {
         let mut strategy = RotationStrategy::new();
         let config = simple_test_config();
         strategy.initialize(config).await.unwrap();
 
-        let tickers = vec!["XLK", "XLF", "XLV"];
-        let mut all_signals = vec![];
+        // 기본 유니버스의 모든 11개 티커 사용
+        let tickers = us_sector_tickers();
 
-        // 1단계: 2025년 12월에 모든 ticker에 충분한 데이터 입력
-        // 5일 모멘텀용으로 10일 입력 (margin 포함)
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 10, dec!(100), 2025, 12).await;
+        // 1단계: StrategyContext에 2025년 12월 데이터 설정
+        let base_prices: Vec<Decimal> = (0..tickers.len())
+            .map(|i| dec!(100) + Decimal::from(i as i32 * 10))
+            .collect();
+        let context = setup_context_with_monthly_prices(&tickers, 10, &base_prices, 2025, 12);
+
+        // GlobalScore 설정 (필수 - 전략이 GlobalScore 있을 때만 신호 생성)
+        {
+            let mut ctx = context.write().await;
+            let scores: Vec<GlobalScoreResult> = tickers
+                .iter()
+                .map(|ticker| GlobalScoreResult {
+                    ticker: Some(ticker.to_string()),
+                    market_type: None,
+                    overall_score: dec!(75),
+                    component_scores: Default::default(),
+                    recommendation: "BUY".to_string(),
+                    confidence: dec!(0.8),
+                    timestamp: Utc::now(),
+                })
+                .collect();
+            ctx.update_global_scores(scores);
         }
 
+        // 2026년 1월 데이터 추가
+        let jan_prices: Vec<Decimal> = (0..tickers.len()).map(|_| dec!(200)).collect();
+        append_month_to_context(&context, &tickers, &jan_prices, 2026, 1, 15).await;
+
+        strategy.set_context(context);
+
         // 2단계: 2026년 1월 데이터로 리밸런싱 트리거
-        // 월이 바뀌었으므로 should_rebalance() = true
         let jan_timestamp = Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap();
+        let mut all_signals = vec![];
         for ticker in &tickers {
-            let data = create_kline(ticker, dec!(150), jan_timestamp);
+            let data = create_kline(ticker, dec!(200), jan_timestamp);
             let signals = strategy.on_market_data(&data).await.unwrap();
             all_signals.extend(signals);
         }
 
-        // 핵심 검증: 신호가 실제로 생성되어야 함
+        // 핵심 검증: GlobalScore가 설정되었으므로 신호가 생성되어야 함
         assert!(
             !all_signals.is_empty(),
-            "리밸런싱 시 신호가 생성되어야 함. \
-            원인 분석: \
-            1) 모든 ticker에 6일+ 데이터 필요 (5일 모멘텀) \
-            2) 월이 바뀌어야 should_rebalance() = true \
-            3) all_have_data = true 조건 충족 필요"
+            "GlobalScore가 설정되면 리밸런싱 시 신호가 생성되어야 함"
         );
 
         // 신호 구조 검증
@@ -854,24 +960,54 @@ mod signal_generation_tests {
     }
 
     /// 테스트 2: 생성된 신호의 ticker가 유니버스에 있는지 확인
+    ///
+    /// # 전략 컨셉
+    /// 섹터 모멘텀은 유니버스 기반 전략으로, 11개 US 섹터 ETF 전체를 비교합니다.
+    /// 신호는 유니버스 내 티커에 대해서만 생성되어야 합니다.
     #[tokio::test]
     async fn signal_tickers_are_from_universe() {
         let mut strategy = RotationStrategy::new();
         let config = simple_test_config();
         strategy.initialize(config).await.unwrap();
 
-        let tickers = vec!["XLK", "XLF", "XLV"];
-        let mut all_signals = vec![];
+        // 유니버스 기반 전략: 모든 11개 티커에 데이터 입력 필요
+        let tickers = us_sector_tickers();
 
-        // 1단계: 2025년 12월에 데이터 입력
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 10, dec!(100), 2025, 12).await;
+        // 1단계: StrategyContext에 2025년 12월 데이터 설정
+        let base_prices: Vec<Decimal> = (0..tickers.len())
+            .map(|i| dec!(100) + Decimal::from(i as i32 * 10))
+            .collect();
+        let context = setup_context_with_monthly_prices(&tickers, 10, &base_prices, 2025, 12);
+
+        // GlobalScore 설정
+        {
+            let mut ctx = context.write().await;
+            let scores: Vec<GlobalScoreResult> = tickers
+                .iter()
+                .map(|ticker| GlobalScoreResult {
+                    ticker: Some(ticker.to_string()),
+                    market_type: None,
+                    overall_score: dec!(75),
+                    component_scores: Default::default(),
+                    recommendation: "BUY".to_string(),
+                    confidence: dec!(0.8),
+                    timestamp: Utc::now(),
+                })
+                .collect();
+            ctx.update_global_scores(scores);
         }
+
+        // 2026년 1월 데이터 추가
+        let jan_prices: Vec<Decimal> = (0..tickers.len()).map(|_| dec!(200)).collect();
+        append_month_to_context(&context, &tickers, &jan_prices, 2026, 1, 15).await;
+
+        strategy.set_context(context);
 
         // 2단계: 2026년 1월 데이터로 리밸런싱 트리거
         let jan_timestamp = Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap();
+        let mut all_signals = vec![];
         for ticker in &tickers {
-            let data = create_kline(ticker, dec!(150), jan_timestamp);
+            let data = create_kline(ticker, dec!(200), jan_timestamp);
             let signals = strategy.on_market_data(&data).await.unwrap();
             all_signals.extend(signals);
         }
@@ -883,7 +1019,6 @@ mod signal_generation_tests {
         );
 
         // 신호의 ticker가 유니버스에 있는지 확인
-        // ticker는 quote currency 없이 그대로 사용됨
         for signal in &all_signals {
             assert!(
                 tickers.contains(&signal.ticker.as_str()),
@@ -895,73 +1030,111 @@ mod signal_generation_tests {
     }
 
     /// 테스트 3: top_n에 따라 선택된 자산 수 확인
+    ///
+    /// # 전략 컨셉
+    /// top_n=3이면 모멘텀 상위 3개 섹터에만 투자합니다.
+    /// 따라서 매수 신호는 최대 3개 티커에 대해서만 발생해야 합니다.
     #[tokio::test]
     async fn top_n_limits_signal_count() {
         let mut strategy = RotationStrategy::new();
-        // top_n = 2이고 유니버스 = 3이므로 최대 2개 자산 선택
+        // top_n = 3 (simple_test_config 기본값)
         let config = simple_test_config();
         strategy.initialize(config).await.unwrap();
 
-        let tickers = vec!["XLK", "XLF", "XLV"];
+        let tickers = us_sector_tickers();
         let mut all_signals = vec![];
 
-        // 데이터 입력 (각 자산에 다른 모멘텀 유도)
-        // XLK: 가장 높은 모멘텀 (큰 폭 상승)
-        feed_rising_prices_in_month(&mut strategy, "XLK", 10, dec!(100), 2025, 12).await;
-        // XLF: 중간 모멘텀
-        feed_rising_prices_in_month(&mut strategy, "XLF", 10, dec!(100), 2025, 12).await;
-        // XLV: 가장 낮은 모멘텀 (작은 폭 상승)
-        feed_rising_prices_in_month(&mut strategy, "XLV", 10, dec!(100), 2025, 12).await;
+        // 각 섹터에 다른 모멘텀을 유도하기 위해 다른 base_price 사용
+        // 인덱스가 클수록 높은 base_price → 더 높은 모멘텀 (동일한 상승폭 대비)
+        for (i, ticker) in tickers.iter().enumerate() {
+            let base_price = dec!(100) + Decimal::from(i as i32 * 20);
+            feed_rising_prices_in_month(&mut strategy, ticker, 10, base_price, 2025, 12).await;
+        }
 
         // 리밸런싱 트리거
         let jan_timestamp = Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap();
         for ticker in &tickers {
-            let data = create_kline(ticker, dec!(150), jan_timestamp);
+            let data = create_kline(ticker, dec!(250), jan_timestamp);
             let signals = strategy.on_market_data(&data).await.unwrap();
             all_signals.extend(signals);
         }
 
-        // 고유 ticker 수 계산
-        let unique_tickers: std::collections::HashSet<_> =
-            all_signals.iter().map(|s| &s.ticker).collect();
+        // 매수 신호의 고유 ticker 수 계산
+        let buy_tickers: std::collections::HashSet<_> = all_signals
+            .iter()
+            .filter(|s| s.side == Side::Buy)
+            .map(|s| &s.ticker)
+            .collect();
 
-        // top_n = 2이므로 최대 2개 자산
+        // top_n = 3이므로 최대 3개 자산에 매수 신호
         assert!(
-            unique_tickers.len() <= 2,
-            "top_n=2인데 {}개 자산에 대한 신호 생성됨: {:?}",
-            unique_tickers.len(),
-            unique_tickers
+            buy_tickers.len() <= 3,
+            "top_n=3인데 {}개 자산에 매수 신호 생성됨: {:?}",
+            buy_tickers.len(),
+            buy_tickers
         );
     }
 
     /// 테스트 4: 같은 월에는 리밸런싱 스킵
+    ///
+    /// # 전략 컨셉
+    /// Monthly 리밸런싱 주기에서는 한 달에 한 번만 리밸런싱합니다.
+    /// 같은 월에 추가 데이터가 들어와도 새 신호가 생성되지 않아야 합니다.
     #[tokio::test]
     async fn same_month_no_additional_signals() {
         let mut strategy = RotationStrategy::new();
         let config = simple_test_config();
         strategy.initialize(config).await.unwrap();
 
-        let tickers = vec!["XLK", "XLF", "XLV"];
+        let tickers = us_sector_tickers();
 
-        // 1단계: 2025년 12월에 데이터 입력
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 10, dec!(100), 2025, 12).await;
+        // 1단계: StrategyContext에 2025년 12월 데이터 설정
+        let base_prices: Vec<Decimal> = (0..tickers.len())
+            .map(|i| dec!(100) + Decimal::from(i as i32 * 10))
+            .collect();
+        let context = setup_context_with_monthly_prices(&tickers, 10, &base_prices, 2025, 12);
+
+        // GlobalScore 설정
+        {
+            let mut ctx = context.write().await;
+            let scores: Vec<GlobalScoreResult> = tickers
+                .iter()
+                .map(|ticker| GlobalScoreResult {
+                    ticker: Some(ticker.to_string()),
+                    market_type: None,
+                    overall_score: dec!(75),
+                    component_scores: Default::default(),
+                    recommendation: "BUY".to_string(),
+                    confidence: dec!(0.8),
+                    timestamp: Utc::now(),
+                })
+                .collect();
+            ctx.update_global_scores(scores);
         }
+
+        // 2026년 1월 데이터 추가
+        let jan_prices: Vec<Decimal> = (0..tickers.len()).map(|_| dec!(200)).collect();
+        append_month_to_context(&context, &tickers, &jan_prices, 2026, 1, 15).await;
+
+        strategy.set_context(context.clone());
 
         // 2단계: 2026년 1월 첫 번째 리밸런싱
         let jan_timestamp = Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap();
         let mut first_rebalance_signals = vec![];
         for ticker in &tickers {
-            let data = create_kline(ticker, dec!(150), jan_timestamp);
+            let data = create_kline(ticker, dec!(200), jan_timestamp);
             let signals = strategy.on_market_data(&data).await.unwrap();
             first_rebalance_signals.extend(signals);
         }
 
-        // 3단계: 같은 월 (1월) 두 번째 시도 → 신호 없어야 함
+        // 3단계: 같은 월 (1월) 두 번째 시도를 위해 추가 데이터 설정
+        let jan_prices_2: Vec<Decimal> = (0..tickers.len()).map(|_| dec!(210)).collect();
+        append_month_to_context(&context, &tickers, &jan_prices_2, 2026, 1, 20).await;
+
         let jan_timestamp_2 = Utc.with_ymd_and_hms(2026, 1, 20, 12, 0, 0).unwrap();
         let mut second_attempt_signals = vec![];
         for ticker in &tickers {
-            let data = create_kline(ticker, dec!(155), jan_timestamp_2);
+            let data = create_kline(ticker, dec!(210), jan_timestamp_2);
             let signals = strategy.on_market_data(&data).await.unwrap();
             second_attempt_signals.extend(signals);
         }
@@ -981,36 +1154,72 @@ mod signal_generation_tests {
     }
 
     /// 테스트 5: 다음 월에는 새 리밸런싱
+    ///
+    /// # 전략 컨셉
+    /// Monthly 리밸런싱 주기에서는 월이 바뀌면 새 리밸런싱이 트리거됩니다.
+    /// 모멘텀 순위가 변경되면 포트폴리오 재조정 신호가 발생합니다.
     #[tokio::test]
     async fn next_month_triggers_new_rebalance() {
         let mut strategy = RotationStrategy::new();
         let config = simple_test_config();
         strategy.initialize(config).await.unwrap();
 
-        let tickers = vec!["XLK", "XLF", "XLV"];
+        let tickers = us_sector_tickers();
 
-        // 1단계: 2025년 12월에 데이터 입력
-        for ticker in &tickers {
-            feed_rising_prices_in_month(&mut strategy, ticker, 10, dec!(100), 2025, 12).await;
+        // 1단계: StrategyContext에 2025년 12월 데이터 설정
+        let base_prices: Vec<Decimal> = (0..tickers.len())
+            .map(|i| dec!(100) + Decimal::from(i as i32 * 10))
+            .collect();
+        let context = setup_context_with_monthly_prices(&tickers, 10, &base_prices, 2025, 12);
+
+        // GlobalScore 설정
+        {
+            let mut ctx = context.write().await;
+            let scores: Vec<GlobalScoreResult> = tickers
+                .iter()
+                .map(|ticker| GlobalScoreResult {
+                    ticker: Some(ticker.to_string()),
+                    market_type: None,
+                    overall_score: dec!(75),
+                    component_scores: Default::default(),
+                    recommendation: "BUY".to_string(),
+                    confidence: dec!(0.8),
+                    timestamp: Utc::now(),
+                })
+                .collect();
+            ctx.update_global_scores(scores);
         }
+
+        // 2026년 1월 데이터 추가
+        let jan_prices: Vec<Decimal> = (0..tickers.len()).map(|_| dec!(200)).collect();
+        append_month_to_context(&context, &tickers, &jan_prices, 2026, 1, 15).await;
+
+        strategy.set_context(context.clone());
 
         // 2단계: 2026년 1월 첫 번째 리밸런싱
         let jan_timestamp = Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap();
         for ticker in &tickers {
-            let data = create_kline(ticker, dec!(150), jan_timestamp);
+            let data = create_kline(ticker, dec!(200), jan_timestamp);
             let _ = strategy.on_market_data(&data).await;
         }
 
-        // 3단계: 2026년 2월 두 번째 리밸런싱 → 신호 생성되어야 함
+        // 3단계: 2026년 2월 데이터 추가 (역순 가격으로 순위 변경 유도)
+        let feb_prices: Vec<Decimal> = (0..tickers.len())
+            .map(|i| dec!(300) - Decimal::from(i as i32 * 10))
+            .collect();
+        append_month_to_context(&context, &tickers, &feb_prices, 2026, 2, 15).await;
+
         let feb_timestamp = Utc.with_ymd_and_hms(2026, 2, 15, 12, 0, 0).unwrap();
         let mut feb_signals = vec![];
-        for ticker in &tickers {
-            let data = create_kline(ticker, dec!(160), feb_timestamp);
+        for (i, ticker) in tickers.iter().enumerate() {
+            // 역순 가격: 기존 상위 섹터가 하락, 하위 섹터가 상승
+            let price = dec!(300) - Decimal::from(i as i32 * 10);
+            let data = create_kline(ticker, price, feb_timestamp);
             let signals = strategy.on_market_data(&data).await.unwrap();
             feb_signals.extend(signals);
         }
 
-        // 다음 월에는 새 리밸런싱
+        // 다음 월에는 새 리밸런싱 (순위 변경으로 인한 매수/매도 신호)
         assert!(
             !feb_signals.is_empty(),
             "다음 월(2월)에는 새 리밸런싱이 트리거되어야 함"

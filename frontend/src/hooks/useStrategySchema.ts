@@ -241,17 +241,53 @@ export function useStrategySchema(
       }
     }
 
-    // 2. Custom fields 섹션 (있는 경우)
+    // 2. Custom fields를 section별로 그룹화
     if (schema.custom_fields.length > 0) {
-      resultSections.push({
-        id: 'custom',
-        name: `${schema.name} 설정`,
-        description: '전략 고유 설정',
-        required: true,
-        collapsible: false,
-        fields: schema.custom_fields,
-        order: resultSections.length,
-      });
+      // section별로 필드 그룹화
+      const sectionGroups = new Map<string, FieldSchema[]>();
+
+      for (const field of schema.custom_fields) {
+        const sectionId = field.section ?? 'custom';
+        if (!sectionGroups.has(sectionId)) {
+          sectionGroups.set(sectionId, []);
+        }
+        sectionGroups.get(sectionId)!.push(field);
+      }
+
+      // 섹션 이름 매핑
+      const sectionNames: Record<string, string> = {
+        asset: '자산 선택',
+        indicator: '기술적 지표',
+        filter: '필터 조건',
+        timing: '타이밍 설정',
+        sizing: '포지션 사이징',
+        custom: `${schema.name} 설정`,
+      };
+
+      // 섹션 순서
+      const sectionOrder: Record<string, number> = {
+        asset: 0,
+        indicator: 1,
+        filter: 2,
+        timing: 3,
+        sizing: 4,
+        custom: 99,
+      };
+
+      // 각 그룹을 섹션으로 변환
+      for (const [sectionId, fields] of sectionGroups.entries()) {
+        // asset, indicator는 핵심 설정이므로 기본 펼침
+        const isCoreSetting = sectionId === 'asset' || sectionId === 'indicator';
+        resultSections.push({
+          id: sectionId,
+          name: sectionNames[sectionId] ?? sectionId,
+          description: null,
+          required: isCoreSetting,  // 핵심 설정만 필수 (기본 펼침)
+          collapsible: true,        // 모든 섹션 접힘/펼침 가능
+          fields,
+          order: resultSections.length + (sectionOrder[sectionId] ?? 50),
+        });
+      }
     }
 
     // 정렬 후 설정
