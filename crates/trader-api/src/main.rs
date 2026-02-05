@@ -23,6 +23,8 @@ use trader_api::middleware::{
 use trader_api::openapi::swagger_ui_router;
 use trader_api::repository::StrategyRepository;
 use trader_api::routes::create_api_router;
+use trader_api::services::ApiBotHandler;
+use trader_notification::{NotificationManager, TelegramConfig, TelegramSender};
 use trader_api::state::AppState;
 use trader_api::websocket::{
     create_subscription_manager, standalone_websocket_router, start_aggregator, start_simulator,
@@ -357,6 +359,59 @@ async fn create_app_state(config: &ServerConfig) -> AppState {
         warn!("ENCRYPTION_MASTER_KEY not set, credential encryption will be disabled");
     }
 
+    // 알림 매니저 초기화 (텔레그램 설정)
+    // 우선순위: 1) DB 암호화 저장소, 2) 환경변수
+    let telegram_config_opt: Option<TelegramConfig> =
+        if let (Some(pool), Some(encryptor)) = (&state.db_pool, &state.encryptor) {
+            // DB에서 telegram_settings 조회
+            let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, bool)> = sqlx::query_as(
+                r#"
+                SELECT encrypted_bot_token, encryption_nonce_token,
+                       encrypted_chat_id, encryption_nonce_chat, is_enabled
+                FROM telegram_settings
+                WHERE is_enabled = true
+                LIMIT 1
+                "#,
+            )
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+            if let Some((enc_token, nonce_token, enc_chat, nonce_chat, _enabled)) = row {
+                // 복호화 시도
+                match (
+                    encryptor.decrypt(&enc_token, &nonce_token),
+                    encryptor.decrypt(&enc_chat, &nonce_chat),
+                ) {
+                    (Ok(bot_token), Ok(chat_id)) => {
+                        info!("텔레그램 설정을 암호화 저장소에서 로드했습니다");
+                        Some(TelegramConfig::new(bot_token, chat_id))
+                    }
+                    (Err(e), _) | (_, Err(e)) => {
+                        warn!("텔레그램 설정 복호화 실패: {:?}, 환경변수로 폴백", e);
+                        TelegramConfig::from_env()
+                    }
+                }
+            } else {
+                info!("DB에 활성화된 텔레그램 설정 없음, 환경변수 확인");
+                TelegramConfig::from_env()
+            }
+        } else {
+            // DB 또는 encryptor가 없으면 환경변수 사용
+            TelegramConfig::from_env()
+        };
+
+    if let Some(telegram_config) = telegram_config_opt {
+        let telegram_sender = TelegramSender::new(telegram_config);
+        let mut notification_manager = NotificationManager::new();
+        notification_manager.add_sender(telegram_sender);
+        state = state.with_notification_manager(notification_manager);
+        info!("NotificationManager 초기화 완료 (텔레그램 알림 활성화)");
+    } else {
+        info!("텔레그램 설정 없음, 알림 기능 비활성화");
+    }
+
     // KIS 클라이언트 설정 및 ExchangeProvider 생성
     // 우선순위: 1) DB active credential, 2) 환경변수
     let kis_kr_to_use = if let (Some(pool), Some(encryptor)) = (&state.db_pool, &state.encryptor) {
@@ -681,6 +736,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 warn!("Failed to load strategies from database: {:?}", e);
             }
         }
+    }
+
+    // 텔레그램 봇 시작 (백그라운드 태스크)
+    if let Some(ref pool) = state.db_pool {
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            ApiBotHandler::start(pool_clone).await;
+        });
     }
 
     // 라우터 생성

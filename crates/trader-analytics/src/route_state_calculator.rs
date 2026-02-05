@@ -730,6 +730,9 @@ mod tests {
             dist_ma20: 3.0,
             low_trend: 0.8, // 강한 상승 모멘텀
             bb_width: 5.0,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
         };
 
         // 낮은 임계값으로 Attack 판정 확인
@@ -781,6 +784,9 @@ mod tests {
             dist_ma20: 2.0,
             low_trend: 0.1,
             bb_width: 5.0,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
         };
 
         let thresholds = DynamicThresholds {
@@ -809,6 +815,9 @@ mod tests {
             dist_ma20: 2.0,
             low_trend: 0.1,
             bb_width: 5.0,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
         };
 
         let high_return_5d = 25.0; // 10.0 * 2 = 20.0보다 큼
@@ -844,6 +853,9 @@ mod tests {
             dist_ma20: 3.0,
             low_trend: 0.8, // Attack 조건 충족
             bb_width: 5.0,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
         };
 
         let return_5d = 15.0;

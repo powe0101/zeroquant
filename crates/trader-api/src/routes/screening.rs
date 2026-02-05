@@ -142,6 +142,7 @@ pub struct ScreeningResponse {
     pub filter_summary: String,
     /// 매크로 위험도 (옵셔널)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub macro_risk: Option<String>,
 }
 

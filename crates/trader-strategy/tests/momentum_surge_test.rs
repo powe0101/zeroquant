@@ -6,7 +6,9 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
-use trader_core::{Kline, MarketData, Position, Side, Timeframe};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use trader_core::{Kline, MarketData, Position, Side, StrategyContext, Timeframe};
 use trader_strategy::strategies::momentum_surge::MomentumSurgeStrategy;
 use trader_strategy::Strategy;
 
@@ -34,6 +36,43 @@ fn create_market_data(ticker: &str, close: Decimal, volume: Decimal, day: i64) -
 /// Position 헬퍼 함수
 fn create_position(ticker: &str, quantity: Decimal, entry_price: Decimal) -> Position {
     Position::new("test", ticker.to_string(), Side::Buy, quantity, entry_price)
+}
+
+/// StrategyContext에 여러 티커에 대한 klines 설정
+fn setup_context_for_momentum_surge(
+    tickers: &[&str],
+    day_count: usize,
+) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+    let base_timestamp =
+        chrono::DateTime::from_timestamp(1704067200, 0).unwrap(); // 2024-01-01
+
+    for ticker in tickers {
+        let klines: Vec<Kline> = (0..day_count)
+            .map(|i| {
+                let day_offset = chrono::Duration::days(i as i64);
+                let timestamp = base_timestamp + day_offset;
+                let price = dec!(10000) + Decimal::from(i as u32 * 10);
+                let volume = dec!(100000);
+
+                Kline::new(
+                    ticker.to_string(),
+                    Timeframe::D1,
+                    timestamp,
+                    price - dec!(1),    // open
+                    price + dec!(1),    // high
+                    price - dec!(2),    // low
+                    price,              // close
+                    volume,
+                    timestamp,          // close_time
+                )
+            })
+            .collect();
+
+        context.update_klines(*ticker, Timeframe::D1, klines);
+    }
+
+    Arc::new(RwLock::new(context))
 }
 
 // ============================================================================
@@ -158,19 +197,13 @@ async fn test_strategy_starts_after_sufficient_data() {
 
     let tickers = ["122630/KRW", "233740/KRW", "252670/KRW", "251340/KRW"];
 
-    // 65일치 데이터 축적 (60개 이상 필요)
-    for day in 0..65 {
-        for ticker in &tickers {
-            // 점진적 상승 패턴
-            let data = create_market_data(
-                ticker,
-                dec!(10000) + Decimal::from(day * 10),
-                dec!(100000),
-                day,
-            );
-            let _ = strategy.on_market_data(&data).await;
-        }
-    }
+    // StrategyContext에 65일치 klines 설정 (60개 이상 필요)
+    let context = setup_context_for_momentum_surge(&tickers, 65);
+    strategy.set_context(context);
+
+    // 마지막 데이터로 on_market_data 호출
+    let data = create_market_data("122630/KRW", dec!(10650), dec!(100000), 64);
+    let _ = strategy.on_market_data(&data).await;
 
     let state = strategy.get_state();
     assert_eq!(state["started"], true, "60개 이상이면 started=true");
@@ -686,18 +719,13 @@ async fn test_full_trading_cycle() {
 
     let tickers = ["122630/KRW", "233740/KRW", "252670/KRW", "251340/KRW"];
 
-    // Phase 1: 데이터 축적 (60일)
-    for day in 0..60 {
-        for ticker in &tickers {
-            let data = create_market_data(
-                ticker,
-                dec!(10000) + Decimal::from(day * 10),
-                dec!(100000),
-                day,
-            );
-            let _ = strategy.on_market_data(&data).await;
-        }
-    }
+    // Phase 1: StrategyContext에 60일치 klines 설정
+    let context = setup_context_for_momentum_surge(&tickers, 60);
+    strategy.set_context(context);
+
+    // on_market_data 호출하여 started 활성화
+    let data = create_market_data("122630/KRW", dec!(10590), dec!(100000), 59);
+    let _ = strategy.on_market_data(&data).await;
 
     let state = strategy.get_state();
     assert_eq!(state["started"], true);
@@ -764,7 +792,7 @@ async fn test_position_update_unknown_ticker() {
     let result = strategy.on_position_update(&position).await;
     assert!(result.is_ok());
 
-    let state = strategy.get_state();
+    let _state = strategy.get_state();
     // 등록되지 않은 티커는 holdings에 포함되지 않음
 }
 

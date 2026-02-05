@@ -1,6 +1,7 @@
 //! SignalMarker API 라우트
 //!
 //! 백테스트 및 실거래에서 발생한 기술 신호를 조회하고 검색합니다.
+//! 시그널 생성 시 텔레그램 알림 전송 기능을 포함합니다.
 
 use axum::{
     extract::{Path, Query, State},
@@ -9,16 +10,18 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
+use tracing::{debug, info, warn};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::ApiErrorResponse;
 use crate::repository::{BacktestResultsRepository, SignalMarkerRepository};
 use crate::AppState;
-use trader_core::{SignalIndicators, SignalMarker};
+use trader_core::{Side, SignalIndicators, SignalMarker, SignalType};
 
 // ==================== Request/Response 타입 ====================
 
@@ -88,6 +91,72 @@ pub struct StrategySignalsQuery {
     /// 최대 결과 개수
     #[serde(default = "default_limit")]
     pub limit: i64,
+}
+
+/// 시그널 생성 요청
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct CreateSignalRequest {
+    /// 심볼 (예: "005930", "BTC/USDT")
+    pub symbol: String,
+
+    /// 신호 유형 ("Entry", "Exit", "Alert", "Scale")
+    pub signal_type: String,
+
+    /// 방향 ("Buy", "Sell")
+    #[serde(default)]
+    pub side: Option<String>,
+
+    /// 신호 발생 가격
+    pub price: String,
+
+    /// 신호 강도 (0.0 ~ 1.0)
+    #[serde(default = "default_strength")]
+    pub strength: f64,
+
+    /// 신호 이유 (사람이 읽을 수 있는 설명)
+    pub reason: String,
+
+    /// 전략 ID
+    pub strategy_id: String,
+
+    /// 전략 이름
+    pub strategy_name: String,
+
+    /// 지표 정보 (선택)
+    #[serde(default)]
+    pub indicators: Option<JsonValue>,
+
+    /// 알림 전송 여부 (기본: true)
+    #[serde(default = "default_notify")]
+    pub notify: bool,
+}
+
+fn default_strength() -> f64 {
+    0.7
+}
+
+fn default_notify() -> bool {
+    true
+}
+
+/// 시그널 생성 응답
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct CreateSignalResponse {
+    /// 생성된 시그널 ID
+    pub id: String,
+
+    /// 심볼
+    pub symbol: String,
+
+    /// 신호 유형
+    pub signal_type: String,
+
+    /// 알림 전송 여부
+    pub notified: bool,
+
+    /// 알림 전송 결과 메시지
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_result: Option<String>,
 }
 
 /// 신호 마커 응답 DTO
@@ -399,11 +468,172 @@ pub async fn get_backtest_signals(
     }))
 }
 
+/// 시그널 생성 및 알림 전송
+///
+/// POST /api/v1/signals
+///
+/// 새 시그널을 생성하고 필터 조건을 만족하면 텔레그램 알림을 전송합니다.
+/// 알림 조건: 강도 >= 0.7, Entry/Exit/Alert 유형
+#[utoipa::path(
+    post,
+    path = "/api/v1/signals",
+    request_body = CreateSignalRequest,
+    responses(
+        (status = 201, description = "시그널 생성 성공", body = CreateSignalResponse),
+        (status = 400, description = "잘못된 요청", body = ApiErrorResponse),
+        (status = 500, description = "서버 오류", body = ApiErrorResponse)
+    ),
+    tag = "signals"
+)]
+pub async fn create_signal(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSignalRequest>,
+) -> Result<(StatusCode, Json<CreateSignalResponse>), (StatusCode, Json<ApiErrorResponse>)> {
+    debug!(
+        symbol = %req.symbol,
+        signal_type = %req.signal_type,
+        strength = req.strength,
+        "시그널 생성 요청"
+    );
+
+    // 가격 파싱
+    let price: Decimal = req.price.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse::new("INVALID_PRICE", "유효하지 않은 가격 형식")),
+        )
+    })?;
+
+    // 신호 유형 파싱
+    let signal_type = match req.signal_type.to_lowercase().as_str() {
+        "entry" => SignalType::Entry,
+        "exit" => SignalType::Exit,
+        "alert" => SignalType::Alert,
+        "scale" => SignalType::Scale,
+        "addtoposition" => SignalType::AddToPosition,
+        "reduceposition" => SignalType::ReducePosition,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse::new(
+                    "INVALID_SIGNAL_TYPE",
+                    "유효하지 않은 신호 유형. Entry, Exit, Alert, Scale 중 하나 사용",
+                )),
+            ))
+        }
+    };
+
+    // 방향 파싱
+    let side = req.side.as_ref().and_then(|s| match s.to_lowercase().as_str() {
+        "buy" => Some(Side::Buy),
+        "sell" => Some(Side::Sell),
+        _ => None,
+    });
+
+    // SignalMarker 생성
+    let marker = SignalMarker {
+        id: Uuid::new_v4(),
+        ticker: req.symbol.clone(),
+        timestamp: Utc::now(),
+        signal_type: signal_type.clone(),
+        side,
+        price,
+        strength: req.strength,
+        indicators: SignalIndicators::default(),
+        reason: req.reason.clone(),
+        strategy_id: req.strategy_id.clone(),
+        strategy_name: req.strategy_name.clone(),
+        executed: false,
+        metadata: std::collections::HashMap::new(),
+    };
+
+    let signal_id = marker.id.to_string();
+
+    // DB 저장 (선택)
+    if let Some(pool) = &state.db_pool {
+        let repo = SignalMarkerRepository::new(pool.clone());
+        if let Err(e) = repo.save(&marker).await {
+            warn!("시그널 DB 저장 실패: {:?} (알림은 계속 전송)", e);
+        } else {
+            debug!(signal_id = %signal_id, "시그널 DB 저장 완료");
+        }
+    }
+
+    // 알림 전송
+    let mut notified = false;
+    #[allow(unused_assignments)]
+    let mut notification_result: Option<String> = None;
+
+    if req.notify && req.strength >= 0.7 {
+        if let Some(notification_manager) = &state.notification_manager {
+            // 방향 문자열
+            let side_str = side.map(|s| match s {
+                Side::Buy => "Buy",
+                Side::Sell => "Sell",
+            });
+
+            // 지표 정보 JSON 변환
+            let indicators_json = req.indicators.clone().unwrap_or(serde_json::json!({}));
+
+            // 알림 전송
+            match notification_manager
+                .notify_signal_alert(
+                    &req.signal_type,
+                    &req.symbol,
+                    side_str,
+                    price,
+                    req.strength,
+                    &req.reason,
+                    &req.strategy_name,
+                    indicators_json,
+                )
+                .await
+            {
+                Ok(_) => {
+                    notified = true;
+                    notification_result = Some("텔레그램 알림 전송 완료".to_string());
+                    info!(
+                        symbol = %req.symbol,
+                        signal_type = %req.signal_type,
+                        strength = req.strength,
+                        "시그널 알림 전송 완료"
+                    );
+                }
+                Err(e) => {
+                    notification_result = Some(format!("알림 전송 실패: {}", e));
+                    warn!(error = %e, "시그널 알림 전송 실패");
+                }
+            }
+        } else {
+            notification_result = Some("알림 매니저가 설정되지 않음".to_string());
+        }
+    } else if !req.notify {
+        notification_result = Some("알림 비활성화 (notify=false)".to_string());
+    } else {
+        notification_result = Some(format!(
+            "알림 필터 미충족 (강도 {:.1}% < 70%)",
+            req.strength * 100.0
+        ));
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateSignalResponse {
+            id: signal_id,
+            symbol: req.symbol,
+            signal_type: req.signal_type,
+            notified,
+            notification_result,
+        }),
+    ))
+}
+
 // ==================== 라우터 ====================
 
 /// SignalMarker API 라우터
 pub fn signals_router() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/", post(create_signal))
         .route("/search", post(search_signals))
         .route("/by-symbol", get(get_signals_by_symbol))
         .route("/by-strategy", get(get_signals_by_strategy))

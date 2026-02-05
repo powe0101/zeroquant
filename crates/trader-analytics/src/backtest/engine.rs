@@ -40,9 +40,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 use trader_core::{
-    unrealized_pnl, Kline, MarketData, Side, Signal, SignalMarker, SignalType, Trade,
+    unrealized_pnl, Kline, MarketData, Side, Signal, SignalMarker, SignalType, StrategyContext, Trade, Timeframe,
 };
 use uuid::Uuid;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use crate::StructuralFeaturesCalculator;
 
 use crate::backtest::slippage::SlippageModel;
 use crate::performance::{EquityPoint, PerformanceMetrics, PerformanceTracker, RoundTrip};
@@ -495,6 +498,116 @@ impl BacktestEngine {
                 .map_err(|e| BacktestError::StrategyError(e.to_string()))?;
 
             // 신호 처리 (다음 틱에서 체결된다고 가정)
+            for signal in signals {
+                self.process_signal(&signal, kline).await?;
+            }
+
+            // 미실현 손익 반영하여 자산 업데이트
+            let equity = self.calculate_equity(kline);
+            self.tracker.update_equity(kline.close_time, equity);
+        }
+
+        // 미청산 포지션 강제 청산
+        self.close_all_positions(klines.last().unwrap()).await?;
+
+        // 심볼별 성과 계산
+        let performance_by_symbol = self.calculate_performance_by_symbol();
+
+        // 결과 생성
+        Ok(BacktestReport {
+            config: self.config.clone(),
+            metrics: self.tracker.get_metrics(),
+            trades: self.tracker.get_round_trips().to_vec(),
+            equity_curve: self.tracker.get_equity_curve().to_vec(),
+            total_orders: self.total_orders,
+            total_commission: self.total_commission,
+            total_slippage: self.total_slippage,
+            start_time,
+            end_time,
+            data_points,
+            performance_by_symbol,
+            signal_markers: self.signal_markers.clone(),
+        })
+    }
+
+    /// StrategyContext 연동 백테스트 실행.
+    ///
+    /// 각 캔들 시점마다 StructuralFeatures를 재계산하여 StrategyContext에 업데이트합니다.
+    /// 이를 통해 실거래와 동일한 방식으로 전략이 지표 데이터에 접근할 수 있습니다.
+    ///
+    /// # 인자
+    ///
+    /// * `strategy` - 전략 인스턴스
+    /// * `klines` - 과거 캔들 데이터
+    /// * `context` - StrategyContext (지표 데이터 업데이트 대상)
+    /// * `ticker` - 종목 티커
+    pub async fn run_with_context<S>(
+        &mut self,
+        strategy: &mut S,
+        klines: &[Kline],
+        context: Arc<RwLock<StrategyContext>>,
+        ticker: &str,
+    ) -> BacktestResult<BacktestReport>
+    where
+        S: trader_strategy::Strategy + ?Sized,
+    {
+        // 설정 검증
+        self.config.validate()?;
+
+        if klines.is_empty() {
+            return Err(BacktestError::DataError(
+                "캔들 데이터가 비어있습니다".to_string(),
+            ));
+        }
+
+        // 시간순 정렬 확인
+        for window in klines.windows(2) {
+            if window[0].open_time > window[1].open_time {
+                return Err(BacktestError::DataError(
+                    "캔들 데이터가 시간순으로 정렬되어 있지 않습니다".to_string(),
+                ));
+            }
+        }
+
+        let start_time = klines.first().unwrap().open_time;
+        let end_time = klines.last().unwrap().close_time;
+        let data_points = klines.len();
+
+        // 백테스트 시작 시간으로 equity curve 초기 timestamp 설정
+        self.tracker.set_initial_timestamp(start_time);
+
+        // 최소 지표 계산에 필요한 캔들 수
+        const MIN_CANDLES_FOR_INDICATORS: usize = 20;
+
+        // 각 캔들에 대해 시뮬레이션
+        for (idx, kline) in klines.iter().enumerate() {
+            self.current_time = kline.close_time;
+            self.current_prices
+                .insert(kline.ticker.to_string(), kline.close);
+
+            // 현재 시점까지의 캔들로 StructuralFeatures 계산 및 업데이트
+            if idx >= MIN_CANDLES_FOR_INDICATORS {
+                let historical_klines = &klines[..=idx];
+
+                // StructuralFeatures 계산
+                if let Ok(features) = StructuralFeaturesCalculator::from_candles(ticker, historical_klines) {
+                    let mut ctx_write = context.write().await;
+                    ctx_write.structural_features.insert(ticker.to_string(), features);
+                    // klines도 업데이트 (현재 시점까지만)
+                    ctx_write.update_klines(ticker, Timeframe::D1, historical_klines.to_vec());
+                }
+            }
+
+            // 시장 데이터 생성 (완성된 캔들 정보 사용)
+            let market_data = MarketData::from_kline(&self.config.exchange_name, kline.clone());
+
+            // 전략에 데이터 전달 (캔들 완성 후 신호 생성)
+            let signals = strategy
+                .on_market_data(&market_data)
+                .await
+                .map_err(|e| BacktestError::StrategyError(e.to_string()))?;
+
+            // 신호 처리
             for signal in signals {
                 self.process_signal(&signal, kline).await?;
             }

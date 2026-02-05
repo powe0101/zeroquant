@@ -905,6 +905,9 @@ mod tests {
             range_pos: 0.6,
             dist_ma20: 2.0,
             bb_width: 2.5,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
             rsi: 55.0,
         };
 
@@ -918,6 +921,9 @@ mod tests {
             range_pos: 0.3, // 미충족
             dist_ma20: 2.0,
             bb_width: 2.5,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
             rsi: 55.0,
         };
 
@@ -936,6 +942,9 @@ mod tests {
             range_pos: 0.6,
             dist_ma20: 2.0,
             bb_width: 2.5,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
             rsi: 55.0,
         };
 
@@ -972,6 +981,9 @@ mod tests {
             range_pos: 0.7,
             dist_ma20: 1.5,
             bb_width: 2.0,
+            bb_upper: 110.0,
+            bb_middle: 100.0,
+            bb_lower: 90.0,
             rsi: 58.0,
         };
 

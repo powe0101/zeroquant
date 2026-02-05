@@ -6,7 +6,9 @@
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
-use trader_core::{Kline, MarketData, Position, Side, Timeframe};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use trader_core::{Kline, MarketData, Position, Side, StrategyContext, Timeframe};
 use trader_strategy::strategies::market_bothside::MarketBothSideStrategy;
 use trader_strategy::Strategy;
 
@@ -34,6 +36,60 @@ fn create_market_data(ticker: &str, close: Decimal, day: i64) -> MarketData {
 /// Position 헬퍼 함수
 fn create_position(ticker: &str, quantity: Decimal, entry_price: Decimal) -> Position {
     Position::new("test", ticker.to_string(), Side::Buy, quantity, entry_price)
+}
+
+/// StrategyContext에 klines 데이터 설정
+/// MarketBothSide는 klines가 오래된 것부터 최신 순서 (klines.last() = 최신)
+fn setup_context_for_market_bothside(
+    leverage_ticker: &str,
+    inverse_ticker: &str,
+    day_count: usize,
+    base_price: Decimal,
+    price_increment: Decimal,
+) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+
+    // Leverage ticker klines
+    let leverage_klines: Vec<Kline> = (0..day_count)
+        .map(|day| {
+            let timestamp = chrono::DateTime::from_timestamp(1704067200 + (day as i64) * 86400, 0).unwrap();
+            let price = base_price + price_increment * Decimal::from(day);
+            Kline::new(
+                leverage_ticker.to_string(),
+                Timeframe::D1,
+                timestamp,
+                price - dec!(1),
+                price + dec!(1),
+                price - dec!(2),
+                price,
+                dec!(100000),
+                timestamp,
+            )
+        })
+        .collect();
+    context.update_klines(leverage_ticker, Timeframe::D1, leverage_klines);
+
+    // Inverse ticker klines (leverage와 반대 방향)
+    let inverse_klines: Vec<Kline> = (0..day_count)
+        .map(|day| {
+            let timestamp = chrono::DateTime::from_timestamp(1704067200 + (day as i64) * 86400, 0).unwrap();
+            let price = base_price - price_increment * Decimal::from(day); // 반대 방향
+            Kline::new(
+                inverse_ticker.to_string(),
+                Timeframe::D1,
+                timestamp,
+                price - dec!(1),
+                price + dec!(1),
+                price - dec!(2),
+                price.max(dec!(1)), // 최소 1
+                dec!(100000),
+                timestamp,
+            )
+        })
+        .collect();
+    context.update_klines(inverse_ticker, Timeframe::D1, inverse_klines);
+
+    Arc::new(RwLock::new(context))
 }
 
 // ============================================================================
@@ -139,12 +195,19 @@ async fn test_strategy_starts_after_sufficient_data() {
     });
     strategy.initialize(config).await.unwrap();
 
-    // 65일치 데이터 축적 (60개 이상 필요)
-    for day in 0..65 {
-        let leverage_data =
-            create_market_data("122630", dec!(15000) + Decimal::from(day * 10), day);
-        let _ = strategy.on_market_data(&leverage_data).await;
-    }
+    // StrategyContext에 65일치 데이터 설정 (60개 이상 필요)
+    let context = setup_context_for_market_bothside(
+        "122630",
+        "252670",
+        65,
+        dec!(15000),
+        dec!(10),
+    );
+    strategy.set_context(context);
+
+    // 마지막 데이터로 on_market_data 호출하여 started 트리거
+    let leverage_data = create_market_data("122630", dec!(15640), 64);
+    let _ = strategy.on_market_data(&leverage_data).await;
 
     let state = strategy.get_state();
     assert_eq!(state["started"], true, "60개 이상이면 started=true");
@@ -184,13 +247,19 @@ async fn test_leverage_signals_on_uptrend() {
     });
     strategy.initialize(config).await.unwrap();
 
-    // 상승 추세 데이터 생성 (MA60 상향 돌파 조건)
-    for day in 0..70 {
-        // 상승 추세 가격 (MA60보다 높은 가격으로 이동)
-        let price = dec!(10000) + Decimal::from(day * 100);
-        let leverage_data = create_market_data("122630", price, day);
-        let _ = strategy.on_market_data(&leverage_data).await;
-    }
+    // StrategyContext에 70일치 상승 추세 데이터 설정
+    let context = setup_context_for_market_bothside(
+        "122630",
+        "252670",
+        70,
+        dec!(10000),
+        dec!(100),
+    );
+    strategy.set_context(context);
+
+    // 마지막 데이터로 on_market_data 호출하여 started 트리거
+    let leverage_data = create_market_data("122630", dec!(16900), 69);
+    let _ = strategy.on_market_data(&leverage_data).await;
 
     // 최종 상태 확인
     let state = strategy.get_state();
@@ -639,14 +708,19 @@ async fn test_full_trading_cycle() {
     });
     strategy.initialize(config).await.unwrap();
 
-    // Phase 1: 데이터 축적 (60일)
-    for day in 0..60 {
-        let leverage_data =
-            create_market_data("122630", dec!(15000) + Decimal::from(day * 10), day);
-        let inverse_data = create_market_data("252670", dec!(5000) - Decimal::from(day * 5), day);
-        let _ = strategy.on_market_data(&leverage_data).await;
-        let _ = strategy.on_market_data(&inverse_data).await;
-    }
+    // StrategyContext에 60일치 데이터 설정
+    let context = setup_context_for_market_bothside(
+        "122630",
+        "252670",
+        60,
+        dec!(15000),
+        dec!(10),
+    );
+    strategy.set_context(context);
+
+    // 마지막 데이터로 on_market_data 호출
+    let leverage_data = create_market_data("122630", dec!(15590), 59);
+    let _ = strategy.on_market_data(&leverage_data).await;
 
     let state = strategy.get_state();
     assert_eq!(state["started"], true);
@@ -746,18 +820,56 @@ async fn test_disparity_calculation() {
     });
     strategy.initialize(config).await.unwrap();
 
-    // 급등 패턴 (이격도 상승)
-    for day in 0..65 {
-        // 초반에는 일정하다가 마지막에 급등
-        let price = if day < 60 {
-            dec!(10000)
-        } else {
-            dec!(10000) + Decimal::from((day - 60) * 500)
-        };
+    // StrategyContext에 급등 패턴 데이터 설정
+    // 초반 60일은 10000, 이후 급등
+    let mut context = StrategyContext::new();
 
-        let data = create_market_data("122630", price, day);
-        let _ = strategy.on_market_data(&data).await;
-    }
+    let leverage_klines: Vec<Kline> = (0..65)
+        .map(|day| {
+            let timestamp = chrono::DateTime::from_timestamp(1704067200 + (day as i64) * 86400, 0).unwrap();
+            let price = if day < 60 {
+                dec!(10000)
+            } else {
+                dec!(10000) + Decimal::from((day - 60) * 500)
+            };
+            Kline::new(
+                "122630".to_string(),
+                Timeframe::D1,
+                timestamp,
+                price - dec!(1),
+                price + dec!(1),
+                price - dec!(2),
+                price,
+                dec!(100000),
+                timestamp,
+            )
+        })
+        .collect();
+    context.update_klines("122630", Timeframe::D1, leverage_klines);
+
+    let inverse_klines: Vec<Kline> = (0..65)
+        .map(|day| {
+            let timestamp = chrono::DateTime::from_timestamp(1704067200 + (day as i64) * 86400, 0).unwrap();
+            Kline::new(
+                "252670".to_string(),
+                Timeframe::D1,
+                timestamp,
+                dec!(5000) - dec!(1),
+                dec!(5000) + dec!(1),
+                dec!(5000) - dec!(2),
+                dec!(5000),
+                dec!(100000),
+                timestamp,
+            )
+        })
+        .collect();
+    context.update_klines("252670", Timeframe::D1, inverse_klines);
+
+    strategy.set_context(Arc::new(RwLock::new(context)));
+
+    // 마지막 데이터로 on_market_data 호출
+    let data = create_market_data("122630", dec!(12000), 64);
+    let _ = strategy.on_market_data(&data).await;
 
     let state = strategy.get_state();
     assert_eq!(state["started"], true);

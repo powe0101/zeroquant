@@ -89,7 +89,7 @@ pub struct StrategyListItem {
         rename = "multiTimeframeConfig",
         skip_serializing_if = "Option::is_none"
     )]
-    #[ts(type = "Record<string, unknown> | null")]
+    #[ts(optional, type = "Record<string, unknown> | null")]
     pub multi_timeframe_config: Option<Value>,
 }
 

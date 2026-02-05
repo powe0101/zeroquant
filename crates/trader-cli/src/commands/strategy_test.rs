@@ -35,6 +35,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use trader_analytics::backtest::{BacktestConfig, BacktestEngine, BacktestReport};
+use trader_analytics::StructuralFeaturesCalculator;
 use trader_analytics::AnalyticsProviderImpl;
 use trader_core::{AnalyticsProvider, Kline, MarketType, StrategyContext, Symbol, Timeframe};
 use trader_data::cache::CachedHistoricalDataProvider;
@@ -254,7 +255,8 @@ pub async fn run_strategy_test(config: StrategyTestConfig) -> Result<TestResult>
         })?;
     println!("  ✅ 전략 초기화 성공");
 
-    // 백테스트 실행
+    // 백테스트 실행 (run_with_context 사용)
+    // 각 캔들 시점마다 StructuralFeatures를 계산하여 StrategyContext에 업데이트
     let commission_rate = Decimal::from_f64(0.00015).unwrap_or(Decimal::ZERO);
     let slippage_rate = Decimal::from_f64(0.0005).unwrap_or(Decimal::ZERO);
 
@@ -264,8 +266,9 @@ pub async fn run_strategy_test(config: StrategyTestConfig) -> Result<TestResult>
         .with_allow_short(false);
 
     let mut engine = BacktestEngine::new(backtest_config);
+    let ticker = config.symbols[0].clone();
     let report = engine
-        .run(&mut *strategy, &klines)
+        .run_with_context(&mut *strategy, &klines, context.clone(), &ticker)
         .await
         .map_err(|e| {
             diagnostics.push(format!("❌ 백테스트 실행 실패: {}", e));

@@ -15,6 +15,7 @@ use trader_data::cache::CachedHistoricalDataProvider;
 use trader_data::{RedisCache, RedisConfig, SymbolResolver};
 use trader_exchange::connector::kis::{KisKrClient, KisOAuth, KisUsClient};
 use trader_execution::OrderExecutor;
+use trader_notification::NotificationManager;
 use trader_risk::RiskManager;
 use trader_strategy::StrategyEngine;
 use uuid::Uuid;
@@ -102,6 +103,11 @@ pub struct AppState {
 
     /// API 버전
     pub version: String,
+
+    /// 알림 매니저 (텔레그램 등)
+    ///
+    /// 시그널 발생, 주문 체결 등의 이벤트를 사용자에게 알림으로 전송합니다.
+    pub notification_manager: Option<Arc<NotificationManager>>,
 }
 
 impl AppState {
@@ -145,6 +151,7 @@ impl AppState {
             exchange_provider: None,
             started_at: chrono::Utc::now(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            notification_manager: None,
         }
     }
 
@@ -358,6 +365,19 @@ impl AppState {
     /// 캐시 설정 여부 확인.
     pub fn has_cache(&self) -> bool {
         self.cache.is_some()
+    }
+
+    /// 알림 매니저 설정.
+    ///
+    /// 텔레그램 등으로 알림을 전송하는 매니저를 설정합니다.
+    pub fn with_notification_manager(mut self, manager: NotificationManager) -> Self {
+        self.notification_manager = Some(Arc::new(manager));
+        self
+    }
+
+    /// 알림 매니저 설정 여부 확인.
+    pub fn has_notification_manager(&self) -> bool {
+        self.notification_manager.is_some()
     }
 
     /// KIS 국내 클라이언트 설정 여부 확인.

@@ -64,6 +64,7 @@ pub struct RankedSymbol {
     /// RouteState (실시간 계산됨, DB 조회 시 None)
     #[sqlx(skip)]
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional)]
     pub route_state: Option<String>,
 }
 

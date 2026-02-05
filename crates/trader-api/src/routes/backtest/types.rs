@@ -384,6 +384,7 @@ pub struct BacktestableStrategy {
     pub ui_schema: Option<UiSchema>,
     /// 전략 카테고리
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub category: Option<String>,
     /// 전략 태그
     #[serde(default)]
@@ -394,9 +395,11 @@ pub struct BacktestableStrategy {
     pub execution_schedule: Option<ExecutionSchedule>,
     /// 실행 주기 상세 설명 (예: "장 시작 5분 후", "매월 첫 거래일")
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub schedule_detail: Option<String>,
     /// 작동 방식 상세 설명
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub how_it_works: Option<String>,
 }
 

@@ -10,11 +10,13 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use trader_core::types::Timeframe;
-use trader_core::{Kline, MarketData, MarketDataType, Position, Side, Ticker};
+use trader_core::{Kline, MarketData, MarketDataType, Position, Side, StrategyContext, StructuralFeatures, Ticker};
 use trader_strategy::strategies::mean_reversion::{
-    BollingerConfig, EntrySignalConfig, ExitConfig, MeanReversionConfig, MeanReversionStrategy,
-    SplitLevel, StrategyVariant as MeanReversionVariant,
+    EntrySignalConfig, ExitConfig, MeanReversionConfig, MeanReversionStrategy, SplitLevel,
+    StrategyVariant as MeanReversionVariant,
 };
 use trader_strategy::Strategy;
 
@@ -77,6 +79,54 @@ fn create_position(
     Position::new("test", ticker_name.to_string(), side, quantity, entry_price)
 }
 
+/// RSI 기반 StructuralFeatures 생성.
+fn create_rsi_features(ticker: &str, rsi: Decimal) -> StructuralFeatures {
+    StructuralFeatures {
+        ticker: ticker.to_string(),
+        low_trend: dec!(0),
+        vol_quality: dec!(0),
+        range_pos: dec!(0.5),
+        dist_ma20: dec!(0),
+        bb_width: dec!(10),
+        bb_upper: dec!(110),
+        bb_middle: dec!(100),
+        bb_lower: dec!(90),
+        rsi,
+        timestamp: Utc::now(),
+    }
+}
+
+/// 볼린저 밴드 기반 StructuralFeatures 생성.
+fn create_bollinger_features(
+    ticker: &str,
+    lower: Decimal,
+    middle: Decimal,
+    upper: Decimal,
+    bandwidth: Decimal,
+) -> StructuralFeatures {
+    StructuralFeatures {
+        ticker: ticker.to_string(),
+        low_trend: dec!(0),
+        vol_quality: dec!(0),
+        range_pos: dec!(0.5),
+        dist_ma20: dec!(0),
+        bb_width: bandwidth,
+        bb_upper: upper,
+        bb_middle: middle,
+        bb_lower: lower,
+        rsi: dec!(50),
+        timestamp: Utc::now(),
+    }
+}
+
+/// StrategyContext에 StructuralFeatures 설정.
+fn setup_context_with_features(features: StructuralFeatures) -> Arc<RwLock<StrategyContext>> {
+    let mut context = StrategyContext::new();
+    let ticker = features.ticker.clone();
+    context.structural_features.insert(ticker, features);
+    Arc::new(RwLock::new(context))
+}
+
 // ================================================================================================
 // RSI Variant 테스트 - 핵심 케이스 완전 검증
 // ================================================================================================
@@ -128,32 +178,25 @@ mod rsi_tests {
         let config_json = serde_json::to_value(config).unwrap();
         strategy.initialize(config_json).await.unwrap();
 
-        // RSI 계산에 최소 14+1개 데이터 필요
-        // 급격한 하락으로 RSI를 과매도 영역으로 만듦
         let mut all_signals = vec![];
 
-        // Phase 1: 급격한 하락 (RSI를 과매도로)
-        for i in 0..16 {
-            let price = dec!(100000) - Decimal::from(i * 3000); // 급격한 하락
-            let data = create_kline_data("005930", price);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            all_signals.extend(signals);
-        }
+        // Phase 1: prev_rsi를 과매도 상태로 설정 (RSI 25)
+        let oversold_features = create_rsi_features("005930", dec!(25));
+        let context = setup_context_with_features(oversold_features);
+        strategy.set_context(context);
 
-        // Phase 2: 과매도 상태에서 반등 (RSI 상향)
-        // 이전 RSI가 과매도이고, 현재 RSI가 상승하면 신호 발생
-        let rebound_prices = [
-            dec!(55000),
-            dec!(57000),
-            dec!(59000),
-            dec!(61000),
-            dec!(63000),
-        ];
-        for price in rebound_prices {
-            let data = create_kline_data("005930", price);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            all_signals.extend(signals);
-        }
+        let data = create_kline_data("005930", dec!(55000));
+        let signals = strategy.on_market_data(&data).await.unwrap();
+        all_signals.extend(signals);
+
+        // Phase 2: 현재 RSI를 prev_rsi보다 높게 설정 (RSI 28) - 반등
+        let rebounding_features = create_rsi_features("005930", dec!(28));
+        let context = setup_context_with_features(rebounding_features);
+        strategy.set_context(context);
+
+        let data = create_kline_data("005930", dec!(57000));
+        let signals = strategy.on_market_data(&data).await.unwrap();
+        all_signals.extend(signals);
 
         // 검증: 매수 신호가 발생해야 함
         let buy_signals: Vec<_> = all_signals.iter().filter(|s| s.side == Side::Buy).collect();
@@ -190,12 +233,10 @@ mod rsi_tests {
         let config_json = serde_json::to_value(config).unwrap();
         strategy.initialize(config_json).await.unwrap();
 
-        // RSI 데이터 축적
-        for i in 0..15 {
-            let price = dec!(50000) + Decimal::from((i % 3) * 100);
-            let data = create_kline_data("005930", price);
-            let _ = strategy.on_market_data(&data).await;
-        }
+        // StrategyContext 설정 (RSI 50 - 중립)
+        let features = create_rsi_features("005930", dec!(50));
+        let context = setup_context_with_features(features);
+        strategy.set_context(context);
 
         // 포지션 설정 (50000원에 진입했다고 가정)
         let position = create_position("005930", Side::Buy, dec!(10), dec!(50000));
@@ -247,12 +288,10 @@ mod rsi_tests {
         let config_json = serde_json::to_value(config).unwrap();
         strategy.initialize(config_json).await.unwrap();
 
-        // RSI 데이터 축적
-        for i in 0..15 {
-            let price = dec!(50000) + Decimal::from((i % 3) * 100);
-            let data = create_kline_data("005930", price);
-            let _ = strategy.on_market_data(&data).await;
-        }
+        // StrategyContext 설정 (RSI 50 - 중립)
+        let features = create_rsi_features("005930", dec!(50));
+        let context = setup_context_with_features(features);
+        strategy.set_context(context);
 
         // 포지션 설정 (50000원에 진입)
         let position = create_position("005930", Side::Buy, dec!(10), dec!(50000));
@@ -304,27 +343,21 @@ mod rsi_tests {
         let config_json = serde_json::to_value(config).unwrap();
         strategy.initialize(config_json).await.unwrap();
 
-        // 급격한 상승으로 RSI를 과매수로 만듦
-        for i in 0..16 {
-            let price = dec!(50000) + Decimal::from(i * 2000);
-            let data = create_kline_data("005930", price);
-            let _ = strategy.on_market_data(&data).await;
-        }
+        // StrategyContext 설정 (RSI 75 - 과매수)
+        let features = create_rsi_features("005930", dec!(75));
+        let context = setup_context_with_features(features);
+        strategy.set_context(context);
 
-        // 포지션 설정 (현재 가격 수준에서 진입, 익절 조건 회피)
+        // 포지션 설정 (현재 가격 수준에서 진입)
         let position = create_position("005930", Side::Buy, dec!(10), dec!(80000));
         strategy.on_position_update(&position).await.unwrap();
 
-        // 계속 상승 (RSI 과매수 유지)
-        let mut sell_signals = vec![];
-        for i in 0..5 {
-            let price = dec!(82000) + Decimal::from(i * 1000);
-            let data = create_kline_data("005930", price);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            sell_signals.extend(signals.into_iter().filter(|s| s.side == Side::Sell));
-        }
+        // 시장 데이터 처리 (RSI 과매수 상태)
+        let data = create_kline_data("005930", dec!(82000));
+        let signals = strategy.on_market_data(&data).await.unwrap();
 
         // 검증: RSI 과매수 청산 신호 발생
+        let sell_signals: Vec<_> = signals.iter().filter(|s| s.side == Side::Sell).collect();
         assert!(
             !sell_signals.is_empty(),
             "RSI 과매수 상태에서 청산 신호가 발생해야 함"
@@ -395,78 +428,56 @@ mod bollinger_tests {
     /// 스퀴즈(저변동성) 상태에서는 밴드를 터치해도 무시됩니다.
     ///
     /// - min_bandwidth_pct: 최소 밴드폭 % (이 이상이어야 신호 발생)
-    /// - bandwidth = (upper - lower) / sma * 100
-    /// - 따라서 테스트에서 충분한 가격 변동을 제공해야 함
+    /// - 리팩토링 후: 볼린저 밴드 값은 StrategyContext의 StructuralFeatures에서 가져옴
     ///
     /// # 중요
-    ///
-    /// `initialize()`는 UI Config 타입(BollingerConfig)으로 파싱하므로,
-    /// MeanReversionConfig가 아닌 BollingerConfig를 직접 생성해야 함!
+    /// initialize()는 JSON에서 "variant" 필드를 찾아 파싱 타입을 결정함.
+    /// BollingerConfig를 직접 직렬화하면 variant가 없으므로 json!()에 추가해야 함.
     #[tokio::test]
     async fn test_bollinger_lower_band_buy_signal() {
         let mut strategy = MeanReversionStrategy::new();
-        // BollingerConfig 직접 생성 (initialize가 이 타입으로 파싱함)
-        let config = BollingerConfig {
-            ticker: "005930".to_string(),
-            amount: dec!(1000000),
-            period: 20,
-            std_multiplier: dec!(2),
-            use_rsi_confirmation: false, // RSI 확인 비활성화 - 중요!
-            min_bandwidth_pct: dec!(1),  // 1% 이상 밴드폭 필요
-            exit_config: ExitConfig {
-                stop_loss_pct: dec!(5),
-                take_profit_pct: dec!(10),
-                exit_on_neutral: false,
-                cooldown_candles: 0,
+        // variant 필드를 명시적으로 추가하여 Bollinger 파싱 보장
+        let config_json = json!({
+            "variant": "bollinger",
+            "ticker": "005930",
+            "amount": "1000000",
+            "period": 20,
+            "std_multiplier": "2",
+            "use_rsi_confirmation": false,
+            "min_bandwidth_pct": "1",
+            "exit_config": {
+                "stop_loss_pct": "5",
+                "take_profit_pct": "10",
+                "exit_on_neutral": false,
+                "cooldown_candles": 0
             },
-            max_positions: 1,
-            min_global_score: dec!(0),
-        };
-        let config_json = serde_json::to_value(config).unwrap();
+            "max_positions": 1,
+            "min_global_score": "0"
+        });
         strategy.initialize(config_json).await.unwrap();
 
-        let mut all_signals = vec![];
+        // StrategyContext 설정: 하단 밴드(48000) > 현재 가격(47000)
+        // bandwidth = (upper - lower) / middle * 100 = (52000-48000)/50000*100 = 8%
+        let features = create_bollinger_features(
+            "005930",
+            dec!(48000), // lower
+            dec!(50000), // middle
+            dec!(52000), // upper
+            dec!(8),     // bandwidth 8% (> min_bandwidth_pct 1%)
+        );
+        let context = setup_context_with_features(features);
+        strategy.set_context(context);
 
-        // Phase 1: 변동성 있는 가격 데이터로 볼린저 밴드 형성
-        // bandwidth > 1%를 달성하려면 충분한 가격 변동 필요
-        // bandwidth = 2 * std_multiplier * std_dev / sma * 100
-        // 50000원 기준 1% = 500원 → 표준편차 약 125원 이상 필요
-        // 가격 범위 ±1500원으로 설정 (48500 ~ 51500)
-        let high_volatility_prices = [
-            dec!(50000), dec!(51000), dec!(49000), dec!(51500), dec!(48500),
-            dec!(50500), dec!(49500), dec!(51200), dec!(48800), dec!(50200),
-            dec!(50000), dec!(51000), dec!(49000), dec!(51500), dec!(48500),
-            dec!(50500), dec!(49500), dec!(51200), dec!(48800), dec!(50200),
-            dec!(50000), dec!(50500), dec!(49500), dec!(50200), dec!(49800),
-        ];
-        for price in high_volatility_prices {
-            let data = create_kline_data("005930", price);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            all_signals.extend(signals);
-        }
-
-        // Phase 2: 급격한 하락 (하단 밴드 터치)
-        // 변동성이 유지된 상태에서 하단 밴드 아래로 하락
-        // 계산된 Lower 밴드: 약 48000 → 이보다 낮은 가격으로 터치
-        let drop_prices = [
-            dec!(48000),
-            dec!(47500),
-            dec!(47000),
-            dec!(46500),
-            dec!(46000),
-        ];
-        for price in drop_prices {
-            let data = create_kline_data("005930", price);
-            let signals = strategy.on_market_data(&data).await.unwrap();
-            all_signals.extend(signals);
-        }
+        // 가격이 하단 밴드(48000)보다 낮은 47000으로 데이터 전송
+        let data = create_kline_data("005930", dec!(47000));
+        let signals = strategy.on_market_data(&data).await.unwrap();
 
         // 검증: 하단 밴드 터치 시 매수 신호 발생
-        let buy_signals: Vec<_> = all_signals.iter().filter(|s| s.side == Side::Buy).collect();
+        let buy_signals: Vec<_> = signals.iter().filter(|s| s.side == Side::Buy).collect();
         assert!(
             !buy_signals.is_empty(),
             "볼린저 하단 밴드 터치 시 매수 신호가 발생해야 함. 총 신호: {}, 매수: {}",
-            all_signals.len(),
+            signals.len(),
             buy_signals.len()
         );
     }

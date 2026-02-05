@@ -132,7 +132,8 @@ fn setup_context_for_breakout(
         today_timestamp,
     );
 
-    context.update_klines(ticker, Timeframe::D1, vec![prev_kline, today_kline]);
+    // klines[0] = today (가장 최근), klines[1] = prev (전일)
+    context.update_klines(ticker, Timeframe::D1, vec![today_kline, prev_kline]);
 
     Arc::new(RwLock::new(context))
 }
@@ -287,6 +288,11 @@ mod breakout_tests {
     }
 
     /// 테스트 3: 하방 돌파 시 매도 신호 (trade_both_directions=true)
+    ///
+    /// StrategyContext에서 D1 캔들 가져와서:
+    /// - 전일 캔들: high=50500, low=49500 → range=1000
+    /// - 당일 시가: 50200 → lower = 50200 - 1000*0.5 = 49700
+    /// close <= 49700 → 숏 신호
     #[tokio::test]
     async fn test_downward_breakout_sell_signal() {
         let mut strategy = DayTradingStrategy::new();
@@ -302,45 +308,29 @@ mod breakout_tests {
         });
         strategy.initialize(config).await.unwrap();
 
-        // 1. 첫 번째 캔들 - 레인지 설정 (range=1000)
-        let data1 = create_kline(
+        // StrategyContext 설정: D1 캔들
+        // prev: high=50500, low=49500 → range=1000
+        // today: open=50200 → lower = 50200 - 1000*0.5 = 49700
+        let context = setup_context_for_breakout(
             "BTC/USDT",
-            dec!(50000),
-            dec!(50500),
-            dec!(49500),
-            dec!(50200),
-            dec!(1000),
-            0,
-            1,
+            dec!(50500), // prev_high
+            dec!(49500), // prev_low
+            dec!(50000), // prev_close
         );
-        let _ = strategy.on_market_data(&data1).await.unwrap();
+        strategy.set_context(context);
 
-        // 2. 두 번째 캔들 - 새 기간 (open=50200)
-        // lower = 50200 - 1000 * 0.5 = 49700
-        let data2 = create_kline(
-            "BTC/USDT",
-            dec!(50200),
-            dec!(50200),
-            dec!(50200),
-            dec!(50200),
-            dec!(1000),
-            1,
-            1,
-        );
-        let _ = strategy.on_market_data(&data2).await.unwrap();
-
-        // 3. 하방 돌파 (close=49600 <= lower=49700)
-        let data3 = create_kline(
+        // 하방 돌파: close=49600 <= lower=49700
+        let data = create_kline(
             "BTC/USDT",
             dec!(50200),
             dec!(50200),
             dec!(49500),
             dec!(49600),
             dec!(1000),
-            1,
-            1,
+            10,
+            2, // 당일 (day=2)
         );
-        let signals = strategy.on_market_data(&data3).await.unwrap();
+        let signals = strategy.on_market_data(&data).await.unwrap();
 
         // 검증: 매도(숏) 신호 발생
         assert!(!signals.is_empty(), "하방 돌파 시 매도 신호가 발생해야 함");
